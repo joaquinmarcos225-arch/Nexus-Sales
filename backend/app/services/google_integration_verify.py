@@ -1,0 +1,363 @@
+"""Verificación en vivo de Gmail y Google Calendar (token + permisos API)."""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import httpx
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.connected_account import ConnectedAccount
+from app.models.enums import IntegrationProvider, IntegrationStatus
+from app.services import google_oauth
+from app.services.gmail_drafts import (
+    GMAIL_PROFILE_URL,
+    _get_gmail_row,
+    _refresh_access_token,
+    get_valid_gmail_connection,
+)
+from app.services.google_calendar_availability import FREEBUSY_URL
+from app.services.oauth_tokens import decrypt_secret
+
+logger = logging.getLogger(__name__)
+
+CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
+CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+
+STATUS_NOT_CONNECTED = "not_connected"
+STATUS_FUNCTIONAL = "functional"
+STATUS_RECONNECT_REQUIRED = "reconnect_required"
+STATUS_SCOPE_MISSING = "scope_missing"
+STATUS_ERROR = "error"
+
+
+def _row_snapshot(row: ConnectedAccount | None) -> dict[str, Any]:
+    if row is None:
+        return {
+            "connected": False,
+            "status": IntegrationStatus.not_connected.value,
+            "external_email": None,
+            "connected_at": None,
+            "updated_at": None,
+        }
+    try:
+        st = IntegrationStatus(row.status)
+    except ValueError:
+        st = IntegrationStatus.error
+    return {
+        "connected": st == IntegrationStatus.connected,
+        "status": st.value,
+        "external_email": row.external_email,
+        "connected_at": row.connected_at,
+        "updated_at": row.updated_at,
+    }
+
+
+def _base_provider_payload(row: ConnectedAccount | None) -> dict[str, Any]:
+    return {
+        **_row_snapshot(row),
+        "effective_status": STATUS_NOT_CONNECTED,
+        "requires_reconnect": False,
+        "api_reachable": False,
+        "api_error": None,
+        "http_status": None,
+        "scopes_granted": list(google_oauth.DEFAULT_SCOPES),
+        "verification_summary": None,
+    }
+
+
+def _calendar_payload(row: ConnectedAccount | None) -> dict[str, Any]:
+    return {
+        **_base_provider_payload(row),
+        "can_read_availability": False,
+        "can_create_events": False,
+        "create_event_verified": False,
+    }
+
+
+def _resolve_effective_status(
+    *,
+    stored_connected: bool,
+    api_reachable: bool,
+    requires_reconnect: bool,
+    can_create_events: bool,
+    http_status: int | None,
+) -> str:
+    if not stored_connected:
+        return STATUS_NOT_CONNECTED
+    if requires_reconnect or http_status == 401:
+        return STATUS_RECONNECT_REQUIRED
+    if http_status == 403:
+        return STATUS_SCOPE_MISSING
+    if api_reachable and can_create_events:
+        return STATUS_FUNCTIONAL
+    if api_reachable:
+        return STATUS_ERROR
+    return STATUS_RECONNECT_REQUIRED
+
+
+def _mark_provider_token_invalid(
+    db: Session,
+    *,
+    company_id: int,
+    user_id: int,
+    provider: IntegrationProvider,
+) -> None:
+    row = db.scalars(
+        select(ConnectedAccount).where(
+            ConnectedAccount.company_id == company_id,
+            ConnectedAccount.user_id == user_id,
+            ConnectedAccount.provider == provider.value,
+        )
+    ).first()
+    if row is not None and row.status == IntegrationStatus.connected.value:
+        row.status = IntegrationStatus.error.value
+
+
+def _get_access_with_refresh(
+    db: Session,
+    *,
+    company_id: int,
+    user_id: int,
+) -> tuple[str | None, str | None]:
+    """Obtiene access token; intenta refresh si hace falta."""
+    try:
+        access, _row = get_valid_gmail_connection(db, company_id=company_id, user_id=user_id)
+        return access, None
+    except Exception as exc:
+        err = str(exc)[:300]
+        row = _get_gmail_row(db, company_id, user_id)
+        refresh = decrypt_secret(row.refresh_token_encrypted) if row else None
+        if refresh:
+            try:
+                access = _refresh_access_token(db, company_id, user_id, refresh)
+                return access, None
+            except Exception as refresh_exc:
+                return None, str(refresh_exc)[:300]
+        return None, err
+
+
+def _verify_freebusy(client: httpx.Client, access: str) -> tuple[bool, int | None, str | None]:
+    now = datetime.now(UTC)
+    body = {
+        "timeMin": now.isoformat(),
+        "timeMax": (now + timedelta(hours=2)).isoformat(),
+        "items": [{"id": "primary"}],
+    }
+    res = client.post(
+        FREEBUSY_URL,
+        headers={"Authorization": f"Bearer {access}"},
+        json=body,
+    )
+    if res.status_code == 200:
+        return True, res.status_code, None
+    if res.status_code == 401:
+        return False, res.status_code, "Token vencido o revocado (HTTP 401). Reconectá Google Calendar."
+    if res.status_code == 403:
+        return False, res.status_code, "Sin permiso para leer disponibilidad (calendar.freebusy)."
+    return False, res.status_code, f"FreeBusy API HTTP {res.status_code}"
+
+
+def _verify_create_event(client: httpx.Client, access: str) -> tuple[bool, int | None, str | None]:
+    start = datetime.now(UTC) + timedelta(days=7)
+    end = start + timedelta(minutes=5)
+    body = {
+        "summary": "[Nexus] Verificación de permisos",
+        "description": "Evento temporal de verificación — se elimina automáticamente.",
+        "start": {"dateTime": start.isoformat(), "timeZone": "UTC"},
+        "end": {"dateTime": end.isoformat(), "timeZone": "UTC"},
+    }
+    res = client.post(
+        CALENDAR_EVENTS_URL,
+        headers={"Authorization": f"Bearer {access}"},
+        params={"sendUpdates": "none"},
+        json=body,
+    )
+    if res.status_code in (401, 403):
+        if res.status_code == 401:
+            return False, res.status_code, "Token vencido o revocado (HTTP 401). Reconectá Google Calendar."
+        return False, res.status_code, "Sin permiso para crear eventos (calendar.events)."
+    if res.status_code not in (200, 201):
+        return False, res.status_code, f"Calendar events API HTTP {res.status_code}"
+    event_id = (res.json() or {}).get("id")
+    if event_id:
+        try:
+            client.delete(
+                f"{CALENDAR_EVENTS_URL}/{event_id}",
+                headers={"Authorization": f"Bearer {access}"},
+            )
+        except Exception:
+            logger.warning("verify_create_event cleanup failed event_id=%s", event_id)
+    return True, res.status_code, None
+
+
+def verify_google_integrations(
+    db: Session,
+    *,
+    company_id: int,
+    user_id: int,
+    deep: bool = True,
+) -> dict[str, Any]:
+    gmail_row = _get_gmail_row(db, company_id, user_id)
+    cal_row = db.scalars(
+        select(ConnectedAccount).where(
+            ConnectedAccount.company_id == company_id,
+            ConnectedAccount.user_id == user_id,
+            ConnectedAccount.provider == IntegrationProvider.google_calendar.value,
+        )
+    ).first()
+
+    oauth_configured = True
+    try:
+        google_oauth.oauth_client_id()
+        google_oauth.oauth_client_secret()
+    except RuntimeError:
+        oauth_configured = False
+
+    gmail = _base_provider_payload(gmail_row)
+    calendar = _calendar_payload(cal_row)
+
+    if not gmail["connected"] and not calendar["connected"]:
+        return {
+            "oauth_configured": oauth_configured,
+            "gmail": gmail,
+            "google_calendar": calendar,
+        }
+
+    access, token_err = _get_access_with_refresh(db, company_id=company_id, user_id=user_id)
+    if not access:
+        err = token_err or "No se pudo obtener un token válido de Google."
+        token_invalid = True
+        if gmail["connected"]:
+            gmail["api_error"] = err
+            gmail["requires_reconnect"] = token_invalid
+            gmail["effective_status"] = STATUS_RECONNECT_REQUIRED
+            _mark_provider_token_invalid(db, company_id=company_id, user_id=user_id, provider=IntegrationProvider.gmail)
+        if calendar["connected"]:
+            calendar["api_error"] = err
+            calendar["requires_reconnect"] = token_invalid
+            calendar["effective_status"] = STATUS_RECONNECT_REQUIRED
+            _mark_provider_token_invalid(
+                db, company_id=company_id, user_id=user_id, provider=IntegrationProvider.google_calendar
+            )
+        db.commit()
+        return {
+            "oauth_configured": oauth_configured,
+            "gmail": gmail,
+            "google_calendar": calendar,
+        }
+
+    token_marked_invalid = False
+
+    with httpx.Client(timeout=25.0) as client:
+        if gmail["connected"]:
+            try:
+                res = client.get(
+                    GMAIL_PROFILE_URL,
+                    headers={"Authorization": f"Bearer {access}"},
+                )
+                gmail["http_status"] = res.status_code
+                if res.status_code == 200:
+                    gmail["api_reachable"] = True
+                    profile_email = (res.json() or {}).get("emailAddress")
+                    if profile_email:
+                        gmail["external_email"] = str(profile_email)
+                    gmail["verification_summary"] = "Gmail accesible."
+                elif res.status_code == 401:
+                    gmail["requires_reconnect"] = True
+                    gmail["api_error"] = "Conexión vencida (Gmail HTTP 401). Reconectá Google."
+                    if not token_marked_invalid:
+                        _mark_provider_token_invalid(
+                            db, company_id=company_id, user_id=user_id, provider=IntegrationProvider.gmail
+                        )
+                        token_marked_invalid = True
+                else:
+                    gmail["api_error"] = f"Gmail API HTTP {res.status_code}"
+            except Exception as exc:
+                gmail["api_error"] = str(exc)[:300]
+
+            gmail["effective_status"] = _resolve_effective_status(
+                stored_connected=True,
+                api_reachable=gmail["api_reachable"],
+                requires_reconnect=gmail["requires_reconnect"],
+                can_create_events=gmail["api_reachable"],
+                http_status=gmail["http_status"],
+            )
+
+        if calendar["connected"]:
+            try:
+                res = client.get(
+                    CALENDAR_LIST_URL,
+                    headers={"Authorization": f"Bearer {access}"},
+                    params={"maxResults": 1},
+                )
+                calendar["http_status"] = res.status_code
+                if res.status_code == 200:
+                    calendar["api_reachable"] = True
+                elif res.status_code == 401:
+                    calendar["requires_reconnect"] = True
+                    calendar["api_error"] = "Conexión vencida (Calendar HTTP 401). Reconectá Google Calendar."
+                    if not token_marked_invalid:
+                        _mark_provider_token_invalid(
+                            db,
+                            company_id=company_id,
+                            user_id=user_id,
+                            provider=IntegrationProvider.google_calendar,
+                        )
+                        _mark_provider_token_invalid(
+                            db, company_id=company_id, user_id=user_id, provider=IntegrationProvider.gmail
+                        )
+                        token_marked_invalid = True
+                elif res.status_code == 403:
+                    calendar["api_error"] = "Sin permiso calendar. Reconectá con los scopes correctos."
+                else:
+                    calendar["api_error"] = f"Calendar API HTTP {res.status_code}"
+            except Exception as exc:
+                calendar["api_error"] = str(exc)[:300]
+
+            if calendar["api_reachable"] and deep and not calendar["requires_reconnect"]:
+                can_busy, busy_status, busy_err = _verify_freebusy(client, access)
+                calendar["can_read_availability"] = can_busy
+                if busy_err and not calendar["api_error"]:
+                    calendar["api_error"] = busy_err
+                if busy_status == 401:
+                    calendar["requires_reconnect"] = True
+
+                if can_busy:
+                    created, create_status, create_err = _verify_create_event(client, access)
+                    calendar["create_event_verified"] = created
+                    calendar["can_create_events"] = created
+                    if create_err and not calendar["api_error"]:
+                        calendar["api_error"] = create_err
+                    if create_status == 401:
+                        calendar["requires_reconnect"] = True
+                    if created:
+                        calendar["verification_summary"] = (
+                            "Calendar funcional: disponibilidad OK y creación de eventos verificada."
+                        )
+                    elif can_busy:
+                        calendar["verification_summary"] = (
+                            "Calendar parcial: disponibilidad OK, creación de eventos no verificada."
+                        )
+                elif calendar["api_reachable"]:
+                    calendar["verification_summary"] = "Calendar accesible pero sin lectura de disponibilidad."
+
+            calendar["effective_status"] = _resolve_effective_status(
+                stored_connected=True,
+                api_reachable=calendar["api_reachable"],
+                requires_reconnect=calendar["requires_reconnect"],
+                can_create_events=calendar["can_create_events"],
+                http_status=calendar["http_status"],
+            )
+
+    if token_marked_invalid:
+        db.commit()
+
+    return {
+        "oauth_configured": oauth_configured,
+        "gmail": gmail,
+        "google_calendar": calendar,
+    }

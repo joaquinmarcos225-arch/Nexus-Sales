@@ -1,0 +1,87 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --color-nx-bg: #f4f4f5;
+  --color-nx-card: #ffffff;
+  --color-nx-card-muted: #f9fafb;
+  --color-nx-brand: #b91c1c;
+  --color-nx-brand-hover: #991b1b;
+  --color-nx-sidebar: #0a0a0a;
+  --color-nx-sidebar-hover: #1c1917;
+  --color-nx-ink: #111827;
+  --color-nx-muted: #374151;
+  --color-nx-border: #e5e7eb;
+}
+
+/* Shell: sidebar + topbar sin costura dura */
+.nx-app-shell {
+  background: var(--color-nx-bg);
+}
+
+/* Sidebar: rojo arriba → negro abajo, movimiento sutil */
+.nx-sidebar-gradient {
+  background: linear-gradient(
+    180deg,
+    #b91c1c 0%,
+    #991b1b 10%,
+    #7f1d1d 18%,
+    #450a0a 32%,
+    #1c1917 55%,
+    #0a0a0a 100%
+  );
+  background-size: 100% 200%;
+  animation: nx-sidebar-shift 18s ease-in-out infinite alternate;
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.04);
+}
+
+@keyframes nx-sidebar-shift {
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: 0% 18%;
+  }
+}
+
+/* Topbar: rojo izquierda (misma altura que marca sidebar) → negro derecha */
+.nx-topbar-gradient {
+  background: linear-gradient(
+    90deg,
+    #b91c1c 0%,
+    #991b1b 6%,
+    #7f1d1d 14%,
+    #292524 38%,
+    #171717 68%,
+    #0a0a0a 100%
+  );
+  background-size: 200% 100%;
+  animation: nx-topbar-shift 22s ease-in-out infinite alternate;
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+}
+
+@keyframes nx-topbar-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 12% 50%;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background-color: var(--color-nx-bg);
+  color: var(--color-nx-ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
