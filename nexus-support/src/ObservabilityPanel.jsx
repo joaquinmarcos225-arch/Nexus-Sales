@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchObservability } from './api.js'
+import CapacityCalculatorPanel from './CapacityCalculatorPanel.jsx'
 
 const STATUS_STYLE = {
   healthy: 'bg-emerald-100 text-emerald-800 ring-emerald-200',
@@ -109,6 +110,8 @@ export default function ObservabilityPanel() {
     <div className="min-h-0 flex-1 overflow-y-auto bg-[#fff8f7]">
       <div className="mx-auto max-w-7xl space-y-5 p-4 sm:p-6">
         {error ? <p className="rounded-xl bg-red-700 px-4 py-2 text-sm text-white">{error}</p> : null}
+
+        <CapacityCalculatorPanel />
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
           <Metric label="Empresas" value={summary.companies ?? 0} detail={`${summary.active_campaigns ?? 0} campañas activas`} />

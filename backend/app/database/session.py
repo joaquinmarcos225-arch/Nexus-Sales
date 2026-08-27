@@ -734,6 +734,23 @@ def _apply_sqlite_light_migrations(bind) -> None:
                 )
             )
 
+        if "ops_provider_balances" not in names:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE ops_provider_balances (
+                        provider VARCHAR(32) PRIMARY KEY,
+                        balance_usd REAL,
+                        balance_credits INTEGER,
+                        source VARCHAR(16) NOT NULL DEFAULT 'manual',
+                        notes VARCHAR(512),
+                        updated_by_user_id INTEGER,
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            )
+
         if "products" in names and "market_scope" not in _cols("products"):
             conn.execute(
                 text("ALTER TABLE products ADD COLUMN market_scope VARCHAR(16) NOT NULL DEFAULT 'b2b'")

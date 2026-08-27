@@ -81,6 +81,21 @@ export async function fetchObservability({ refreshProspeo = false } = {}) {
   return request(`/support/ops/observability${query}`)
 }
 
+export async function fetchCapacity({ refresh = false, proposedGrant = null } = {}) {
+  const params = new URLSearchParams()
+  if (refresh) params.set('refresh', 'true')
+  if (proposedGrant != null && proposedGrant > 0) params.set('proposed_grant', String(proposedGrant))
+  const q = params.toString()
+  return request(`/support/ops/capacity${q ? `?${q}` : ''}`)
+}
+
+export async function patchProviderBalance(provider, balanceUsd, notes = null) {
+  return request(`/support/ops/capacity/balances/${encodeURIComponent(provider)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ balance_usd: balanceUsd, notes }),
+  })
+}
+
 export async function fetchThread(threadId) {
   return request(`/support/ops/threads/${encodeURIComponent(threadId)}`)
 }

@@ -32,6 +32,11 @@ class SupportThreadStatusPatch(BaseModel):
     status: str = Field(pattern="^(open|resolved)$")
 
 
+class ProviderBalancePatch(BaseModel):
+    balance_usd: float = Field(ge=0)
+    notes: str | None = Field(default=None, max_length=512)
+
+
 def _require_ops(user: User) -> None:
     if not is_nexus_support_ops(user):
         raise HTTPException(status_code=403, detail="Solo el equipo Nexus Support puede ver esta bandeja.")
@@ -104,6 +109,46 @@ def ops_observability(
     from app.services.support_observability import build_support_observability
 
     return build_support_observability(db, refresh_prospeo=refresh_prospeo)
+
+
+@router.get("/support/ops/capacity")
+def ops_capacity(
+    refresh: bool = False,
+    proposed_grant: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Calculadora de capacidad: saldos proveedor → secuencias netas disponibles."""
+    _require_ops(user)
+    from app.services.capacity_calculator import build_capacity_report
+
+    report = build_capacity_report(db, refresh=refresh, proposed_grant=proposed_grant)
+    db.commit()
+    return report
+
+
+@router.patch("/support/ops/capacity/balances/{provider}")
+def ops_patch_provider_balance(
+    provider: str,
+    payload: ProviderBalancePatch,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    _require_ops(user)
+    from app.services.capacity_calculator import build_capacity_report, patch_provider_balance_manual
+
+    try:
+        patch_provider_balance_manual(
+            db,
+            provider=provider,
+            balance_usd=payload.balance_usd,
+            notes=payload.notes,
+            updated_by_user_id=int(user.id),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    db.commit()
+    return build_capacity_report(db, refresh=False)
 
 
 @router.get("/support/ops/threads/{thread_id}")

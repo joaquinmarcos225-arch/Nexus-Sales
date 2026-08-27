@@ -181,11 +181,11 @@ def test_support_observability_includes_inbox_and_billing(monkeypatch):
     assert "planned_cogs_usd" in result["billing_cycle"]
 
 
-def test_observability_route_requires_auth():
+def test_capacity_route_requires_auth():
     from fastapi.testclient import TestClient
 
     from app.main import app
 
     client = TestClient(app)
-    response = client.get("/support/ops/observability")
+    response = client.get("/support/ops/capacity")
     assert response.status_code == 401

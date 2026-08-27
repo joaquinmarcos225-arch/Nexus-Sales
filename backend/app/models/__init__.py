@@ -34,6 +34,7 @@ from app.models.nexus_contact_cache import (
     NexusContactCache,
     NexusContactDelivery,
 )
+from app.models.ops_provider_balance import OpsProviderBalance
 from app.models.prospect import Prospect
 from app.models.prospect_ownership_event import ProspectOwnershipEvent
 from app.models.seller_allocation import SellerCreditAllocation
@@ -72,6 +73,7 @@ __all__ = [
     "NexusContactCache",
     "NexusContactDelivery",
     "NexusResearchCache",
+    "OpsProviderBalance",
     "Prospect",
     "ProspectOwnershipEvent",
     "PipelineStage",
