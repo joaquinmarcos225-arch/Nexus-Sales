@@ -84,10 +84,11 @@ export default function DashboardSectionCampaigns() {
                 <p className="mt-2 text-2xl font-semibold text-nx-ink">{t.messages_sent}</p>
               </div>
               <div className="rounded-xl border border-nx-border bg-nx-card p-4 shadow-sm">
-                <p className="text-[11px] font-semibold uppercase text-nx-muted">Contactados / Respuestas</p>
+                <p className="text-[11px] font-semibold uppercase text-nx-muted">Le escribiste / te contestaron</p>
                 <p className="mt-2 text-2xl font-semibold text-nx-ink">
                   {t.prospects_contacted} / {t.prospects_responded}
                 </p>
+                <p className="mt-1 text-[10px] text-nx-muted">Totales empresa · cada campaña abajo es individual</p>
               </div>
               <div className="rounded-xl border border-nx-border bg-nx-card p-4 shadow-sm">
                 <p className="text-[11px] font-semibold uppercase text-nx-muted">Interesados / Reuniones</p>
@@ -164,8 +165,39 @@ export default function DashboardSectionCampaigns() {
                   { key: 'status_label', label: 'Estado' },
                   { key: 'seller_name', label: 'SDR/AE' },
                   { key: 'prospects_active', label: 'Activos', sortValue: (r) => r.prospects_active },
-                  { key: 'prospects_contacted', label: 'Contactados', sortValue: (r) => r.prospects_contacted },
-                  { key: 'prospects_responded', label: 'Respondieron', sortValue: (r) => r.prospects_responded },
+                  {
+                    key: 'prospects_contacted',
+                    label: 'Le escribiste',
+                    sortValue: (r) => r.prospects_contacted,
+                    render: (r) => (
+                      <span title="Prospectos distintos contactados en esta campaña">
+                        {r.prospects_contacted ?? 0}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'prospects_responded',
+                    label: 'Te contestaron',
+                    sortValue: (r) => r.prospects_responded,
+                    render: (r) => (
+                      <span title="Prospectos distintos que respondieron en esta campaña">
+                        {r.prospects_responded ?? 0}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'funnel',
+                    label: 'Escrito → respuesta',
+                    sortValue: (r) => {
+                      const c = Number(r.prospects_contacted) || 0
+                      return c > 0 ? (Number(r.prospects_responded) || 0) / c : 0
+                    },
+                    render: (r) => (
+                      <span className="tabular-nums whitespace-nowrap">
+                        {Number(r.prospects_contacted) || 0} → {Number(r.prospects_responded) || 0}
+                      </span>
+                    ),
+                  },
                   { key: 'prospects_interested', label: 'Interesados', sortValue: (r) => r.prospects_interested },
                   { key: 'meetings', label: 'Reuniones', sortValue: (r) => r.meetings },
                   { key: 'messages_sent', label: 'Mensajes', sortValue: (r) => r.messages_sent },

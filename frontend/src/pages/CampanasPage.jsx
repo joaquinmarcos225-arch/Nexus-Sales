@@ -358,17 +358,46 @@ export default function CampanasPage() {
     },
     {
       key: 'prospects_contacted',
-      label: 'Cont.',
-      thClassName: 'w-[5%]',
+      label: 'Le escribiste',
+      thClassName: 'w-[8%]',
       className: 'tabular-nums text-center',
       sortValue: (r) => r.prospects_contacted,
+      render: (r) => (
+        <span title="Prospectos distintos a los que les escribiste en esta campaña">
+          {r.prospects_contacted ?? 0}
+        </span>
+      ),
     },
     {
       key: 'prospects_responded',
-      label: 'Resp.',
-      thClassName: 'w-[5%]',
+      label: 'Te contestaron',
+      thClassName: 'w-[8%]',
       className: 'tabular-nums text-center',
       sortValue: (r) => r.prospects_responded,
+      render: (r) => (
+        <span title="Prospectos distintos que respondieron en esta campaña">
+          {r.prospects_responded ?? 0}
+        </span>
+      ),
+    },
+    {
+      key: 'funnel',
+      label: 'Escrito → respuesta',
+      thClassName: 'w-[10%]',
+      className: 'tabular-nums text-center whitespace-nowrap text-[11px]',
+      sortValue: (r) => {
+        const c = Number(r.prospects_contacted) || 0
+        return c > 0 ? (Number(r.prospects_responded) || 0) / c : 0
+      },
+      render: (r) => {
+        const wrote = Number(r.prospects_contacted) || 0
+        const replied = Number(r.prospects_responded) || 0
+        return (
+          <span title="De esta campaña sola">
+            {wrote} → {replied}
+          </span>
+        )
+      },
     },
     {
       key: 'prospects_interested',
@@ -542,10 +571,11 @@ export default function CampanasPage() {
           {totals ? (
             <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard label="Campañas activas" value={String(totals.campaigns_active)} />
-              <StatCard label="Mensajes enviados" value={String(totals.messages_sent)} />
+              <StatCard label="Mensajes enviados (empresa)" value={String(totals.messages_sent)} />
               <StatCard
-                label="Contactados / respuestas"
+                label="Le escribiste / te contestaron"
                 value={`${totals.prospects_contacted} / ${totals.prospects_responded}`}
+                hint="Totales de la empresa · abajo cada campaña va por separado"
               />
               <StatCard
                 label="Interesados / reuniones"

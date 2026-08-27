@@ -15,6 +15,7 @@ import {
   deleteCampaign,
   deleteProspect,
   fetchCampaign,
+  fetchCampaignOutreach,
   fetchCampaignProspects,
   fetchProducts,
   pauseProspectSequence,
@@ -175,6 +176,7 @@ export default function CampanaDetallePage() {
   const [prospectsError, setProspectsError] = useState(null)
   const [seqBusyId, setSeqBusyId] = useState(null)
   const [foundProspectsQuery, setFoundProspectsQuery] = useState('')
+  const [campaignStats, setCampaignStats] = useState(null)
   const [products, setProducts] = useState([])
 
   useEffect(() => {
@@ -294,6 +296,26 @@ export default function CampanaDetallePage() {
         if (!cancelled) {
           setProspectsLoading(false)
         }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [id, companyMismatch, prospectReloadKey])
+
+  useEffect(() => {
+    if (!Number.isFinite(id) || id < 1 || companyMismatch) {
+      setCampaignStats(null)
+      return
+    }
+    let cancelled = false
+    void fetchCampaignOutreach(id)
+      .then((data) => {
+        if (!cancelled) {
+          setCampaignStats(data?.stats && typeof data.stats === 'object' ? data.stats : null)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCampaignStats(null)
       })
     return () => {
       cancelled = true
@@ -756,15 +778,50 @@ export default function CampanaDetallePage() {
       {!loading && campaign ? (
         <CollapsibleSection
           title="Datos de la campaña"
-          subtitle="General, asignación, canales e ICP"
+          subtitle="Resultados de esta campaña (individuales) + configuración e ICP"
           defaultOpen={false}
         >
           <div className="grid gap-3 lg:grid-cols-2">
             <div className="rounded-lg border border-nx-border/90 bg-nx-card-muted/40 p-3">
-              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-nx-muted">General</h2>
-              <Row label="Nombre" value={campaign.name} />
-              <Row label="Asignado" value={campaign.seller_name} />
-              <Row label="Producto/servicio" value={campaign.product_name} />
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-nx-muted">
+                Resultados de esta campaña
+              </h2>
+              <Row
+                label="Le escribiste a"
+                value={
+                  campaignStats
+                    ? `${Number(campaignStats.contacted) || 0} prospectos`
+                    : prospectsLoading
+                      ? 'Cargando…'
+                      : '—'
+                }
+              />
+              <Row
+                label="Te contestaron"
+                value={
+                  campaignStats
+                    ? `${Number(campaignStats.responded) || 0} prospectos`
+                    : prospectsLoading
+                      ? 'Cargando…'
+                      : '—'
+                }
+              />
+              <Row
+                label="Escrito → respuesta"
+                value={
+                  campaignStats
+                    ? `${Number(campaignStats.contacted) || 0} → ${Number(campaignStats.responded) || 0}`
+                    : '—'
+                }
+              />
+              <Row
+                label="Mensajes enviados"
+                value={
+                  campaignStats != null
+                    ? String(Number(campaignStats.messages_outbound) || 0)
+                    : '—'
+                }
+              />
               <Row
                 label="Prospectos en campaña"
                 value={
@@ -774,6 +831,13 @@ export default function CampanaDetallePage() {
                 }
               />
               <Row label="Meta ICP (objetivo)" value={`${campaign.prospect_count} contactos`} />
+            </div>
+
+            <div className="rounded-lg border border-nx-border/90 bg-nx-card-muted/40 p-3">
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-nx-muted">General</h2>
+              <Row label="Nombre" value={campaign.name} />
+              <Row label="Asignado" value={campaign.seller_name} />
+              <Row label="Producto/servicio" value={campaign.product_name} />
               <Row label="Tono" value={campaign.tone} />
               <Row label="Timezone" value={campaign.timezone} />
               <Row

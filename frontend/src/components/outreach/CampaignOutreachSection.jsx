@@ -2192,24 +2192,37 @@ async function handleAbrirWhatsAppWeb(task) {
         <div className="grid gap-3 px-5 py-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <div className="rounded-xl border border-nx-border bg-nx-card-muted/80 px-4 py-3">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-ink">
-              En esta campaña
+              Prospectos en campaña
             </p>
             <p className="mt-1 text-2xl font-bold tabular-nums text-nx-ink">{totalProspects}</p>
             <p className="mt-0.5 text-[11px] text-nx-ink">
-              {stats.contacted || 0} contactado{(stats.contacted || 0) === 1 ? '' : 's'}
               {prospectsPending > 0
-                ? ` · ${prospectsPending} pendiente${prospectsPending === 1 ? '' : 's'} de enviar`
+                ? `${prospectsPending} pendiente${prospectsPending === 1 ? '' : 's'} de primer envío`
                 : totalProspects > 0
-                  ? ' · todos con al menos un envío'
-                  : ''}
+                  ? 'Todos con al menos un envío'
+                  : 'Sin prospectos todavía'}
             </p>
           </div>
           <div className="rounded-xl border border-nx-border bg-nx-card-muted/80 px-4 py-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-ink">Mensajes enviados</p>
-            <p className="mt-1 text-2xl font-bold tabular-nums text-nx-ink">{messagesOutbound}</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-ink">
+              Le escribiste a
+            </p>
+            <p className="mt-1 text-2xl font-bold tabular-nums text-nx-ink">{stats.contacted || 0}</p>
             <p className="mt-0.5 text-[11px] text-nx-ink">
-              {messagesInbound} respuesta{messagesInbound === 1 ? '' : 's'} · {stats.contacted || 0} prospecto
-              {(stats.contacted || 0) === 1 ? '' : 's'} contactado{(stats.contacted || 0) === 1 ? '' : 's'}
+              Prospectos distintos contactados en esta campaña
+              {messagesOutbound > 0 ? ` · ${messagesOutbound} mensajes enviados` : ''}
+            </p>
+          </div>
+          <div className="rounded-xl border border-nx-border bg-nx-card-muted/80 px-4 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-ink">
+              Te contestaron
+            </p>
+            <p className="mt-1 text-2xl font-bold tabular-nums text-nx-ink">{stats.responded || 0}</p>
+            <p className="mt-0.5 text-[11px] text-nx-ink">
+              {(stats.contacted || 0) > 0
+                ? `${Math.round(((stats.responded || 0) / (stats.contacted || 1)) * 100)}% de los contactados`
+                : 'Respuestas inbound en esta campaña'}
+              {messagesInbound > 0 ? ` · ${messagesInbound} mensajes` : ''}
             </p>
           </div>
           <div
@@ -2253,11 +2266,6 @@ async function handleAbrirWhatsAppWeb(task) {
             <p className="mt-0.5 text-[11px] text-nx-ink">
               {waPending > 0 ? 'Cola WhatsApp' : 'Cola al día'}
             </p>
-          </div>
-          <div className="rounded-xl border border-nx-border bg-nx-card-muted/80 px-4 py-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-ink">Tareas pendientes</p>
-            <p className="mt-1 text-2xl font-bold tabular-nums text-nx-ink">{pendingTasks}</p>
-            <p className="mt-0.5 text-[11px] text-nx-ink">Follow-ups y revisiones</p>
           </div>
         </div>
 
@@ -2649,11 +2657,16 @@ async function handleAbrirWhatsAppWeb(task) {
         defaultOpen={false}
         badge={running ? 'En vivo' : undefined}
       >
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <Metric
-          label="Respuestas"
+          label="Le escribiste a"
+          value={stats.contacted}
+          hint="Prospectos distintos contactados (esta campaña)"
+        />
+        <Metric
+          label="Te contestaron"
           value={stats.responded}
-          hint={realMode ? 'Importadas desde Gmail' : 'Prospectos que respondieron'}
+          hint={realMode ? 'Respuestas reales inbound' : 'Prospectos que respondieron'}
         />
         <Metric label="Follow-ups enviados" value={followupsSent} />
         <Metric label="Citas en calendario" value={meetingsN} hint="Reuniones con fecha en Nexus" />
