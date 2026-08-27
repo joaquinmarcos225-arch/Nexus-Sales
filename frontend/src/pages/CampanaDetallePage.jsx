@@ -183,6 +183,7 @@ export default function CampanaDetallePage() {
   const [prospectsLoading, setProspectsLoading] = useState(true)
   const [prospectsError, setProspectsError] = useState(null)
   const [seqBusyId, setSeqBusyId] = useState(null)
+  const [foundProspectsQuery, setFoundProspectsQuery] = useState('')
   const [products, setProducts] = useState([])
 
   useEffect(() => {
@@ -385,6 +386,26 @@ export default function CampanaDetallePage() {
 
   const displayProspectsCount = displayProspects.length
 
+  const filteredFoundProspects = useMemo(() => {
+    const needle = foundProspectsQuery.trim().toLowerCase()
+    if (!needle) return displayProspects
+    return displayProspects.filter((p) => {
+      const hay = [
+        p?.name,
+        p?.company_name,
+        p?.role,
+        p?.email,
+        p?.whatsapp,
+        p?.phone,
+        p?.linkedin_url,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      return hay.includes(needle)
+    })
+  }, [displayProspects, foundProspectsQuery])
+
   async function handleDelete() {
     if (!campaign || deleting) return
     const ok = confirmDeleteCampaign(campaign, {
@@ -551,54 +572,75 @@ export default function CampanaDetallePage() {
                 )}
             </p>
           ) : (
-            <ul className="divide-y divide-nx-border">
-              {displayProspects.map((p) => {
-                const busy = seqBusyId === p.id
-                return (
-                  <li
-                    key={p.id}
-                    className="flex flex-wrap items-center justify-between gap-2 py-2.5"
-                  >
-                    <div className="min-w-0">
-                      <ProspectNameLink prospect={p} />
-                      <ProspectFoundMetaLine prospect={p} />
-                      <ProspectActivityBadge prospect={p} className="mt-1" />
-                      <ProspectFoundContactLines prospect={p} />
-                    </div>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      className="shrink-0 rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-semibold text-red-800 hover:bg-red-100 disabled:opacity-40"
-                      onClick={async () => {
-                        if (
-                          !window.confirm(
-                            `¿Eliminar a ${p.name || 'este prospecto'} de la campaña?`,
-                          )
-                        ) {
-                          return
-                        }
-                        setSeqBusyId(p.id)
-                        setError(null)
-                        try {
-                          await deleteProspect(p.id)
-                          clearProspectExtensionWatch(p.id)
-                          notifyLinkedInQueueChanged()
-                          notifyWhatsAppQueueChanged()
-                          setProspectReloadKey((v) => v + 1)
-                          void loadCampaign()
-                        } catch (e) {
-                          setError(e instanceof Error ? e.message : String(e))
-                        } finally {
-                          setSeqBusyId(null)
-                        }
-                      }}
-                    >
-                      {busy ? '…' : 'Eliminar'}
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="search"
+                  value={foundProspectsQuery}
+                  onChange={(e) => setFoundProspectsQuery(e.target.value)}
+                  placeholder="Buscar por nombre, empresa, rol o contacto…"
+                  className="w-full rounded-lg border border-nx-border bg-white px-2.5 py-1.5 text-[12px] text-nx-ink shadow-sm placeholder:text-nx-muted/70 focus:border-nx-brand/40 focus:outline-none focus:ring-2 focus:ring-nx-brand/15 sm:max-w-md"
+                  aria-label="Buscar prospectos encontrados"
+                />
+                {foundProspectsQuery.trim() ? (
+                  <p className="text-[11px] text-nx-muted">
+                    {filteredFoundProspects.length} de {displayProspectsCount}
+                  </p>
+                ) : null}
+              </div>
+              {filteredFoundProspects.length === 0 ? (
+                <p className="text-sm text-nx-ink">Ningún prospecto coincide con la búsqueda.</p>
+              ) : (
+                <ul className="max-h-[min(42vh,22rem)] divide-y divide-nx-border overflow-y-auto overscroll-contain rounded-lg border border-nx-border/70 bg-white pr-1 [scrollbar-gutter:stable]">
+                  {filteredFoundProspects.map((p) => {
+                    const busy = seqBusyId === p.id
+                    return (
+                      <li
+                        key={p.id}
+                        className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-2"
+                      >
+                        <div className="min-w-0">
+                          <ProspectNameLink prospect={p} />
+                          <ProspectFoundMetaLine prospect={p} />
+                          <ProspectActivityBadge prospect={p} className="mt-1" />
+                          <ProspectFoundContactLines prospect={p} />
+                        </div>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          className="shrink-0 rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-semibold text-red-800 hover:bg-red-100 disabled:opacity-40"
+                          onClick={async () => {
+                            if (
+                              !window.confirm(
+                                `¿Eliminar a ${p.name || 'este prospecto'} de la campaña?`,
+                              )
+                            ) {
+                              return
+                            }
+                            setSeqBusyId(p.id)
+                            setError(null)
+                            try {
+                              await deleteProspect(p.id)
+                              clearProspectExtensionWatch(p.id)
+                              notifyLinkedInQueueChanged()
+                              notifyWhatsAppQueueChanged()
+                              setProspectReloadKey((v) => v + 1)
+                              void loadCampaign()
+                            } catch (e) {
+                              setError(e instanceof Error ? e.message : String(e))
+                            } finally {
+                              setSeqBusyId(null)
+                            }
+                          }}
+                        >
+                          {busy ? '…' : 'Eliminar'}
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
           )}
         </CollapsibleSection>
       ) : null}
