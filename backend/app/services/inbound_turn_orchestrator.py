@@ -239,6 +239,16 @@ def resolve_inbound_scheduling_reply(
             notes="No responder a autoresponders",
         )
 
+    # Rechazo / no interesa: no intentar parsear slots ni agendar.
+    if objective == "rechazo" or response_class in ("no_interesado", "contactar_mas_adelante"):
+        return InboundTurnDecision(
+            action="normal_reply",
+            reply_objective=objective or "rechazo",
+            response_class=response_class,
+            reply_body=suggested_reply or None,
+            notes="Rechazo: cierre cortés sin agenda",
+        )
+
     # Solo cambiar duración de reunión ya agendada (ej. 30 → 15): no re-ofrecer slots.
     if inbound_is_duration_only_change(body) is not None:
         duration_result = attempt_duration_only_change(

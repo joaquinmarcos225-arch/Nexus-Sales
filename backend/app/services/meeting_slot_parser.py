@@ -399,7 +399,14 @@ def parse_meeting_slot(
     if not norm:
         return None
 
-    tz = ZoneInfo(timezone)
+    try:
+        tz = ZoneInfo(timezone)
+    except Exception:
+        # Alias viejos / imagen sin zoneinfo del sistema → fallback AR.
+        try:
+            tz = ZoneInfo("America/Argentina/Buenos_Aires")
+        except Exception:
+            return None
     ref = (now or datetime.now(UTC)).astimezone(tz)
     base = ref.replace(second=0, microsecond=0)
 
