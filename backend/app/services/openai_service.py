@@ -1024,6 +1024,8 @@ def generate_gmail_draft_email(
             "\n\nÚLTIMO MENSAJE DEL PROSPECTO (obligatorio: respondé a esto de forma coherente; "
             "no ignores el hilo ni actúes como primer cold outreach):\n"
             f"{inbound_raw}\n\n"
+            "CONVERSACIÓN ACTIVA: ya hay intercambio previo. Respondé como en un chat en curso "
+            "(no repitas pitch inicial; sí contestá lo nuevo).\n\n"
             f"{answer_rule}"
         )
 
@@ -1109,7 +1111,8 @@ def generate_gmail_draft_email(
             + _education_block(education)
             + "\n\nRol: redactás UN correo en español (B2B) como respuesta en un hilo existente (borrador Gmail). "
             "Always answer the user's actual question first before pushing for a meeting. "
-            "Meeting advancement is secondary to being genuinely useful.\n\n"
+            "Meeting advancement is secondary to being genuinely useful. "
+            "Mantené la conversación: cada inbound recibe respuesta; nunca dejar el hilo sin contestar.\n\n"
             "Respondé SOLO con JSON válido (sin markdown) con claves exactas:\n"
             '{"subject":"...","body":"..."}\n'
             "- subject: 2–4 palabras (valor, producto, tema); sin nombre del prospecto ni preguntas largas.\n"

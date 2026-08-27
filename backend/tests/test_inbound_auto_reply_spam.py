@@ -40,12 +40,11 @@ def test_skipped_disabled_silent_and_retryable(monkeypatch):
         assert inbound_needs_auto_reply_retry(db, 10, "gmail-mid-1") is True
 
 
-def test_not_interested_is_not_in_prior_skip_set():
-    from app.models.enums import ProspectStatus
+def test_prior_status_skip_removed():
+    """Ningún estado previo corta auto-respuesta (conversación continua)."""
     from app.services import inbound_auto_reply as mod
 
-    assert ProspectStatus.not_interested.value not in mod._SKIP_PRIOR_PROSPECT_STATUSES
-    assert ProspectStatus.failed.value in mod._SKIP_PRIOR_PROSPECT_STATUSES
+    assert not hasattr(mod, "_SKIP_PRIOR_PROSPECT_STATUSES")
 
 
 def test_skipped_closed_receipt_is_retryable():

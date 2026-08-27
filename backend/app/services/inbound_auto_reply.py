@@ -69,13 +69,8 @@ _SILENT_ACTIVITY_OUTCOMES = frozenset(
     }
 )
 
-# Solo "failed" (bounce / hard-fail). "not_interested" NO: el mail de rechazo
-# debe recibir cierre cortés automático (una vez por gmail_message_id).
-_SKIP_PRIOR_PROSPECT_STATUSES = frozenset(
-    {
-        ProspectStatus.failed.value,
-    }
-)
+# Cada gmail_message_id inbound recibe su propia respuesta (conversación continua).
+# No bloqueamos por estado previo del prospecto.
 
 
 def inbound_auto_reply_enabled() -> bool:
@@ -974,16 +969,6 @@ def deliver_auto_reply_for_inbound(
         task = get_pending_send_task(db, prospect.id, mid)
         detail = "pendiente en cola" if task else "ya finalizado"
         return _skip("skipped_already", detail)
-
-    if not force_immediate:
-        prior = (prior_prospect_status or "").strip()
-        if prior and prior in _SKIP_PRIOR_PROSPECT_STATUSES:
-            logger.info(
-                "[inbound_auto_reply] skipped_closed prior_status=%s prospect_id=%s",
-                prior,
-                prospect.id,
-            )
-            return _skip("skipped_closed", f"estado previo={prior}")
 
     to_addr = (prospect.email or "").strip()
     if not to_addr or "@" not in to_addr:

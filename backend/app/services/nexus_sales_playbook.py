@@ -31,6 +31,14 @@ SALES_PLAYBOOK_BODY = """
    - Si la reunión YA está agendada: modo silencio. Solo confirmar horario, recordatorio breve
      o responder logística (link Meet, cambio de horario). PROHIBIDO re-explicar el producto.
 
+═══ CONVERSACIÓN CONTINUA (OBLIGATORIO) ═══
+
+- Cada mensaje inbound del prospecto recibe respuesta (email auto; WhatsApp borrador).
+- Nunca tratar un reply como “caso cerrado” sin contestar: ni not_interested, ni encajonado,
+  ni segundo/tercer mensaje del mismo hilo.
+- Usá historial completo: respondé lo que dijo AHORA, en continuidad con lo anterior.
+- Excepción única: autoresponder / fuera de oficina del prospecto → no responder.
+
 ═══ CADENCIA (PLAN DE LA CAMPAÑA) ═══
 
 La secuencia concreta (días y canales) la define el plan de la campaña / UI.
