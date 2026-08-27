@@ -15,12 +15,12 @@ export function conversationStateLabel(state) {
 export function conversationStateBadgeClass(state) {
   const key = (state || '').toLowerCase()
   const map = {
-    conversacion_automatica_activa: 'bg-sky-50 text-sky-800 ring-sky-600/20',
-    esperando_respuesta: 'bg-indigo-50 text-indigo-800 ring-indigo-600/20',
-    reunion_conseguida: 'bg-emerald-50 text-emerald-800 ring-emerald-600/20',
-    derivado_sdr: 'bg-amber-50 text-amber-900 ring-amber-600/20',
+    conversacion_automatica_activa: 'bg-red-50 text-red-800 ring-red-600/20',
+    esperando_respuesta: 'bg-zinc-100 text-zinc-800 ring-zinc-500/20',
+    reunion_conseguida: 'bg-zinc-900 text-white ring-zinc-900/30',
+    derivado_sdr: 'bg-zinc-100 text-zinc-800 ring-zinc-500/20',
     no_interesado: 'bg-red-50 text-red-800 ring-red-600/20',
-    sin_conversacion: 'bg-slate-100 text-slate-600 ring-slate-500/20',
+    sin_conversacion: 'bg-zinc-100 text-zinc-600 ring-zinc-500/20',
   }
   return map[key] || map.sin_conversacion
 }

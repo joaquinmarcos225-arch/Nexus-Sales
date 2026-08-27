@@ -38,29 +38,8 @@ class CompanySearchProvider(LeadSourcingProvider):
         *,
         query: str | None = None,
         limit: int = 20,
+        query_offset: int = 0,
     ) -> list[CompanyCandidateRead]:
-        raise NotImplementedError
-
-
-class PeopleExtractionProvider(LeadSourcingProvider):
-    """Empresas/URLs → personas (PhantomBuster / LinkedIn)."""
-
-    name: str = "phantombuster"
-
-    @abstractmethod
-    def is_configured(self) -> bool:
-        raise NotImplementedError
-
-    @abstractmethod
-    def extract_people(
-        self,
-        campaign: Campaign,
-        companies: list[CompanyCandidateRead],
-        *,
-        role_hint: str | None = None,
-        limit: int = 50,
-        phantom_queue: dict | None = None,
-    ) -> list[LeadCandidateRead]:
         raise NotImplementedError
 
 

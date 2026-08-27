@@ -37,34 +37,34 @@ export function CalendarSyncDebugPanel({ data, onClose, embedded = false }) {
   }
 
   const shellClass = embedded
-    ? 'mt-3 w-full rounded-lg border border-amber-400 bg-amber-50/95 shadow-inner'
-    : 'mt-4 w-full rounded-xl border-2 border-amber-400 bg-amber-50/90 shadow-sm'
+    ? 'mt-3 w-full rounded-lg border border-zinc-400 bg-zinc-50/95 shadow-inner'
+    : 'mt-4 w-full rounded-xl border-2 border-zinc-400 bg-zinc-50/90 shadow-sm'
 
   return (
     <section
       className={shellClass}
       aria-label="Debug Calendar sync"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-300/80 bg-amber-100/80 px-4 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-300/80 bg-zinc-100/80 px-4 py-2.5">
         <div>
-          <h3 className="text-sm font-bold tracking-tight text-amber-950">
+          <h3 className="text-sm font-bold tracking-tight text-zinc-950">
             {embedded ? 'Detalle del último sync' : 'Debug Calendar'}
           </h3>
-          <p className="text-[11px] text-amber-900/90">
+          <p className="text-[11px] text-zinc-900/90">
             Eventos, invitados (attendees), matches, skip_reason, reuniones creadas/actualizadas, pipeline
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            className="rounded-md border border-amber-400 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-950 hover:bg-amber-50"
+            className="rounded-md border border-zinc-400 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-950 hover:bg-zinc-50"
             onClick={() => setShowRaw((v) => !v)}
           >
             {showRaw ? 'Ocultar JSON' : 'Ver JSON completo'}
           </button>
           <button
             type="button"
-            className="rounded-md border border-amber-400 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-950 hover:bg-amber-50"
+            className="rounded-md border border-zinc-400 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-950 hover:bg-zinc-50"
             onClick={() => void copyRaw()}
           >
             Copiar JSON
@@ -72,7 +72,7 @@ export function CalendarSyncDebugPanel({ data, onClose, embedded = false }) {
           {onClose ? (
             <button
               type="button"
-              className="rounded-md px-2.5 py-1 text-[11px] font-medium text-amber-900 hover:bg-amber-200/60"
+              className="rounded-md px-2.5 py-1 text-[11px] font-medium text-zinc-900 hover:bg-zinc-200/60"
               onClick={onClose}
             >
               {embedded ? 'Ocultar detalle' : 'Cerrar'}
@@ -98,13 +98,13 @@ export function CalendarSyncDebugPanel({ data, onClose, embedded = false }) {
           {data.calendar_list_debug ? <CalendarListDebug cld={data.calendar_list_debug} /> : null}
         </div>
       ) : Number(data.events_seen) === 0 ? (
-        <p className="mx-4 mb-3 rounded border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-900">
-          <strong>events_seen = 0</strong> y no llegó <code className="rounded bg-rose-100 px-1">events_list_debug</code>.
-          Actualizá el backend y volvé a sincronizar con <code className="rounded bg-rose-100 px-1">include_debug: true</code>.
+        <p className="mx-4 mb-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">
+          <strong>events_seen = 0</strong> y no llegó <code className="rounded bg-red-100 px-1">events_list_debug</code>.
+          Actualizá el backend y volvé a sincronizar con <code className="rounded bg-red-100 px-1">include_debug: true</code>.
         </p>
       ) : null}
 
-      <p className="px-4 text-[11px] text-amber-900/90">
+      <p className="px-4 text-[11px] text-zinc-900/90">
         Cuenta: <span className="font-mono font-medium">{data.calendar_account || '—'}</span>
         {' · '}
         Vendedor excluido: {(data.seller_emails || []).join(', ') || '—'}
@@ -118,11 +118,11 @@ export function CalendarSyncDebugPanel({ data, onClose, embedded = false }) {
       </p>
 
       {prospectIndex.length > 0 ? (
-        <div className="mx-4 mb-3 rounded-lg border border-amber-300/70 bg-white/70 p-3">
-          <p className="text-xs font-bold text-amber-950">Índice prospect.email</p>
+        <div className="mx-4 mb-3 rounded-lg border border-zinc-300/70 bg-white/70 p-3">
+          <p className="text-xs font-bold text-zinc-950">Índice prospect.email</p>
           <ul className="mt-2 max-h-28 overflow-y-auto font-mono text-[10px] leading-relaxed text-zinc-800">
             {prospectIndex.map((p) => (
-              <li key={p.prospect_id} className="border-b border-amber-100/80 py-0.5 last:border-0">
+              <li key={p.prospect_id} className="border-b border-zinc-100/80 py-0.5 last:border-0">
                 #{p.prospect_id} {p.name}: <span className="text-zinc-500">{p.email_raw}</span> →{' '}
                 <span className="font-semibold">{p.email_normalized}</span>
               </li>
@@ -130,20 +130,20 @@ export function CalendarSyncDebugPanel({ data, onClose, embedded = false }) {
           </ul>
         </div>
       ) : (
-        <p className="mx-4 mb-3 text-xs font-medium text-rose-800">
+        <p className="mx-4 mb-3 text-xs font-medium text-red-800">
           Sin prospectos con email en esta campaña — no hay nada que matchear.
         </p>
       )}
 
       <div className="mx-4 mb-3">
-        <p className="text-xs font-bold text-amber-950">
+        <p className="text-xs font-bold text-zinc-950">
           Eventos ({debugEvents.length} en debug)
         </p>
         {debugEvents.length === 0 ? (
-          <p className="mt-2 text-xs text-amber-900">
+          <p className="mt-2 text-xs text-zinc-900">
             No hay eventos en el período o Google devolvió 0 items. Revisá arriba{' '}
             <strong>events.list</strong> (URL, timeMin/timeMax, JSON crudo). Si ahí{' '}
-            <code className="rounded bg-amber-100 px-1">items</code> está vacío, el problema es API/ventana/calendario,
+            <code className="rounded bg-zinc-100 px-1">items</code> está vacío, el problema es API/ventana/calendario,
             no el matching.
           </p>
         ) : (
@@ -156,7 +156,7 @@ export function CalendarSyncDebugPanel({ data, onClose, embedded = false }) {
       </div>
 
       {Array.isArray(data.errors) && data.errors.length > 0 ? (
-        <div className="mx-4 mb-3 rounded border border-rose-300 bg-rose-50 p-2 text-xs text-rose-900">
+        <div className="mx-4 mb-3 rounded border border-red-300 bg-red-50 p-2 text-xs text-red-900">
           <p className="font-bold">Errores API</p>
           <ul className="mt-1 list-disc pl-4">
             {data.errors.map((e, i) => (
@@ -167,11 +167,11 @@ export function CalendarSyncDebugPanel({ data, onClose, embedded = false }) {
       ) : null}
 
       {showRaw ? (
-        <div className="border-t border-amber-300/80 p-4">
-          <p className="mb-2 text-xs font-bold text-amber-950">Respuesta JSON cruda</p>
+        <div className="border-t border-zinc-300/80 p-4">
+          <p className="mb-2 text-xs font-bold text-zinc-950">Respuesta JSON cruda</p>
           <textarea
             readOnly
-            className="h-64 w-full resize-y rounded-lg border border-amber-300 bg-zinc-950 p-3 font-mono text-[10px] leading-relaxed text-emerald-300"
+            className="h-64 w-full resize-y rounded-lg border border-zinc-300 bg-zinc-950 p-3 font-mono text-[10px] leading-relaxed text-red-300"
             value={rawJson}
             spellCheck={false}
           />
@@ -185,11 +185,11 @@ function Stat({ label, value, highlight = false }) {
   return (
     <div
       className={`rounded-lg border px-2.5 py-2 ${
-        highlight ? 'border-emerald-400 bg-emerald-50' : 'border-amber-200/80 bg-white/60'
+        highlight ? 'border-red-400 bg-red-50' : 'border-zinc-200/80 bg-white/60'
       }`}
     >
-      <p className="text-[10px] uppercase tracking-wide text-amber-800/80">{label}</p>
-      <p className="text-lg font-bold tabular-nums text-amber-950">{value ?? 0}</p>
+      <p className="text-[10px] uppercase tracking-wide text-zinc-800/80">{label}</p>
+      <p className="text-lg font-bold tabular-nums text-zinc-950">{value ?? 0}</p>
     </div>
   )
 }
@@ -202,16 +202,16 @@ function EventsListRequestDebug({ eld, eventsSeen }) {
 
   return (
     <div className="space-y-3">
-      <div className="rounded-xl border-2 border-orange-600 bg-orange-50/95 p-3 shadow-sm">
-        <p className="text-sm font-bold text-orange-950">Google Calendar · diagnóstico events.list + calendarList</p>
+      <div className="rounded-xl border-2 border-zinc-600 bg-zinc-50/95 p-3 shadow-sm">
+        <p className="text-sm font-bold text-zinc-950">Google Calendar · diagnóstico events.list + calendarList</p>
         {eld.sync_mode ? (
-          <p className="mt-1 text-[11px] font-medium leading-snug text-orange-950">{eld.sync_mode}</p>
+          <p className="mt-1 text-[11px] font-medium leading-snug text-zinc-950">{eld.sync_mode}</p>
         ) : null}
         {eld.timezone_note ? (
-          <p className="mt-1 text-[11px] leading-snug text-orange-900">{eld.timezone_note}</p>
+          <p className="mt-1 text-[11px] leading-snug text-zinc-900">{eld.timezone_note}</p>
         ) : null}
         {eld.time_window_anchor ? (
-          <p className="mt-2 rounded border border-orange-300 bg-white/90 px-2 py-1 text-[11px] text-orange-950">
+          <p className="mt-2 rounded border border-zinc-300 bg-white/90 px-2 py-1 text-[11px] text-zinc-950">
             Ventana temporal anclada a: <strong>{eld.time_window_anchor}</strong>
             {eld.time_window_anchor === 'client'
               ? ' (reloj del navegador; corrige servidor desfasado)'
@@ -237,12 +237,12 @@ function EventsListRequestDebug({ eld, eventsSeen }) {
           </p>
         ) : null}
         {eld.calendar_list_error ? (
-          <p className="mt-2 rounded border border-rose-400 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-900">
+          <p className="mt-2 rounded border border-red-400 bg-red-50 px-2 py-1 text-xs font-semibold text-red-900">
             calendarList: {eld.calendar_list_error}
           </p>
         ) : null}
 
-        <dl className="mt-2 grid gap-1 font-mono text-[10px] text-orange-950">
+        <dl className="mt-2 grid gap-1 font-mono text-[10px] text-zinc-950">
           <div>
             <dt className="inline font-sans font-semibold">Eventos únicos tras merge: </dt>
             <dd className="inline">
@@ -267,14 +267,14 @@ function EventsListRequestDebug({ eld, eventsSeen }) {
         </dl>
 
         {calendarsAll.length > 0 ? (
-          <div className="mt-3 rounded-lg border border-orange-400 bg-white/90 p-2">
-            <p className="text-xs font-bold text-orange-950">
+          <div className="mt-3 rounded-lg border border-zinc-400 bg-white/90 p-2">
+            <p className="text-xs font-bold text-zinc-950">
               Todos los calendarios (calendarList) — id · summary · primary · accessRole · timeZone
             </p>
             <div className="mt-2 max-h-56 overflow-auto">
               <table className="w-full border-collapse text-left text-[10px]">
                 <thead>
-                  <tr className="border-b border-orange-200 text-orange-800">
+                  <tr className="border-b border-zinc-200 text-zinc-800">
                     <th className="py-1 pr-2">summary</th>
                     <th className="py-1 pr-2">primary</th>
                     <th className="py-1 pr-2">accessRole</th>
@@ -284,7 +284,7 @@ function EventsListRequestDebug({ eld, eventsSeen }) {
                 </thead>
                 <tbody>
                   {calendarsAll.map((c, i) => (
-                    <tr key={c.id || i} className="border-b border-orange-100 align-top">
+                    <tr key={c.id || i} className="border-b border-zinc-100 align-top">
                       <td className="py-1 pr-2">{c.summary || '—'}</td>
                       <td className="py-1 pr-2">{c.primary ? 'yes' : ''}</td>
                       <td className="py-1 pr-2">{c.accessRole || '—'}</td>
@@ -299,14 +299,14 @@ function EventsListRequestDebug({ eld, eventsSeen }) {
         ) : null}
 
         {perCal.length > 0 ? (
-          <div className="mt-3 rounded-lg border border-orange-400 bg-white/90 p-2">
-            <p className="text-xs font-bold text-orange-950">
+          <div className="mt-3 rounded-lg border border-zinc-400 bg-white/90 p-2">
+            <p className="text-xs font-bold text-zinc-950">
               events.list por calendario (misma ventana UTC) — items_fetched_in_window
             </p>
             <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto font-mono text-[10px] text-zinc-900">
               {perCal.map((row, i) => (
-                <li key={row.calendar_id || i} className="rounded border border-orange-100/80 bg-orange-50/50 px-2 py-1">
-                  <span className="font-semibold text-orange-950">{row.items_fetched_in_window ?? 0} ev</span>
+                <li key={row.calendar_id || i} className="rounded border border-zinc-100/80 bg-zinc-50/50 px-2 py-1">
+                  <span className="font-semibold text-zinc-950">{row.items_fetched_in_window ?? 0} ev</span>
                   {' · '}
                   <span className="break-all">{row.calendar_id}</span>
                   {row.summary ? ` · ${row.summary}` : ''}
@@ -321,20 +321,20 @@ function EventsListRequestDebug({ eld, eventsSeen }) {
           </div>
         ) : null}
 
-        <p className="mt-3 text-[11px] font-semibold text-orange-950">
+        <p className="mt-3 text-[11px] font-semibold text-zinc-950">
           Detalle events.list del calendario “{eld.calendar_id || 'primary'}” (referencia; suele ser primary)
         </p>
         {eld.calendar_id_note ? (
-          <p className="text-[10px] text-orange-900">{eld.calendar_id_note}</p>
+          <p className="text-[10px] text-zinc-900">{eld.calendar_id_note}</p>
         ) : null}
         {Number(eventsSeen) === 0 && (eld.merged_unique_events_count ?? 0) === 0 ? (
-          <p className="mt-2 rounded-md border border-orange-500 bg-white/90 px-2 py-1.5 text-xs font-semibold text-orange-950">
+          <p className="mt-2 rounded-md border border-zinc-500 bg-white/90 px-2 py-1.5 text-xs font-semibold text-zinc-950">
             Cero eventos en la ventana en <strong>todos</strong> los calendarios consultados. Revisá otra cuenta
             Google, otra ventana de fechas, o si el evento está en un calendario con solo freeBusyReader.
           </p>
         ) : null}
 
-      <dl className="mt-2 grid gap-1 font-mono text-[10px] text-orange-950">
+      <dl className="mt-2 grid gap-1 font-mono text-[10px] text-zinc-950">
         <div>
           <dt className="inline font-sans font-semibold">Endpoint (este bloque): </dt>
           <dd className="inline break-all">{eld.list_endpoint}</dd>
@@ -370,26 +370,26 @@ function EventsListRequestDebug({ eld, eventsSeen }) {
           <dd className="inline">{eld.total_pages}</dd>
         </div>
       </dl>
-      <p className="mt-2 text-[10px] text-orange-900">
+      <p className="mt-2 text-[10px] text-zinc-900">
         Autenticación: header <code className="rounded bg-white/80 px-1">Authorization: Bearer …</code> (el token no va
         en la URL).
       </p>
       {pages.map((p) => (
-        <div key={p.page} className="mt-3 rounded-lg border border-orange-400 bg-white/90 p-2 text-[10px]">
-          <p className="font-bold text-orange-950">
+        <div key={p.page} className="mt-3 rounded-lg border border-zinc-400 bg-white/90 p-2 text-[10px]">
+          <p className="font-bold text-zinc-950">
             Respuesta página {p.page} · HTTP {p.status_code}
             {p.calendar_id_queried ? ` · calendar ${p.calendar_id_queried}` : ''}
           </p>
           <p className="mt-1 break-all text-zinc-800">
-            <span className="font-semibold text-orange-900">URL completa: </span>
+            <span className="font-semibold text-zinc-900">URL completa: </span>
             {p.request_url}
           </p>
           <p className="mt-1 text-zinc-800">
-            <span className="font-semibold text-orange-900">params enviados: </span>
+            <span className="font-semibold text-zinc-900">params enviados: </span>
             {JSON.stringify(p.params_sent)}
           </p>
           <p className="mt-1 text-zinc-800">
-            <span className="font-semibold text-orange-900">items en página: </span>
+            <span className="font-semibold text-zinc-900">items en página: </span>
             {p.items_count_in_page}
             {p.next_page_token_present ? ' · hay nextPageToken' : ''}
           </p>
@@ -400,16 +400,16 @@ function EventsListRequestDebug({ eld, eventsSeen }) {
             </p>
           ) : null}
           {p.body_preview ? (
-            <pre className="mt-2 max-h-36 overflow-auto rounded bg-zinc-900 p-2 font-mono text-[10px] text-emerald-200">
+            <pre className="mt-2 max-h-36 overflow-auto rounded bg-zinc-900 p-2 font-mono text-[10px] text-red-200">
               {p.body_preview}
             </pre>
           ) : null}
           {p.raw_response_json ? (
             <>
-              <p className="mt-2 font-semibold text-orange-950">JSON crudo de Google (esta página)</p>
+              <p className="mt-2 font-semibold text-zinc-950">JSON crudo de Google (esta página)</p>
               <textarea
                 readOnly
-                className="mt-1 h-44 w-full resize-y rounded border border-orange-300 bg-zinc-950 p-2 font-mono text-[10px] leading-relaxed text-emerald-300"
+                className="mt-1 h-44 w-full resize-y rounded border border-zinc-300 bg-zinc-950 p-2 font-mono text-[10px] leading-relaxed text-red-300"
                 value={p.raw_response_json}
                 spellCheck={false}
               />
@@ -427,19 +427,19 @@ function CalendarListDebug({ cld }) {
   const allCal = Array.isArray(cld.calendars_all) ? cld.calendars_all : []
 
   return (
-    <div className="rounded-xl border-2 border-violet-500 bg-violet-50/95 p-3 text-[11px] shadow-sm">
-      <p className="text-sm font-bold text-violet-950">users/me/calendarList (respuesta paginada cruda)</p>
-      <p className="mt-1 leading-snug text-violet-900">
+    <div className="rounded-xl border-2 border-zinc-500 bg-zinc-50/95 p-3 text-[11px] shadow-sm">
+      <p className="text-sm font-bold text-zinc-950">users/me/calendarList (respuesta paginada cruda)</p>
+      <p className="mt-1 leading-snug text-zinc-900">
         Mismo dato que la tabla naranja, acá ves cada página HTTP y el JSON que devolvió Google al listar calendarios.
       </p>
-      <p className="mt-1 font-mono text-[10px] text-violet-800">
+      <p className="mt-1 font-mono text-[10px] text-zinc-800">
         URL: {cld.url || '—'} · total_calendars: {cld.total_calendars ?? allCal.length} · páginas:{' '}
         {cld.list_pages_count ?? pages.length}
       </p>
-      {cld.error ? <p className="mt-2 text-rose-800">Error: {cld.error}</p> : null}
+      {cld.error ? <p className="mt-2 text-red-800">Error: {cld.error}</p> : null}
 
       {allCal.length > 0 ? (
-        <p className="mt-2 text-[10px] text-violet-900">
+        <p className="mt-2 text-[10px] text-zinc-900">
           Primeros IDs:{' '}
           {allCal
             .slice(0, 6)
@@ -450,8 +450,8 @@ function CalendarListDebug({ cld }) {
       ) : null}
 
       {pages.map((pg, i) => (
-        <div key={i} className="mt-3 rounded-lg border border-violet-300 bg-white/80 p-2 text-[10px]">
-          <p className="font-bold text-violet-950">
+        <div key={i} className="mt-3 rounded-lg border border-zinc-300 bg-white/80 p-2 text-[10px]">
+          <p className="font-bold text-zinc-950">
             Página {i + 1} · HTTP {pg.status_code}
             {pg.items_in_page != null ? ` · items en página: ${pg.items_in_page}` : ''}
             {pg.next_page_token_present ? ' · nextPageToken' : ''}
@@ -460,7 +460,7 @@ function CalendarListDebug({ cld }) {
           {pg.raw_response_json ? (
             <textarea
               readOnly
-              className="mt-2 h-32 w-full resize-y rounded border border-violet-300 bg-zinc-950 p-2 font-mono text-[10px] text-emerald-300"
+              className="mt-2 h-32 w-full resize-y rounded border border-zinc-300 bg-zinc-950 p-2 font-mono text-[10px] text-red-300"
               value={pg.raw_response_json}
               spellCheck={false}
             />
@@ -479,8 +479,8 @@ function EventTrace({ row }) {
     <li
       className={`rounded-lg border p-3 text-xs ${
         row.matched
-          ? 'border-emerald-400 bg-emerald-50/90'
-          : 'border-amber-200 bg-white/80'
+          ? 'border-red-400 bg-red-50/90'
+          : 'border-zinc-200 bg-white/80'
       }`}
     >
       <p className="font-bold text-zinc-900">
@@ -489,7 +489,7 @@ function EventTrace({ row }) {
       </p>
       <p className="mt-1 font-mono text-[10px] text-zinc-600">{row.event_id}</p>
       {row.source_calendar_id ? (
-        <p className="text-[10px] text-violet-800">
+        <p className="text-[10px] text-zinc-800">
           Calendar origen (events.list): <span className="font-mono">{row.source_calendar_id}</span>
         </p>
       ) : null}
@@ -549,7 +549,7 @@ function EventTrace({ row }) {
       ) : null}
 
       {row.matched ? (
-        <p className="mt-2 font-medium text-emerald-900">
+        <p className="mt-2 font-medium text-red-900">
           Meeting: {row.meeting_created ? 'CREADO' : row.meeting_updated ? 'actualizado' : '—'} · Pipeline:{' '}
           {row.pipeline_updated ? 'SÍ' : `NO (${row.pipeline_skip_reason || '—'})`}
           {row.match_via ? ` · vía ${row.match_via}` : ''}
@@ -558,9 +558,9 @@ function EventTrace({ row }) {
       ) : null}
 
       {row.skip_reason ? (
-        <p className="mt-2 font-semibold text-amber-900">skip_reason: {row.skip_reason}</p>
+        <p className="mt-2 font-semibold text-zinc-900">skip_reason: {row.skip_reason}</p>
       ) : null}
-      {row.error ? <p className="mt-1 text-rose-800">error: {row.error}</p> : null}
+      {row.error ? <p className="mt-1 text-red-800">error: {row.error}</p> : null}
     </li>
   )
 }

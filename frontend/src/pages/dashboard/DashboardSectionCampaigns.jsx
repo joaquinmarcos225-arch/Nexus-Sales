@@ -4,6 +4,7 @@ import { PageHeader } from '../../layout/PageHeader'
 import { useDashboardAnalytics } from '../../context/DashboardAnalyticsContext.jsx'
 import { AlertBanner } from '../../components/AlertBanner.jsx'
 import { SortFilterTable } from '../../components/dashboard/SortFilterTable.jsx'
+import { PiePercentLabel } from '../../components/charts/ChartLabels.jsx'
 import {
   Bar,
   BarChart,
@@ -17,6 +18,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { NX_CHART, NX_CHART_BAR, NX_CHART_GRID, NX_CHART_LEGEND, NX_CHART_MARGIN, NX_CHART_SERIES, NX_CHART_TOOLTIP, NX_CHART_VOLUME, NX_CHART_Y_TICK, averageBy, chartAvgCaption, enrichSlicesWithPct, pieTooltipWithPct } from '../../utils/chartTheme.js'
 
 function fmtDate(iso) {
   if (!iso) {
@@ -40,8 +42,6 @@ const STATUS_LABEL = {
   completed: 'Completada',
 }
 
-const PIE_COL = ['#b91c1c', '#991b1b', '#7f1d1d', '#dc2626', '#9ca3af']
-
 export default function DashboardSectionCampaigns() {
   const { data, loading, error, refresh } = useDashboardAnalytics()
   const rows = (data?.campaigns ?? []).map((c) => ({
@@ -64,8 +64,11 @@ export default function DashboardSectionCampaigns() {
       const lab = STATUS_LABEL[c.status] ?? c.status
       m.set(lab, (m.get(lab) || 0) + 1)
     }
-    return [...m.entries()].map(([name, value]) => ({ name, value }))
+    return enrichSlicesWithPct([...m.entries()].map(([name, value]) => ({ name, value })))
   }, [rows])
+
+  const avgMensajes = averageBy(chartData, 'mensajes')
+  const avgRespuestas = averageBy(chartData, 'respuestas')
 
   return (
     <>
@@ -106,19 +109,22 @@ export default function DashboardSectionCampaigns() {
 
           <div className="grid gap-6 lg:grid-cols-3">
             <div className="lg:col-span-2 h-80 rounded-xl border border-nx-border bg-nx-card p-4 shadow-sm">
-              <p className="mb-2 text-xs font-semibold text-nx-muted">
+              <p className="mb-0.5 text-xs font-semibold text-nx-muted">
                 Por campaña: respuestas, reuniones y mensajes
               </p>
+              <p className="mb-2 text-[10px] text-nx-muted">
+                {chartAvgCaption('Prom. mensajes', avgMensajes)} · {chartAvgCaption('Prom. respuestas', avgRespuestas)}
+              </p>
               <ResponsiveContainer width="100%" height="88%">
-                <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 48 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <BarChart data={chartData} margin={NX_CHART_MARGIN.labeledX}>
+                  <CartesianGrid {...NX_CHART_GRID} />
                   <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-22} textAnchor="end" height={58} />
-                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="mensajes" fill="#fecaca" name="Mensajes" />
-                  <Bar dataKey="respuestas" fill="#b91c1c" name="Respuestas" />
-                  <Bar dataKey="reuniones" fill="#7f1d1d" name="Reuniones" />
+                  <YAxis tick={NX_CHART_Y_TICK} allowDecimals={false} />
+                  <Tooltip {...NX_CHART_TOOLTIP} />
+                  <Legend {...NX_CHART_LEGEND} />
+                  <Bar dataKey="mensajes" fill={NX_CHART_VOLUME.mensajes} name="Mensajes" {...NX_CHART_BAR} />
+                  <Bar dataKey="respuestas" fill={NX_CHART_VOLUME.respuestas} name="Respuestas" {...NX_CHART_BAR} />
+                  <Bar dataKey="reuniones" fill={NX_CHART_VOLUME.reuniones} name="Reuniones" {...NX_CHART_BAR} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -127,19 +133,22 @@ export default function DashboardSectionCampaigns() {
               <ResponsiveContainer width="100%" height="88%">
                 <PieChart>
                   <Pie
-                    data={statusMix.length ? statusMix : [{ name: 'Sin datos', value: 1 }]}
+                    data={statusMix.length ? statusMix : [{ name: 'Sin datos', value: 1, pctLabel: '100%' }]}
                     dataKey="value"
                     nameKey="name"
                     cx="50%"
                     cy="50%"
                     innerRadius={36}
                     outerRadius={64}
+                    label={PiePercentLabel}
+                    labelLine={false}
                   >
                     {(statusMix.length ? statusMix : [{ name: 'Sin datos', value: 1 }]).map((_, i) => (
-                      <Cell key={String(i)} fill={PIE_COL[i % PIE_COL.length]} />
+                      <Cell key={String(i)} fill={NX_CHART_SERIES[i % NX_CHART_SERIES.length]} />
                     ))}
                   </Pie>
-                  <Tooltip />
+                  <Tooltip {...NX_CHART_TOOLTIP} formatter={pieTooltipWithPct} />
+                  <Legend {...NX_CHART_LEGEND} formatter={(value, entry) => entry?.payload?.legendLabel || value} />
                 </PieChart>
               </ResponsiveContainer>
             </div>

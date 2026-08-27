@@ -2,11 +2,13 @@ import { PageHeader } from '../../layout/PageHeader'
 import { useDashboardAnalytics } from '../../context/DashboardAnalyticsContext.jsx'
 import { AlertBanner } from '../../components/AlertBanner.jsx'
 import { SortFilterTable } from '../../components/dashboard/SortFilterTable.jsx'
+import { PiePercentLabel } from '../../components/charts/ChartLabels.jsx'
 import {
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
+  Legend,
   Line,
   LineChart,
   Pie,
@@ -16,6 +18,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { NX_CHART, NX_CHART_GRID, NX_CHART_LEGEND, NX_CHART_SENTIMENT, NX_CHART_TOOLTIP, averageBy, chartAvgCaption, enrichSlicesWithPct, pieTooltipWithPct } from '../../utils/chartTheme.js'
 
 function pct(x) {
   if (x == null || Number.isNaN(x)) {
@@ -54,14 +57,18 @@ export default function DashboardSectionResponses() {
     respuestas: p.responses,
   }))
 
-  const sentimentPie = [
-    { name: 'Positivas', value: data?.responses_positive ?? 0 },
-    { name: 'Negativas', value: data?.responses_negative ?? 0 },
-    { name: 'Neutras', value: data?.responses_neutral ?? 0 },
-  ].filter((x) => x.value > 0)
+  const sentimentPie = enrichSlicesWithPct(
+    [
+      { name: 'Positivas', value: data?.responses_positive ?? 0 },
+      { name: 'Negativas', value: data?.responses_negative ?? 0 },
+      { name: 'Neutras', value: data?.responses_neutral ?? 0 },
+    ].filter((x) => x.value > 0),
+  )
   const sentimentPieDisplay = sentimentPie.length
     ? sentimentPie
-    : [{ name: 'Sin datos', value: 1 }]
+    : [{ name: 'Sin datos', value: 1, pctLabel: '100%' }]
+
+  const avgInbound = averageBy(weekly, 'inbound')
 
   const objectionEntries = Object.entries(data?.objection_counts ?? {})
     .map(([k, v]) => ({ key: k, label: objectionLabel(k), count: v }))
@@ -119,14 +126,19 @@ export default function DashboardSectionResponses() {
 
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="h-72 w-full rounded-xl border border-nx-border bg-nx-card p-4">
-              <p className="mb-2 text-xs font-semibold text-nx-muted">Respuestas inbound por semana</p>
+              <p className="mb-0.5 text-xs font-semibold text-nx-muted">Respuestas inbound por semana</p>
+              {weekly.length ? (
+                <p className="mb-2 text-[10px] text-nx-muted">{chartAvgCaption('Prom. semanal', avgInbound)}</p>
+              ) : (
+                <p className="mb-2 text-[10px] text-nx-muted">Sin serie semanal aún.</p>
+              )}
               <ResponsiveContainer width="100%" height="90%">
                 <LineChart data={weekly} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <CartesianGrid {...NX_CHART_GRID} />
                   <XAxis dataKey="semana" tick={{ fontSize: 9 }} angle={-15} textAnchor="end" height={40} />
                   <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                   <Tooltip />
-                  <Line type="monotone" dataKey="inbound" stroke="#b91c1c" strokeWidth={2} dot={false} name="Inbound" />
+                  <Line type="monotone" dataKey="inbound" stroke={NX_CHART.brandHover} strokeWidth={2} dot={false} name="Inbound" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -142,19 +154,22 @@ export default function DashboardSectionResponses() {
                     cy="50%"
                     innerRadius={40}
                     outerRadius={70}
+                    label={sentimentPie.length ? PiePercentLabel : false}
+                    labelLine={false}
                   >
                     {sentimentPieDisplay.map((_, i) => (
                       <Cell
                         key={String(i)}
                         fill={
                           sentimentPie.length
-                            ? ['#15803d', '#b91c1c', '#ca8a04'][i % 3]
-                            : '#d1d5db'
+                            ? NX_CHART_SENTIMENT[i % NX_CHART_SENTIMENT.length]
+                            : NX_CHART.empty
                         }
                       />
                     ))}
                   </Pie>
-                  <Tooltip />
+                  <Tooltip {...NX_CHART_TOOLTIP} formatter={pieTooltipWithPct} />
+                  <Legend {...NX_CHART_LEGEND} formatter={(value, entry) => entry?.payload?.legendLabel || value} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -165,11 +180,11 @@ export default function DashboardSectionResponses() {
               <p className="mb-2 text-xs font-semibold text-nx-muted">Respuestas por campaña</p>
               <ResponsiveContainer width="100%" height="88%">
                 <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 40 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <CartesianGrid {...NX_CHART_GRID} />
                   <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-20} textAnchor="end" height={52} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip />
-                  <Bar dataKey="respuestas" fill="#7f1d1d" name="Respuestas" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="respuestas" fill={NX_CHART.brandDeep} name="Respuestas" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -177,11 +192,11 @@ export default function DashboardSectionResponses() {
               <p className="mb-2 text-xs font-semibold text-nx-muted">Interés modelado (histograma)</p>
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={hist} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <CartesianGrid {...NX_CHART_GRID} />
                   <XAxis dataKey="bucket" tick={{ fontSize: 10 }} />
                   <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
                   <Tooltip />
-                  <Bar dataKey="count" fill="#991b1b" name="Prospectos" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="count" fill={NX_CHART.brandDark} name="Prospectos" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

@@ -24,7 +24,8 @@ from app.models.prospect import Prospect
 from app.models.user import User
 from app.services import multichannel_sequence as mseq
 from app.services import pipeline_sync
-from app.services.gmail_drafts import get_valid_gmail_connection
+from app.services.gmail_drafts import get_valid_google_calendar_connection
+from app.services.meeting_booking import CREATION_SYNC
 from app.services.outreach_simulation import make_message
 
 logger = logging.getLogger(__name__)
@@ -472,11 +473,44 @@ def _attendee_rows(ev: dict) -> list[dict[str, Any]]:
     return rows
 
 
-def _map_meeting_status(ev: dict) -> str:
+def _map_meeting_status(ev: dict, *, seller_emails: set[str] | None = None) -> str:
     st = (ev.get("status") or "").lower()
     if st == "cancelled":
         return MeetingStatus.canceled.value
-    return MeetingStatus.confirmed.value
+
+    sellers = seller_emails or set()
+    seller_responses: list[str] = []
+    guest_responses: list[str] = []
+    for attendee in ev.get("attendees") or []:
+        if not isinstance(attendee, dict):
+            continue
+        if bool(attendee.get("resource")):
+            continue
+        email = normalize_email_for_match(str(attendee.get("email") or ""))
+        if not email:
+            continue
+        response = (attendee.get("responseStatus") or "").strip().lower()
+        if not response:
+            continue
+        if email in sellers:
+            seller_responses.append(response)
+        else:
+            guest_responses.append(response)
+
+    if seller_responses and any(r == "declined" for r in seller_responses):
+        return MeetingStatus.canceled.value
+
+    if guest_responses:
+        if any(r == "declined" for r in guest_responses):
+            return MeetingStatus.canceled.value
+        if any(r in ("accepted", "tentative") for r in guest_responses):
+            return MeetingStatus.confirmed.value
+        return MeetingStatus.pending.value
+
+    if seller_responses and any(r in ("accepted", "tentative") for r in seller_responses):
+        return MeetingStatus.confirmed.value
+
+    return MeetingStatus.pending.value
 
 
 def _is_future_booking(start: datetime, *, now: datetime, slack_minutes: int = 5) -> bool:
@@ -613,7 +647,7 @@ def sync_calendar_events_for_seller(
     debug_max_events: int = 50,
     client_now_utc: datetime | None = None,
 ) -> dict[str, Any]:
-    access, gmail_row = get_valid_gmail_connection(db, company_id=company_id, user_id=user_id)
+    access, gmail_row = get_valid_google_calendar_connection(db, company_id=company_id, user_id=user_id)
     seller_user = db.get(User, user_id)
     seller_emails: set[str] = set()
     for raw in (gmail_row.external_email, getattr(seller_user, "email", None)):
@@ -807,7 +841,7 @@ def sync_calendar_events_for_seller(
         trace["matched_prospect_id"] = prospect.id
         trace["matched_email_normalized"] = matched_email
 
-        gstatus = _map_meeting_status(ev)
+        gstatus = _map_meeting_status(ev, seller_emails=seller_emails)
         is_cancelled = gstatus == MeetingStatus.canceled.value
         title = (ev.get("summary") or "Reunión").strip()[:255] or "Reunión"
         desc = (ev.get("description") or "").strip() or None
@@ -858,7 +892,7 @@ def sync_calendar_events_for_seller(
                         duration_minutes=dur,
                         google_calendar_event_id=eid,
                         google_calendar_html_link=html_link,
-                        creation_method="calendar_link",
+                        creation_method=CREATION_SYNC,
                         created_by_user_id=seller_user.id if seller_user else None,
                     )
                 )

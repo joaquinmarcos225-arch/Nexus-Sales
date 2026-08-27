@@ -7,17 +7,30 @@ backend/**/__pycache__/
 
 # SQLite (generado en runtime)
 backend/data/*.db
+backend/data/vapid.json
 
 # Node
 frontend/node_modules/
 frontend/dist/
+nexus-support/node_modules/
+nexus-support/dist/
+dist/
 
 # Entornos y editores
 .env
 .env.local
+.env.production
 *.log
 .DS_Store
 Thumbs.db
 
 backend/.env
 frontend/.env
+
+# Copia local solo para build Docker/Railway (fuente: /browser-extension)
+backend/browser-extension/
+
+# Paquete DNDA / registro de obra (no commitear)
+_registro_dnda/
+SUBIR_ESTE_ARCHIVO.zip
+Nexus_Sales_SOFTWARE.zip

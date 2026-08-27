@@ -1,0 +1,8 @@
+{
+  "name": "nexus-sales",
+  "private": true,
+  "scripts": {
+    "pack:extension": "node scripts/pack-extension.mjs",
+    "pack:extension:prod": "node scripts/pack-extension.mjs"
+  }
+}

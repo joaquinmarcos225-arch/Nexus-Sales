@@ -6,38 +6,98 @@ import base64
 import hashlib
 import hmac
 import os
+import re
 import time
 import urllib.parse
 from typing import Any
 
 import httpx
 
+# Si al pegar en Railway queda un path de Windows delante, Google responde 400.
+_CLIENT_ID_RE = re.compile(
+    r"(\d{6,}-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com)",
+    re.IGNORECASE,
+)
+_CLIENT_SECRET_RE = re.compile(r"(GOCSPX-[A-Za-z0-9_-]+)")
+_HTTP_URL_RE = re.compile(r"https?://[^\s\\\"']+", re.IGNORECASE)
+
+
+def _clean_env(raw: str | None) -> str:
+    v = (raw or "").strip().strip('"').strip("'").replace("\r", "").strip()
+    return v.lstrip("\ufeff")
+
+
+def sanitize_google_client_id(raw: str | None) -> str:
+    v = _clean_env(raw)
+    m = _CLIENT_ID_RE.search(v)
+    return m.group(1) if m else v
+
+
+def sanitize_google_client_secret(raw: str | None) -> str:
+    v = _clean_env(raw)
+    m = _CLIENT_SECRET_RE.search(v)
+    return m.group(1) if m else v
+
+
+def sanitize_google_redirect_uri(raw: str | None) -> str:
+    v = _clean_env(raw)
+    lowered = v.lower()
+    idx = lowered.find("https:")
+    if idx < 0:
+        idx = lowered.find("http:")
+    if idx >= 0:
+        v = v[idx:].replace("\\", "/")
+        v = re.sub(r"^(https?:)/+", r"\1//", v, flags=re.I)
+        return v
+    m = _HTTP_URL_RE.search(v)
+    if m:
+        return m.group(0).rstrip("\\")
+    return v.rstrip("\\")
+
+
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 
-# Gmail + Calendar completo (incluye calendarList, events, calendarios compartidos, etc.)
-# Tras ampliar scopes, el usuario debe volver a conectar Google (consent + refresh token).
+# Mínimo que cubre el producto actual (enviar, borradores, leer replies, agenda).
+# gmail.modify sobraba: no modificamos labels ni borramos correo.
+# calendar completo sobraba: no creamos calendarios ni tocamos ACL.
+# Tras cambiar scopes, el usuario debe volver a conectar Google (consent + refresh token).
 DEFAULT_SCOPES = (
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.events.freebusy",
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
     "https://www.googleapis.com/auth/userinfo.email",
-    "openid",
 )
+
+GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 
 
 def _client_id() -> str:
-    v = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
+    v = sanitize_google_client_id(os.getenv("GOOGLE_CLIENT_ID"))
     if not v:
         raise RuntimeError("GOOGLE_CLIENT_ID no configurado")
     return v
 
 
 def _client_secret() -> str:
-    v = (os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
+    v = sanitize_google_client_secret(os.getenv("GOOGLE_CLIENT_SECRET"))
     if not v:
         raise RuntimeError("GOOGLE_CLIENT_SECRET no configurado")
     return v
+
+
+def oauth_is_configured() -> bool:
+    try:
+        _client_id()
+        _client_secret()
+        _redirect_uri()
+        _state_secret()
+        return True
+    except RuntimeError:
+        return False
 
 
 def oauth_client_id() -> str:
@@ -48,8 +108,19 @@ def oauth_client_secret() -> str:
     return _client_secret()
 
 
+def oauth_configuration_error() -> str | None:
+    try:
+        _client_id()
+        _client_secret()
+        _redirect_uri()
+        _state_secret()
+        return None
+    except RuntimeError as e:
+        return str(e)
+
+
 def _redirect_uri() -> str:
-    v = (os.getenv("GOOGLE_REDIRECT_URI") or "").strip()
+    v = sanitize_google_redirect_uri(os.getenv("GOOGLE_REDIRECT_URI"))
     if not v:
         raise RuntimeError("GOOGLE_REDIRECT_URI no configurado")
     return v
@@ -113,7 +184,7 @@ def build_authorization_url(*, state: str) -> str:
         "scope": " ".join(DEFAULT_SCOPES),
         "access_type": "offline",
         "prompt": "consent",
-        "include_granted_scopes": "true",
+        "include_granted_scopes": "false",
         "state": state,
     }
     return f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(params)}"
@@ -139,3 +210,19 @@ def fetch_google_user_email(access_token: str) -> str | None:
         res.raise_for_status()
         body = res.json()
         return body.get("email")
+
+
+def revoke_google_token(token: str | None) -> None:
+    """Best-effort: invalida access/refresh en Google. No lanza si falla."""
+    raw = (token or "").strip()
+    if not raw:
+        return
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            client.post(
+                GOOGLE_REVOKE_URL,
+                data={"token": raw},
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+    except Exception:
+        return

@@ -4,6 +4,7 @@ import { PageHeader } from '../../layout/PageHeader'
 import { useDashboardAnalytics } from '../../context/DashboardAnalyticsContext.jsx'
 import { AlertBanner } from '../../components/AlertBanner.jsx'
 import { SortFilterTable } from '../../components/dashboard/SortFilterTable.jsx'
+import { PiePercentLabel } from '../../components/charts/ChartLabels.jsx'
 import { useCompany } from '../../context/CompanyContext.jsx'
 import { useFlattenedProspects } from '../../hooks/useFlattenedProspects.js'
 import {
@@ -13,6 +14,7 @@ import {
   Cell,
   Pie,
   PieChart,
+  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -24,6 +26,7 @@ import {
   sequenceGroupLabel,
   sequenceStateLabel,
 } from '../../utils/sequenceUi.js'
+import { NX_CHART, NX_CHART_GRID, NX_CHART_LEGEND, NX_CHART_SERIES, NX_CHART_TOOLTIP, enrichSlicesWithPct, pieTooltipWithPct } from '../../utils/chartTheme.js'
 
 const STATUS_LABEL = {
   imported: 'Importado',
@@ -42,8 +45,6 @@ const INTEREST_LABEL = {
   medium: 'Medio',
   high: 'Alto',
 }
-
-const DONUT_COLORS = ['#b91c1c', '#991b1b', '#7f1d1d', '#dc2626', '#f87171', '#fecaca', '#9ca3af', '#4b5563']
 
 function channelLabel(ch) {
   const m = { linkedin: 'LinkedIn', email: 'Email', whatsapp: 'WhatsApp' }
@@ -81,10 +82,13 @@ export default function DashboardSectionProspects() {
   const [openCampaigns, setOpenCampaigns] = useState(() => new Set())
 
   const breakdown = data?.prospect_status_breakdown ?? {}
-  const funnelData = Object.entries(breakdown).map(([k, v]) => ({
-    estado: STATUS_LABEL[k] ?? k,
-    cantidad: v,
-  }))
+  const funnelData = enrichSlicesWithPct(
+    Object.entries(breakdown).map(([k, v]) => ({
+      name: STATUS_LABEL[k] ?? k,
+      value: v,
+    })),
+    { nameKey: 'name' },
+  )
 
   const tableRows = prospectRows.map((p) => ({
     ...p,
@@ -127,22 +131,25 @@ export default function DashboardSectionProspects() {
                 <ResponsiveContainer width="100%" height="85%">
                   <PieChart>
                     <Pie
-                      data={funnelData.length ? funnelData : [{ estado: 'Sin datos', cantidad: 1 }]}
-                      dataKey="cantidad"
-                      nameKey="estado"
+                      data={funnelData.length ? funnelData : [{ name: 'Sin datos', value: 1, pctLabel: '100%' }]}
+                      dataKey="value"
+                      nameKey="name"
                       cx="50%"
                       cy="50%"
                       innerRadius={48}
                       outerRadius={72}
                       paddingAngle={2}
+                      label={PiePercentLabel}
+                      labelLine={false}
                     >
-                      {(funnelData.length ? funnelData : [{ estado: 'Sin datos', cantidad: 1 }]).map(
+                      {(funnelData.length ? funnelData : [{ name: 'Sin datos', value: 1 }]).map(
                         (_, i) => (
-                          <Cell key={String(i)} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />
+                          <Cell key={String(i)} fill={NX_CHART_SERIES[i % NX_CHART_SERIES.length]} />
                         ),
                       )}
                     </Pie>
-                    <Tooltip />
+                    <Tooltip {...NX_CHART_TOOLTIP} formatter={pieTooltipWithPct} />
+                    <Legend {...NX_CHART_LEGEND} formatter={(value, entry) => entry?.payload?.legendLabel || value} />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
@@ -178,11 +185,11 @@ export default function DashboardSectionProspects() {
                     })()}
                     margin={{ top: 8, right: 8, left: 0, bottom: 8 }}
                   >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <CartesianGrid {...NX_CHART_GRID} />
                     <XAxis dataKey="rango" tick={{ fontSize: 10 }} />
                     <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                     <Tooltip />
-                    <Bar dataKey="count" fill="#7f1d1d" name="Prospectos" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="count" fill={NX_CHART.brandDeep} name="Prospectos" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -205,7 +212,7 @@ export default function DashboardSectionProspects() {
                 </p>
                 <Link
                   to="/campanas"
-                  className="mt-5 inline-flex rounded-lg bg-nx-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-nx-brand-hover"
+                  className="mt-5 nx-btn nx-btn-primary px-4 py-2.5 text-sm"
                 >
                   Ir a Campañas
                 </Link>

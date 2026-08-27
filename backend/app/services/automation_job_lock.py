@@ -20,11 +20,20 @@ def get_or_create_job_row(db: Session, job_key: str) -> AutomationJobState:
     return row
 
 
+def _as_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
 def try_acquire_job(db: Session, job_key: str, *, lock_ttl_seconds: int) -> AutomationJobState | None:
     now = datetime.now(UTC)
     row = get_or_create_job_row(db, job_key)
     db.refresh(row)
-    if row.locked_until is not None and row.locked_until > now:
+    locked_until = _as_utc(row.locked_until)
+    if locked_until is not None and locked_until > now:
         return None
     row.locked_until = now + timedelta(seconds=lock_ttl_seconds)
     row.last_started_at = now

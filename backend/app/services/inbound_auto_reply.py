@@ -35,6 +35,7 @@ from app.services.openai_service import (
     generate_gmail_draft_email,
     inbound_text_needs_substantive_answer,
 )
+from app.services.email_deliverability import deliverable_email_skip_reason
 from app.services.outreach_simulation import make_message
 from app.services.real_followup_gmail import (
     _gmail_style_campaign_ctx,
@@ -45,6 +46,28 @@ logger = logging.getLogger(__name__)
 
 AUTO_REPLY_MARKER_PREFIX = "[auto-reply:gmail:"
 TASK_KIND_INBOUND_AUTO_REPLY = "inbound_auto_reply"
+
+_TERMINAL_AUTO_REPLY_OUTCOMES = frozenset(
+    {
+        "sent",
+        "draft",
+        "skipped_closed",
+        "skipped_already",
+        "skipped_existing_inbound",
+        "skipped_no_inbound",
+        # skipped_disabled NO es terminal: si se reactiva NEXUS_INBOUND_AUTO_REPLY, reintenta.
+    }
+)
+
+# No ensuciar Actividad de Nexus con estados esperados / repetitivos.
+_SILENT_ACTIVITY_OUTCOMES = frozenset(
+    {
+        "skipped_disabled",
+        "skipped_existing_inbound",
+        "skipped_already",
+        "skipped_no_inbound",
+    }
+)
 
 _SKIP_PRIOR_PROSPECT_STATUSES = frozenset(
     {
@@ -142,14 +165,14 @@ def record_auto_reply_receipt(
 
 
 def auto_reply_is_finished(db: Session, prospect_id: int, inbound_gmail_message_id: str) -> bool:
-    """True solo si ya hay sent/draft (envío o borrador terminado)."""
+    """True si el inbound ya tiene respuesta automática terminada o skip terminal."""
     mid = _norm_gmail_mid(inbound_gmail_message_id)
     if not mid:
         return False
     row = get_auto_reply_receipt(db, prospect_id, mid)
     if row is None:
         return _legacy_marker_auto_replied(db, prospect_id, mid)
-    return (row.outcome or "").strip() in ("sent", "draft")
+    return (row.outcome or "").strip() in _TERMINAL_AUTO_REPLY_OUTCOMES
 
 
 def already_auto_replied(
@@ -225,6 +248,8 @@ def inbound_needs_auto_reply_retry(db: Session, prospect_id: int, inbound_gmail_
             return False
         if outcome == "failed":
             return True
+        if outcome == "skipped_disabled":
+            return True
         return False
     return _get_inbound_row(db, prospect_id, mid) is not None
 
@@ -292,8 +317,11 @@ def _inbound_reply_mode(campaign: Campaign) -> str:
 
 
 def _inbound_reply_delay_minutes(campaign: Campaign) -> int:
+    """Espera humana tras detectar inbound (default 2 min)."""
     raw = int(getattr(campaign, "inbound_reply_delay_minutes", None) or 2)
-    return raw if raw in (1, 2, 5) else 2
+    if raw < 1:
+        return 2
+    return min(raw, 15)
 
 
 def _extract_plain_body(inbound_plain: str | None, inbound_row: OutreachMessage | None) -> str:
@@ -656,12 +684,38 @@ def _execute_delivery(
     timing_soft: bool,
 ) -> str:
     to_addr = (prospect.email or "").strip()
-    uid = int(campaign.seller_id)
     cid = int(campaign.company_id)
     thread_id = (prospect.gmail_thread_id or "").strip() or None
     marker = auto_reply_marker(inbound_gmail_message_id)
+    from app.services.outbound_text_normalize import normalize_outbound_email_body
+
+    reply_body = normalize_outbound_email_body(reply_body)
+    subject = (subject or "").strip() or "Re:"
+
+    # Misma cuenta Gmail que outbound/inbound sync (seller o fallback de empresa).
+    from app.models.user import User
+    from app.services.manual_sequence_kickoff import try_find_gmail_operator
+
+    preferred = db.get(User, int(campaign.seller_id)) if campaign.seller_id else None
+    operator = try_find_gmail_operator(db, company_id=cid, preferred=preferred)
+    if operator is None:
+        logger.warning(
+            "[inbound_auto_reply] gmail skipped: no company gmail prospect_id=%s seller=%s",
+            prospect.id,
+            campaign.seller_id,
+        )
+        return "skipped"
+    uid = int(operator.id)
 
     if delivery == "send":
+        skip = deliverable_email_skip_reason(to_addr)
+        if skip:
+            logger.warning(
+                "[inbound_auto_reply] gmail send skipped: undeliverable email prospect_id=%s reason=%s",
+                prospect.id,
+                skip,
+            )
+            return "skipped"
         logger.info(
             "[inbound_auto_reply] sending email prospect_id=%s campaign_id=%s to=%s thread=%s",
             prospect.id,
@@ -835,9 +889,21 @@ def deliver_auto_reply_for_inbound(
     mid = _norm_gmail_mid(inbound_gmail_message_id)
 
     def _skip(reason: str, detail: str = "") -> str:
-        log_auto_reply_outcome_to_activity(
-            campaign, prospect, mid, reason, detail=detail
-        )
+        prev = get_auto_reply_receipt(db, prospect.id, mid)
+        first_seen = prev is None
+        if reason.startswith("skipped") or reason in _TERMINAL_AUTO_REPLY_OUTCOMES:
+            record_auto_reply_receipt(
+                db,
+                company_id=int(campaign.company_id),
+                campaign_id=int(campaign.id),
+                prospect_id=int(prospect.id),
+                inbound_gmail_message_id=mid,
+                outcome=reason,
+            )
+        if first_seen and reason not in _SILENT_ACTIVITY_OUTCOMES:
+            log_auto_reply_outcome_to_activity(
+                campaign, prospect, mid, reason, detail=detail
+            )
         return reason
 
     if not inbound_auto_reply_enabled():
@@ -981,33 +1047,26 @@ def deliver_auto_reply_for_inbound(
             sig=sig,
             history_payload=history_payload,
         )
-    from app.services.meeting_booking import (
-        attempt_auto_book_from_message,
-        prepare_agendar_reply_with_calendar_link,
-    )
 
-    meeting_booking = attempt_auto_book_from_message(
+    from app.services.inbound_turn_orchestrator import resolve_inbound_scheduling_reply
+
+    decision = resolve_inbound_scheduling_reply(
         db,
         campaign=campaign,
         prospect=prospect,
         inbound_text=body,
         reply_objective=reply_objective,
         sig=sig,
+        suggested_reply=reply_body,
         testing=False,
     )
-    if meeting_booking and meeting_booking.get("confirmation_reply"):
-        reply_body = str(meeting_booking["confirmation_reply"])
-    elif meeting_booking and meeting_booking.get("booking_failed_reply"):
-        reply_body = str(meeting_booking["booking_failed_reply"])
-    elif meeting_booking and meeting_booking.get("alternatives_reply"):
-        reply_body = str(meeting_booking["alternatives_reply"])
-    else:
-        reply_body = prepare_agendar_reply_with_calendar_link(
-            prospect=prospect,
-            campaign=campaign,
-            reply_objective=reply_objective,
-            suggested_reply=reply_body,
-        )
+    if decision.action == "skip_autoresponder":
+        return _skip("skipped", decision.skip_reason or "autoresponder")
+    if decision.reply_body:
+        reply_body = decision.reply_body
+    meeting_booking = decision.meeting_booking
+    reply_objective = decision.reply_objective or reply_objective
+
     policy = load_behavior_policy(db, campaign.company_id)
     cal_url = (campaign.calendar_link or "").strip()
     inject_cal, cal_mandatory = should_inject_calendar_link(
@@ -1015,13 +1074,37 @@ def deliver_auto_reply_for_inbound(
         calendar_url=cal_url,
         inbound_text=body,
         timing_soft=timing_soft,
-        booking_priority=booking_priority,
+        booking_priority=booking_priority or decision.action in (
+            "booked",
+            "alternatives",
+            "offer_hours",
+            "calendar_link",
+        ),
         interest_level=sig.interest_level,
         prospect_wants_meeting=bool(sig.prospect_wants_meeting),
         explicit_meeting_commitment=bool(sig.explicit_meeting_commitment),
         substantive_questions=bool(
             sig.asks_concrete_questions or sig.objection_type in ("send_info", "other")
         ),
+    )
+    record_ai_decision(
+        db,
+        company_id=campaign.company_id,
+        campaign_id=campaign.id,
+        prospect_id=prospect.id,
+        event_type="inbound_schedule_decision",
+        decision=decision.action,
+        summary=(
+            f"Decisión de agenda: {decision.action}"
+            + (f" · {decision.notes}" if decision.notes else "")
+        ),
+        payload={
+            "action": decision.action,
+            "reply_objective": reply_objective,
+            "response_class": decision.response_class,
+            "offered_slots": decision.offered_slots,
+            "meeting_booking": bool(meeting_booking),
+        },
     )
     record_ai_decision(
         db,
@@ -1046,20 +1129,22 @@ def deliver_auto_reply_for_inbound(
             "policy_calendar_link": policy.calendar_link,
         },
     )
-    if force_immediate:
-        _apply_post_reply_pipeline(
-            db,
-            campaign=campaign,
-            prospect=prospect,
-            sig=sig,
-            body=body,
-            timing_soft=timing_soft,
-            booking_priority=booking_priority,
-        )
+    _apply_post_reply_pipeline(
+        db,
+        campaign=campaign,
+        prospect=prospect,
+        sig=sig,
+        body=body,
+        timing_soft=timing_soft,
+        booking_priority=booking_priority,
+    )
 
     mode = _inbound_reply_mode(campaign)
     want_auto_send = mode == InboundReplyMode.auto_send.value and _truthy_env("NEXUS_AUTO_SEND_ENABLED")
+    booking_confirmed = bool(meeting_booking and meeting_booking.get("confirmation_reply"))
     force_draft = should_force_draft_only(sig, body) or not want_auto_send
+    if booking_confirmed and want_auto_send:
+        force_draft = False
     hourly_cap = int(os.getenv("NEXUS_AUTO_SEND_HOURLY_CAP", "8"))
     at_hourly_cap = count_campaign_real_email_outbounds_last_hour(db, campaign.id) >= hourly_cap
 

@@ -14,12 +14,13 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { NX_CHART, NX_CHART_GRID, NX_CHART_TOOLTIP, averageBy, chartAvgCaption, formatPctNumber, formatPctRate } from '../../utils/chartTheme.js'
 
-function pct(x) {
-  if (x == null || Number.isNaN(x)) {
-    return '0%'
+function equipoTooltipFormatter(value, name) {
+  if (name === '% respuesta' || name === '% interés') {
+    return [formatPctNumber(value), name]
   }
-  return `${(Number(x) * 100).toFixed(1)}%`
+  return [value, name]
 }
 
 function fmtDate(iso) {
@@ -49,6 +50,9 @@ export default function DashboardSectionEquipo() {
     tasaInt: Math.round((s.interest_rate ?? 0) * 1000) / 10,
   }))
 
+  const avgTasaResp = averageBy(chartData, 'tasaResp')
+  const avgTasaInt = averageBy(chartData, 'tasaInt')
+
   return (
     <>
       <PageHeader
@@ -62,23 +66,27 @@ export default function DashboardSectionEquipo() {
       ) : (
         <>
           <div className="mb-4 h-72 w-full rounded-xl border border-nx-border bg-nx-card p-4">
-            <p className="mb-2 text-xs font-semibold text-nx-muted">Volumen y tasas por SDR/AE</p>
+            <p className="mb-0.5 text-xs font-semibold text-nx-muted">Volumen y tasas por SDR/AE</p>
+            <p className="mb-2 text-[10px] text-nx-muted">
+              {chartAvgCaption('Prom. % respuesta', avgTasaResp, { suffix: '%' })} ·{' '}
+              {chartAvgCaption('Prom. % interés', avgTasaInt, { suffix: '%' })}
+            </p>
             <ResponsiveContainer width="100%" height="88%">
               <ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 28 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <CartesianGrid {...NX_CHART_GRID} />
                 <XAxis dataKey="name" tick={{ fontSize: 10 }} />
                 <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} domain={[0, 100]} />
-                <Tooltip />
+                <Tooltip {...NX_CHART_TOOLTIP} formatter={equipoTooltipFormatter} />
                 <Legend />
-                <Bar yAxisId="left" dataKey="mensajes" fill="#b91c1c" name="Mensajes" radius={[4, 4, 0, 0]} />
-                <Bar yAxisId="left" dataKey="respuestas" fill="#991b1b" name="Respuestas" radius={[4, 4, 0, 0]} />
-                <Bar yAxisId="left" dataKey="reuniones" fill="#7f1d1d" name="Reuniones" radius={[4, 4, 0, 0]} />
+                <Bar yAxisId="left" dataKey="mensajes" fill={NX_CHART.brandHover} name="Mensajes" radius={[4, 4, 0, 0]} />
+                <Bar yAxisId="left" dataKey="respuestas" fill={NX_CHART.brandDark} name="Respuestas" radius={[4, 4, 0, 0]} />
+                <Bar yAxisId="left" dataKey="reuniones" fill={NX_CHART.brandDeep} name="Reuniones" radius={[4, 4, 0, 0]} />
                 <Line
                   yAxisId="right"
                   type="monotone"
                   dataKey="tasaResp"
-                  stroke="#0f766e"
+                  stroke={NX_CHART.brand}
                   name="% respuesta"
                   strokeWidth={2}
                   dot
@@ -87,7 +95,7 @@ export default function DashboardSectionEquipo() {
                   yAxisId="right"
                   type="monotone"
                   dataKey="tasaInt"
-                  stroke="#0369a1"
+                  stroke={NX_CHART.brandLight}
                   name="% interés"
                   strokeWidth={2}
                   dot
@@ -147,13 +155,13 @@ export default function DashboardSectionEquipo() {
                 key: 'response_rate',
                 label: 'Tasa respuesta',
                 sortValue: (r) => r.response_rate ?? 0,
-                render: (r) => pct(r.response_rate ?? 0),
+                render: (r) => formatPctRate(r.response_rate ?? 0),
               },
               {
                 key: 'interest_rate',
                 label: 'Tasa interés',
                 sortValue: (r) => r.interest_rate ?? 0,
-                render: (r) => pct(r.interest_rate ?? 0),
+                render: (r) => formatPctRate(r.interest_rate ?? 0),
               },
               {
                 key: 'pending_tasks',

@@ -32,12 +32,12 @@ function MessageBubble({ msg }) {
       <div
         className={`max-w-[88%] rounded-xl px-3 py-2 text-sm shadow-sm ${
           inbound
-            ? 'border border-[#e5e7eb] bg-white text-[#111827]'
+            ? 'border border-nx-border bg-white text-nx-ink'
             : 'bg-nx-brand text-white'
         }`}
       >
         <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{msg.message}</pre>
-        <p className={`mt-1.5 text-[10px] ${inbound ? 'text-[#6b7280]' : 'text-white/80'}`}>
+        <p className={`mt-1.5 text-[10px] ${inbound ? 'text-nx-muted' : 'text-white/80'}`}>
           {label}
           {msg.is_auto_sent ? ' · autoenviado' : msg.sender_type === 'ai' ? ' · IA' : ''} ·{' '}
           {CHANNEL_LABELS[msg.channel] || msg.channel} · {fmtDateTime(msg.created_at)}
@@ -91,7 +91,7 @@ export function ProspectConversationModal({ prospect, open, onClose, includeTest
       footer={
         <button
           type="button"
-          className="rounded-lg border border-[#e5e7eb] bg-white px-4 py-2 text-sm font-medium text-[#374151] hover:bg-[#f8fafc]"
+          className="rounded-lg border border-nx-border bg-white px-4 py-2 text-sm font-medium text-nx-ink hover:bg-nx-card-muted"
           onClick={onClose}
         >
           Cerrar
@@ -100,7 +100,7 @@ export function ProspectConversationModal({ prospect, open, onClose, includeTest
     >
       <div className="space-y-4">
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
-        {loading ? <p className="text-sm text-[#6b7280]">Cargando conversación…</p> : null}
+        {loading ? <p className="text-sm text-nx-muted">Cargando conversación…</p> : null}
 
         {!loading && workspace ? (
           <>
@@ -117,32 +117,32 @@ export function ProspectConversationModal({ prospect, open, onClose, includeTest
                   conversationStateLabel(workspace.conversation_state)}
               </span>
               {workspace.commercial_state_is_testing ? (
-                <span className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-900">
+                <span className="inline-flex rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-zinc-900">
                   TEST
                 </span>
               ) : null}
             </div>
 
             {meetings.length ? (
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 text-sm">
-                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-900">
+              <div className="rounded-lg border border-red-200 bg-red-50/60 p-3 text-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-red-900">
                   Reuniones
                 </p>
                 <ul className="mt-2 space-y-2">
                   {meetings.map((m) => (
-                    <li key={m.id} className="text-xs text-[#374151]">
+                    <li key={m.id} className="text-xs text-nx-ink">
                       <span className="font-medium">{m.title}</span> ·{' '}
                       {fmtDateTime(m.scheduled_for)} ·{' '}
                       {m.calendar_confirmed ? (
-                        <span className="text-emerald-800">Agendada en Calendar</span>
+                        <span className="text-red-800">Agendada en Calendar</span>
                       ) : (
-                        <span className="text-amber-800">Pendiente Calendar</span>
+                        <span className="text-zinc-800">Pendiente Calendar</span>
                       )}
                       {m.google_calendar_event_id ? (
                         <>
                           {' '}
                           ·{' '}
-                          <span className="font-mono text-[10px] text-[#6b7280]">
+                          <span className="font-mono text-[10px] text-nx-muted">
                             {m.google_calendar_event_id}
                           </span>
                         </>
@@ -151,7 +151,7 @@ export function ProspectConversationModal({ prospect, open, onClose, includeTest
                         <>
                           {' '}
                           ·{' '}
-                          <span className="text-[#6b7280]">
+                          <span className="text-nx-muted">
                             {m.creation_method === 'calendar_link'
                               ? 'vía link'
                               : m.creation_method === 'auto_agendada_por_nexus'
@@ -181,28 +181,28 @@ export function ProspectConversationModal({ prospect, open, onClose, includeTest
             ) : null}
 
             {messages.length ? (
-              <div className="max-h-[420px] space-y-2 overflow-y-auto rounded-lg border border-[#e5e7eb] bg-[#f8fafc] p-3">
+              <div className="max-h-[420px] space-y-2 overflow-y-auto rounded-lg border border-nx-border bg-nx-card-muted p-3">
                 {messages.map((m) => (
                   <MessageBubble key={m.id} msg={m} />
                 ))}
               </div>
             ) : (
-              <p className="rounded-lg border border-dashed border-[#e5e7eb] px-3 py-8 text-center text-sm text-[#6b7280]">
+              <p className="rounded-lg border border-dashed border-nx-border px-3 py-8 text-center text-sm text-nx-muted">
                 Todavía no hay mensajes en esta conversación.
               </p>
             )}
 
             {turns.length ? (
-              <div className="rounded-lg border border-[#e5e7eb] bg-white p-3 text-xs text-[#374151]">
-                <p className="font-semibold uppercase tracking-wide text-[#6b7280]">
+              <div className="rounded-lg border border-nx-border bg-white p-3 text-xs text-nx-ink">
+                <p className="font-semibold uppercase tracking-wide text-nx-muted">
                   Historial de clasificación
                 </p>
                 <ul className="mt-2 space-y-2">
                   {turns.map((t, idx) => (
-                    <li key={`${t.day}-${idx}`} className="border-t border-[#f1f5f9] pt-2 first:border-0 first:pt-0">
+                    <li key={`${t.day}-${idx}`} className="border-t border-nx-card-muted pt-2 first:border-0 first:pt-0">
                       {t.inbound_text ? (
-                        <p className="text-[#6b7280]">
-                          Prospecto: <span className="text-[#111827]">{t.inbound_text}</span>
+                        <p className="text-nx-muted">
+                          Prospecto: <span className="text-nx-ink">{t.inbound_text}</span>
                         </p>
                       ) : null}
                       <p className="mt-0.5">
@@ -215,7 +215,7 @@ export function ProspectConversationModal({ prospect, open, onClose, includeTest
                         {t.escalation_reason ? ` · Derivado: ${t.escalation_reason}` : ''}
                       </p>
                       {t.meeting_scheduled_for ? (
-                        <p className="text-[#6b7280]">
+                        <p className="text-nx-muted">
                           Reunión propuesta: {fmtDateTime(t.meeting_scheduled_for)}
                           {t.calendar_confirmed
                             ? ' · verificada en Calendar'
@@ -226,7 +226,7 @@ export function ProspectConversationModal({ prospect, open, onClose, includeTest
                         </p>
                       ) : null}
                       {t.google_calendar_event_id ? (
-                        <p className="font-mono text-[10px] text-[#6b7280]">
+                        <p className="font-mono text-[10px] text-nx-muted">
                           Event ID: {t.google_calendar_event_id}
                         </p>
                       ) : null}

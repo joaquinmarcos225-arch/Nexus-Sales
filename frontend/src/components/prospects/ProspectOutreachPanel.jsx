@@ -14,29 +14,72 @@ import {
   fetchProspectSequencePreview,
   fetchProspectSequenceTracking,
   generateProspectSequencePreview,
+  markLinkedInAssistedSent,
+  markProspectSequenceTouchSent,
   patchProspect,
+  registerLinkedInInbound,
   resetProspectSequenceDraft,
   simulateProspectSequenceResponse,
   skipProspectSequenceTouch,
   startProspectSequence,
 } from '../../utils/api.js'
+import { notifyLinkedInQueueChanged } from '../../hooks/useLinkedInPending.js'
 import { fmtDateTime } from '../../utils/ownershipUi.js'
+import { showOpsDebug } from '../../utils/opsDebug.js'
+
+function clearStepErrors(tracking, day) {
+  if (!tracking?.steps?.length) {
+    return tracking
+  }
+  return {
+    ...tracking,
+    steps: tracking.steps.map((step) =>
+      step.day === day
+        ? {
+            ...step,
+            validation_rejection: null,
+            error_message: null,
+            openai_last_error: null,
+          }
+        : step,
+    ),
+  }
+}
+
+function stripRetryableTouchErrors(tracking) {
+  if (!tracking?.steps?.length) {
+    return tracking
+  }
+  return {
+    ...tracking,
+    steps: tracking.steps.map((step) =>
+      step.can_execute && step.touch_status !== 'fallido'
+        ? {
+            ...step,
+            validation_rejection: null,
+            error_message: null,
+            openai_last_error: null,
+          }
+        : step,
+    ),
+  }
+}
 
 function ChecklistItem({ item }) {
   const ok = item.ok
   const optional = item.optional
   const badgeClass = ok
-    ? 'bg-emerald-50 text-emerald-800 ring-emerald-600/20'
+    ? 'bg-red-50 text-red-800 ring-red-600/20'
     : optional
-      ? 'bg-slate-100 text-slate-600 ring-slate-500/20'
-      : 'bg-amber-50 text-amber-800 ring-amber-600/20'
+      ? 'bg-nx-card-muted text-nx-muted ring-nx-muted/20'
+      : 'bg-zinc-50 text-zinc-800 ring-zinc-600/20'
   const statusLabel = ok ? 'OK' : optional ? 'Opcional' : 'Falta'
 
   return (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 text-sm">
+    <div className="flex items-start justify-between gap-3 rounded-lg border border-nx-border bg-white px-3 py-2 text-sm">
       <div>
-        <p className="font-medium text-[#111827]">{item.label}</p>
-        {item.detail ? <p className="mt-0.5 text-xs text-[#6b7280]">{item.detail}</p> : null}
+        <p className="font-medium text-nx-ink">{item.label}</p>
+        {item.detail ? <p className="mt-0.5 text-xs text-nx-muted">{item.detail}</p> : null}
       </div>
       <span
         className={`inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${badgeClass}`}
@@ -73,13 +116,13 @@ function SequenceDebugPanel({ debug }) {
     ['Tiene timeline', debug.has_timeline ? 'Sí' : 'No'],
   ]
   return (
-    <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-xs text-slate-700">
-      <p className="mb-2 font-semibold uppercase tracking-wide text-slate-500">Depuración secuencia</p>
+    <div className="rounded-lg border border-dashed border-nx-border-strong bg-nx-card-muted p-3 text-xs text-nx-ink">
+      <p className="mb-2 font-semibold uppercase tracking-wide text-nx-muted">Depuración secuencia</p>
       <dl className="grid gap-1 sm:grid-cols-2">
         {rows.map(([label, value]) => (
-          <div key={label} className="flex justify-between gap-2 border-b border-slate-200/80 py-1">
-            <dt className="text-slate-500">{label}</dt>
-            <dd className="font-mono text-right text-slate-900">{String(value)}</dd>
+          <div key={label} className="flex justify-between gap-2 border-b border-nx-border/80 py-1">
+            <dt className="text-nx-muted">{label}</dt>
+            <dd className="font-mono text-right text-nx-ink">{String(value)}</dd>
           </div>
         ))}
       </dl>
@@ -98,16 +141,16 @@ function ChannelReadinessPanel({ readiness }) {
   const channelsOk = count >= required
 
   return (
-    <div className="rounded-lg border border-[#e5e7eb] bg-white p-3 text-sm">
+    <div className="rounded-lg border border-nx-border bg-white p-3 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-[#6b7280]">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-nx-muted">
           Canales detectados
         </h4>
         <span
           className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${
             channelsOk
-              ? 'bg-emerald-50 text-emerald-800 ring-emerald-600/20'
-              : 'bg-amber-50 text-amber-900 ring-amber-600/20'
+              ? 'bg-red-50 text-red-800 ring-red-600/20'
+              : 'bg-zinc-50 text-zinc-900 ring-zinc-600/20'
           }`}
         >
           {count}/{total} válidos · mínimo {required}
@@ -115,31 +158,32 @@ function ChannelReadinessPanel({ readiness }) {
       </div>
       <ul className="mt-2 space-y-1.5">
         {details.map((ch) => (
-          <li key={ch.key} className="flex items-start gap-2 text-sm text-[#374151]">
+          <li key={ch.key} className="flex items-start gap-2 text-sm text-nx-ink">
             <span
               className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                ch.ok ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-400'
+                ch.ok ? 'bg-red-100 text-red-800' : 'bg-nx-card-muted text-nx-subtle'
               }`}
               aria-hidden
             >
               {ch.ok ? '✓' : '✗'}
             </span>
             <div>
-              <span className="font-medium text-[#111827]">{ch.label}</span>
+              <span className="font-medium text-nx-ink">{ch.label}</span>
               {ch.detail ? (
-                <p className="text-xs text-[#6b7280]">{ch.detail}</p>
+                <p className="text-xs text-nx-muted">{ch.detail}</p>
               ) : null}
             </div>
           </li>
         ))}
       </ul>
       {readiness.channels_summary ? (
-        <p className="mt-2 text-xs text-[#6b7280]">{readiness.channels_summary}</p>
+        <p className="mt-2 text-xs text-nx-muted">{readiness.channels_summary}</p>
       ) : null}
       {!channelsOk ? (
-        <p className="mt-2 text-xs text-amber-800">
-          LinkedIn no es obligatorio por sí solo. Combiná al menos {required} canales, por ejemplo
-          Email + WhatsApp o Email + LinkedIn.
+        <p className="mt-2 text-xs text-zinc-800">
+          LinkedIn no es obligatorio por sí solo. Necesitás al menos {required} canales en total
+          (email, LinkedIn o WhatsApp). Si ya tenés uno, agregá otro — por ejemplo Email + WhatsApp
+          o Email + LinkedIn.
         </p>
       ) : null}
     </div>
@@ -154,10 +198,13 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
   const [busy, setBusy] = useState(false)
   const [touchBusyDay, setTouchBusyDay] = useState(null)
   const [error, setError] = useState(null)
+  const [touchNotice, setTouchNotice] = useState(null)
   const [validationDebug, setValidationDebug] = useState(null)
   const [simulateOpen, setSimulateOpen] = useState(false)
   const [simulateMessage, setSimulateMessage] = useState('')
   const [simulateBusy, setSimulateBusy] = useState(false)
+  const [linkedinInboundText, setLinkedinInboundText] = useState('')
+  const [linkedinInboundBusy, setLinkedinInboundBusy] = useState(false)
   const [lastSimulation, setLastSimulation] = useState(null)
   const [generationStatus, setGenerationStatus] = useState(null)
   const [openaiRetryDay, setOpenaiRetryDay] = useState(null)
@@ -233,7 +280,7 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
         } catch (e) {
           viewErrors.push(`Vista previa: ${e instanceof Error ? e.message : String(e)}`)
         }
-        setTracking(trackingData)
+        setTracking(trackingData ? stripRetryableTouchErrors(trackingData) : trackingData)
         setPreview(previewData)
         const hasVisible =
           (trackingData?.steps?.length ?? 0) > 0 || (previewData?.touches?.length ?? 0) > 0
@@ -257,8 +304,9 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
       return null
     }
     const trackingData = await fetchProspectSequenceTracking(prospect.id)
-    setTracking(trackingData)
-    return trackingData
+    const cleaned = trackingData ? stripRetryableTouchErrors(trackingData) : trackingData
+    setTracking(cleaned)
+    return cleaned
   }, [prospect?.id])
 
   useEffect(() => {
@@ -282,19 +330,32 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
   }, [generationBusy])
 
   useEffect(() => {
-    if (!tracking?.steps?.length || validationDebug) {
-      return
+    setValidationDebug(null)
+  }, [prospect?.id])
+
+  useEffect(() => {
+    if (!open || !prospect?.id) {
+      return undefined
     }
-    const failedRetryable = tracking.steps.find(
-      (s) => s.can_execute && s.touch_status === 'fallido' && s.validation_rejection,
-    )
-    if (failedRetryable?.validation_rejection) {
-      setValidationDebug(failedRetryable.validation_rejection)
-      setError((prev) =>
-        prev || 'Último intento falló — revisá el borrador rechazado abajo.',
-      )
+    async function onExtensionSent(event) {
+      if (event.source !== window) return
+      const data = event.data
+      if (!data || data.type !== 'NEXUS_LINKEDIN_SENT_REGISTERED') return
+      const pid = Number(data.payload?.prospectId)
+      if (!pid || pid !== Number(prospect.id)) return
+      setTouchNotice('LinkedIn marcado como enviado automáticamente.')
+      try {
+        await markLinkedInAssistedSent(pid)
+      } catch {
+        /* La extensión ya lo registró; refrescamos igual abajo. */
+      }
+      notifyLinkedInQueueChanged({ sent: true, prospectId: pid })
+      void refreshTracking()
+      void onUpdated?.()
     }
-  }, [tracking, validationDebug])
+    window.addEventListener('message', onExtensionSent)
+    return () => window.removeEventListener('message', onExtensionSent)
+  }, [open, prospect?.id, onUpdated, refreshTracking])
 
   async function handleSaveSetup() {
     if (!prospect?.id) {
@@ -365,6 +426,14 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
       setError(null)
       const data = await generateProspectSequencePreview(prospect.id, { forceRegenerate })
       setPreview(data)
+      if (mode === 'view') {
+        try {
+          const trackingData = await fetchProspectSequenceTracking(prospect.id)
+          setTracking(trackingData ? stripRetryableTouchErrors(trackingData) : trackingData)
+        } catch {
+          setTracking(null)
+        }
+      }
       await loadContext()
       await onUpdated?.()
     } catch (e) {
@@ -402,12 +471,28 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
     }
     setTouchBusyDay(day)
     setOpenaiRetryDay(null)
+    setError(null)
+    setTouchNotice(null)
+    setValidationDebug(null)
+    setTracking((prev) => (prev ? clearStepErrors(prev, day) : prev))
     try {
-      setError(null)
-      setValidationDebug(null)
       const result = await executeProspectSequenceTouch(prospect.id, day)
       setTracking(result.tracking)
       setOpenaiRetryDay(null)
+      if (result.linkedin_assisted || result.gmail_draft_created || result.whatsapp_sent || result.message) {
+        setTouchNotice(
+          result.message ||
+            (result.gmail_draft_created
+              ? 'Borrador creado en Gmail. Revisá, enviá manualmente y marcá como enviado.'
+              : result.whatsapp_sent || result.whatsapp_assisted
+                ? result.whatsapp_assisted
+                  ? 'WhatsApp en cola (Web asistido). Abrí WhatsApp Web con la extensión Nexus para enviar.'
+                  : result.whatsapp_dry_run
+                    ? 'WhatsApp dry-run legacy (desactivar WHATSAPP_DRY_RUN).'
+                    : 'WhatsApp enviado.'
+                : 'Toque LinkedIn listo. Andá a Centro de outreach → Enviar mensaje.'),
+        )
+      }
       if (result.fallback_test) {
         setError(
           'OpenAI en rate limit — se usó mensaje mock [FALLBACK TEST]. La secuencia siguió. Revisá diagnóstico abajo.',
@@ -415,28 +500,18 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
       }
       await onUpdated?.()
     } catch (e) {
-      let rejection = e instanceof ApiRequestError ? e.validation : null
+      const rejection = e instanceof ApiRequestError ? e.validation : null
       const trackingData = await refreshTracking()
-      if (!rejection && trackingData?.steps) {
-        const failedStep = trackingData.steps.find(
-          (s) => s.day === day && s.validation_rejection,
-        )
-        rejection = failedStep?.validation_rejection ?? null
-      }
+      setTracking(trackingData)
       setValidationDebug(rejection)
       const errMsg = e instanceof Error ? e.message : String(e)
       if (e instanceof ApiRequestError && e.retryable) {
         setOpenaiRetryDay(day)
-        setTracking(trackingData)
         setError(
           `${errMsg} El toque sigue pendiente — podés reintentar cuando quieras.`,
         )
       } else {
-        setError(
-          rejection
-            ? `${errMsg} — revisá el borrador rechazado abajo.`
-            : errMsg,
-        )
+        setError(rejection ? `${errMsg} — revisá el borrador rechazado abajo.` : errMsg)
       }
     } finally {
       setTouchBusyDay(null)
@@ -452,6 +527,46 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
       setError(null)
       const result = await skipProspectSequenceTouch(prospect.id, day)
       setTracking(result.tracking)
+      await onUpdated?.()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      await refreshTracking()
+    } finally {
+      setTouchBusyDay(null)
+    }
+  }
+
+  async function handleMarkTouchSent(day) {
+    if (!prospect?.id) {
+      return
+    }
+    setTouchBusyDay(day)
+    setTouchNotice(null)
+    setTracking((prev) => {
+      if (!prev?.steps?.length) {
+        return prev
+      }
+      const steps = prev.steps.map((step) =>
+        Number(step.day) === Number(day)
+          ? {
+              ...step,
+              can_mark_sent: false,
+              can_execute: false,
+              touch_status: 'enviado',
+              status: 'sent',
+              status_label: 'Enviado',
+            }
+          : step,
+      )
+      return { ...prev, steps }
+    })
+    try {
+      setError(null)
+      const result = await markProspectSequenceTouchSent(prospect.id, day)
+      setTracking(result.tracking)
+      if (result.message) {
+        setTouchNotice(result.message)
+      }
       await onUpdated?.()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -496,6 +611,33 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
     }
   }
 
+  async function handleRegisterLinkedInInbound() {
+    if (!prospect?.id || !linkedinInboundText.trim()) {
+      return
+    }
+    setLinkedinInboundBusy(true)
+    try {
+      setError(null)
+      const result = await registerLinkedInInbound(prospect.id, {
+        message: linkedinInboundText.trim(),
+      })
+      setLinkedinInboundText('')
+      setTouchNotice(
+        result.reply_draft_ready
+          ? 'Respuesta LinkedIn registrada. Revisá Centro de outreach → cola LinkedIn para responder.'
+          : result.detail || 'Respuesta registrada.',
+      )
+      notifyLinkedInQueueChanged({ inbound: true, prospectId: prospect.id })
+      const trackingData = await refreshTracking()
+      setTracking(trackingData)
+      await onUpdated?.()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLinkedinInboundBusy(false)
+    }
+  }
+
   async function handleStart() {
     if (!prospect?.id) {
       return
@@ -534,6 +676,12 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
   )
   const sequenceTesting = tracking?.testing || context?.testing
   const testingEnabled = sequenceTesting?.sequence_testing_enabled === true
+  const canRegenerateSequence =
+    canView &&
+    isReady &&
+    !canGenerate &&
+    !sequenceDebug?.draft_is_corrupt &&
+    (!hasSentTouch || testingEnabled)
   const canSimulateResponse =
     showTimeline && tracking?.sequence_started_at && hasSentTouch && testingEnabled
   const titleByMode = {
@@ -545,16 +693,30 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
   return (
     <Modal title={`${titleByMode[mode] || 'Nexus Outreach'} — ${prospect.name}`} onClose={onClose}>
       <AlertBanner message={error} onDismiss={() => setError(null)} />
+      {touchNotice ? (
+        <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+          <p className="flex-1">{touchNotice}</p>
+          <button
+            type="button"
+            className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-red-900 hover:bg-red-100"
+            onClick={() => setTouchNotice(null)}
+          >
+            Cerrar
+          </button>
+        </div>
+      ) : null}
       {generationStatus ? (
-        <p className="mb-4 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+        <p className="mb-4 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900">
           {generationStatus}
         </p>
       ) : null}
 
-      <div className="mb-4">
-        <OpenAIDiagnosticsPanel autoLoad={open} />
-      </div>
-      {validationDebug ? (
+      {showOpsDebug ? (
+        <div className="mb-4">
+          <OpenAIDiagnosticsPanel autoLoad={open} />
+        </div>
+      ) : null}
+      {showOpsDebug && validationDebug ? (
         <div className="mb-4">
           <SdrValidationDebugPanel
             validation={validationDebug}
@@ -564,55 +726,73 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
       ) : null}
 
       {loading ? (
-        <p className="text-sm text-[#6b7280]">
+        <p className="text-sm text-nx-muted">
           {mode === 'generate' ? 'Cargando contexto...' : 'Cargando...'}
         </p>
       ) : (
         <div className="space-y-4">
-          <div className="rounded-lg border border-[#e5e7eb] bg-[#f8fafc] p-3 text-sm">
-            <p className="font-medium text-[#111827]">{context?.prospect_name || prospect.name}</p>
-            <p className="text-[#6b7280]">{context?.prospect_company || prospect.company_name}</p>
-            <dl className="mt-2 grid gap-1 text-xs text-[#374151] sm:grid-cols-2">
+          <div className="rounded-lg border border-nx-border bg-nx-card-muted p-3 text-sm">
+            <p className="font-medium text-nx-ink">{context?.prospect_name || prospect.name}</p>
+            <p className="text-nx-muted">{context?.prospect_company || prospect.company_name}</p>
+            <dl className="mt-2 grid gap-1 text-xs text-nx-ink sm:grid-cols-2">
               <div>
-                <dt className="text-[#9ca3af]">Campaña</dt>
+                <dt className="text-nx-subtle">Campaña</dt>
                 <dd>{context?.campaign_name || '—'}</dd>
               </div>
               <div>
-                <dt className="text-[#9ca3af]">Producto</dt>
+                <dt className="text-nx-subtle">Producto</dt>
                 <dd>{context?.product_name || '—'}</dd>
               </div>
               <div>
-                <dt className="text-[#9ca3af]">Playbook</dt>
-                <dd>{context?.playbook_name || preview?.playbook_name || 'SDR 21d MVP'}</dd>
+                <dt className="text-nx-subtle">Playbook</dt>
+                <dd>{context?.playbook_name || preview?.playbook_name || 'SDR Nexus 7 toques'}</dd>
               </div>
               <div>
-                <dt className="text-[#9ca3af]">Canales</dt>
+                <dt className="text-nx-subtle">Canales</dt>
                 <dd>{(context?.available_channels || []).join(', ') || '—'}</dd>
               </div>
             </dl>
           </div>
 
           <ChannelReadinessPanel readiness={readiness} />
-          <SequenceDebugPanel debug={sequenceDebug} />
+          {showOpsDebug ? <SequenceDebugPanel debug={sequenceDebug} /> : null}
+
+          {canRegenerateSequence ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-nx-brand/25 bg-nx-brand/5 px-3 py-2.5">
+              <p className="text-xs text-nx-ink">
+                {hasSentTouch
+                  ? 'Modo testing: podés regenerar el borrador y volver a iniciar la secuencia.'
+                  : 'Regenerá el borrador si el mensaje del Día 1 no quedó bien.'}
+              </p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void handleGenerateFromPanel({ forceRegenerate: true })}
+                className="shrink-0 rounded-lg border border-nx-brand/40 bg-white px-3 py-1.5 text-xs font-semibold text-nx-brand hover:bg-nx-brand/10 disabled:opacity-50"
+              >
+                {busy ? 'Regenerando…' : 'Regenerar secuencia'}
+              </button>
+            </div>
+          ) : null}
 
           {readiness?.checklist?.length ? (
             <div className="space-y-2">
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-[#6b7280]">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-nx-muted">
                 Checklist de readiness
               </h4>
               {readiness.checklist.map((item) => (
                 <ChecklistItem key={item.key} item={item} />
               ))}
               {readiness.missing_summary ? (
-                <p className="text-xs text-amber-700">{readiness.missing_summary}</p>
+                <p className="text-xs text-zinc-700">{readiness.missing_summary}</p>
               ) : null}
               {context?.generate_sequence_block_reason && !canGenerate ? (
-                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-950">
                   {context.generate_sequence_block_reason}
                 </p>
               ) : null}
               {context?.start_sequence_block_reason && !canStart ? (
-                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-950">
                   {context.start_sequence_block_reason}
                 </p>
               ) : null}
@@ -638,30 +818,20 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
                   ) : null}
                 </div>
               ) : null}
-              {!canGenerate && canView && isReady && !sequenceDebug?.draft_is_corrupt ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void handleGenerateFromPanel({ forceRegenerate: true })}
-                  className="rounded-lg border border-nx-brand/30 bg-nx-brand/5 px-3 py-1.5 text-xs font-medium text-nx-brand hover:bg-nx-brand/10 disabled:opacity-50"
-                >
-                  Regenerar secuencia
-                </button>
-              ) : null}
             </div>
           ) : null}
 
           {showPrepare ? (
-            <div className="space-y-3 rounded-lg border border-[#e5e7eb] bg-white p-3">
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-[#6b7280]">
+            <div className="space-y-3 rounded-lg border border-nx-border bg-white p-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-nx-muted">
                 Completar datos
               </h4>
               <label className="block text-sm">
-                <span className="mb-1 block text-[#374151]">Campaña</span>
+                <span className="mb-1 block text-nx-ink">Campaña</span>
                 <select
                   value={form.campaign_id}
                   onChange={(ev) => setForm((f) => ({ ...f, campaign_id: ev.target.value }))}
-                  className="w-full rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm"
+                  className="w-full rounded-lg border border-nx-border px-3 py-2 text-sm"
                 >
                   <option value="">Seleccionar campaña</option>
                   {(context?.campaign_options || []).map((c) => (
@@ -674,49 +844,49 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
               </label>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[#374151]">Email</span>
+                  <span className="mb-1 block text-nx-ink">Email</span>
                   <input
                     type="email"
                     value={form.email}
                     onChange={(ev) => setForm((f) => ({ ...f, email: ev.target.value }))}
-                    className="w-full rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-nx-border px-3 py-2 text-sm"
                   />
                 </label>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[#374151]">LinkedIn</span>
+                  <span className="mb-1 block text-nx-ink">LinkedIn</span>
                   <input
                     type="url"
                     value={form.linkedin_url}
                     onChange={(ev) => setForm((f) => ({ ...f, linkedin_url: ev.target.value }))}
-                    className="w-full rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-nx-border px-3 py-2 text-sm"
                   />
                 </label>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[#374151]">Teléfono</span>
+                  <span className="mb-1 block text-nx-ink">Teléfono</span>
                   <input
                     type="text"
                     value={form.phone}
                     onChange={(ev) => setForm((f) => ({ ...f, phone: ev.target.value }))}
-                    className="w-full rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-nx-border px-3 py-2 text-sm"
                   />
                 </label>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[#374151]">WhatsApp</span>
+                  <span className="mb-1 block text-nx-ink">WhatsApp</span>
                   <input
                     type="text"
                     value={form.whatsapp}
                     onChange={(ev) => setForm((f) => ({ ...f, whatsapp: ev.target.value }))}
-                    className="w-full rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-nx-border px-3 py-2 text-sm"
                   />
                 </label>
               </div>
               <label className="block text-sm">
-                <span className="mb-1 block text-[#374151]">Sitio web empresa</span>
+                <span className="mb-1 block text-nx-ink">Sitio web empresa</span>
                 <input
                   type="url"
                   value={form.company_website}
                   onChange={(ev) => setForm((f) => ({ ...f, company_website: ev.target.value }))}
-                  className="w-full rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm"
+                  className="w-full rounded-lg border border-nx-border px-3 py-2 text-sm"
                 />
               </label>
               <div className="flex flex-wrap gap-2 pt-1">
@@ -724,7 +894,7 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
                   type="button"
                   disabled={busy}
                   onClick={() => void handleSaveSetup()}
-                  className="rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm font-medium text-[#374151] hover:bg-[#f8fafc] disabled:opacity-50"
+                  className="rounded-lg border border-nx-border px-3 py-2 text-sm font-medium text-nx-ink hover:bg-nx-card-muted disabled:opacity-50"
                 >
                   Guardar
                 </button>
@@ -741,7 +911,7 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
                     type="button"
                     disabled={busy}
                     onClick={() => void handleGenerateFromPanel()}
-                    className="rounded-lg bg-nx-brand px-3 py-2 text-sm font-medium text-white hover:bg-nx-brand/90 disabled:opacity-50"
+                    className="nx-btn nx-btn-primary px-3 py-2 text-sm"
                   >
                     Generar Secuencia
                   </button>
@@ -756,8 +926,8 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
                 <div
                   className={`rounded-lg border px-3 py-2 text-xs ${
                     testingEnabled
-                      ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                      : 'border-amber-200 bg-amber-50 text-amber-950'
+                      ? 'border-red-200 bg-red-50 text-red-900'
+                      : 'border-zinc-200 bg-zinc-50 text-zinc-950'
                   }`}
                 >
                   <p className="font-medium">
@@ -790,20 +960,20 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
               <div className="rounded-lg border border-nx-brand/20 bg-nx-brand/5 p-3 text-sm">
                 <dl className="grid gap-2 sm:grid-cols-2">
                   <div>
-                    <dt className="text-xs text-[#6b7280]">Día actual</dt>
+                    <dt className="text-xs text-nx-muted">Día actual</dt>
                     <dd className="font-semibold text-nx-brand">
                       {tracking.current_day_label || '—'}
                     </dd>
                   </div>
                   <div>
-                    <dt className="text-xs text-[#6b7280]">Próximo toque</dt>
-                    <dd className="font-medium text-[#111827]">
+                    <dt className="text-xs text-nx-muted">Próximo toque</dt>
+                    <dd className="font-medium text-nx-ink">
                       {tracking.sequence_paused
                         ? 'Pausado — respondé al prospecto'
                         : tracking.next_touch_label || '—'}
                     </dd>
                     {!tracking.sequence_paused ? (
-                      <dd className="text-xs text-[#6b7280]">{fmtDateTime(tracking.next_touch_at)}</dd>
+                      <dd className="text-xs text-nx-muted">{fmtDateTime(tracking.next_touch_at)}</dd>
                     ) : null}
                   </div>
                 </dl>
@@ -813,26 +983,50 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
                       type="button"
                       disabled={simulateBusy || busy}
                       onClick={() => setSimulateOpen(true)}
-                      className="rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-900 hover:bg-violet-100 disabled:opacity-50"
+                      className="rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-50"
                     >
                       Simular respuesta
                     </button>
-                    <p className="mt-1 text-[10px] text-[#6b7280]">
+                    <p className="mt-1 text-[10px] text-nx-muted">
                       Modo testing — escribí la réplica del prospecto para pausar la secuencia y ver sugerencia IA.
                     </p>
                   </div>
                 ) : hasSentTouch && !testingEnabled ? (
-                  <p className="mt-3 border-t border-nx-brand/10 pt-3 text-[10px] text-amber-800">
+                  <p className="mt-3 border-t border-nx-brand/10 pt-3 text-[10px] text-zinc-800">
                     Simular respuesta no disponible — activá{' '}
                     <code className="font-mono">NEXUS_ENABLE_SEQUENCE_TESTING=1</code> en backend/.env
                   </p>
+                ) : null}
+                {showTimeline && (prospect.linkedin_url || '').includes('linkedin.com/in/') ? (
+                  <div className="mt-3 border-t border-nx-brand/10 pt-3 space-y-2">
+                    <p className="text-xs font-medium text-nx-ink">Respuesta LinkedIn (automática)</p>
+                    <p className="text-[10px] text-nx-muted">
+                      Con la extensión Nexus y LinkedIn Messaging abiertos, las respuestas se detectan solas
+                      y el borrador aparece en la cola. Este campo es solo respaldo si falló la detección.
+                    </p>
+                    <textarea
+                      value={linkedinInboundText}
+                      onChange={(e) => setLinkedinInboundText(e.target.value)}
+                      rows={3}
+                      placeholder="Respaldo: pegá el mensaje solo si la extensión no lo detectó."
+                      className="w-full rounded-lg border border-nx-border px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="button"
+                      disabled={linkedinInboundBusy || !linkedinInboundText.trim()}
+                      onClick={() => void handleRegisterLinkedInInbound()}
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
+                    >
+                      {linkedinInboundBusy ? 'Registrando…' : 'Respaldo: registrar a mano'}
+                    </button>
+                  </div>
                 ) : null}
               </div>
 
               <SequenceConversationPanel tracking={tracking} lastSimulation={lastSimulation} />
 
               <div className="space-y-2">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-[#6b7280]">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-nx-muted">
                   Progreso de secuencia
                 </h4>
                 <SequenceProgressTimeline steps={tracking.steps} />
@@ -846,6 +1040,7 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
                 openaiRetryDay={openaiRetryDay}
                 onExecute={(day) => void handleExecuteTouch(day)}
                 onSkip={(day) => void handleSkipTouch(day)}
+                onMarkSent={(day) => void handleMarkTouchSent(day)}
               />
             </>
           ) : null}
@@ -856,7 +1051,7 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
                 type="button"
                 disabled={busy}
                 onClick={() => void handleStart()}
-                className="rounded-lg bg-nx-brand px-3 py-2 text-sm font-medium text-white hover:bg-nx-brand/90 disabled:opacity-50"
+                className="nx-btn nx-btn-primary px-3 py-2 text-sm"
               >
                 Iniciar secuencia
               </button>
@@ -865,28 +1060,28 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
 
           {showPreviewDraft ? (
             <div className="space-y-2">
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-[#6b7280]">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-nx-muted">
                 Secuencia — {preview.playbook_name}
               </h4>
               {preview.touches.map((t) => (
                 <div
                   key={t.day}
-                  className="rounded-lg border border-[#e5e7eb] bg-white p-3 text-sm"
+                  className="rounded-lg border border-nx-border bg-white p-3 text-sm"
                 >
-                  <p className="font-medium text-[#111827]">
+                  <p className="font-medium text-nx-ink">
                     Día {t.day} · {t.channel}
                   </p>
-                  <p className="mt-1 text-xs text-[#6b7280]">{t.objective}</p>
-                  <p className="mt-2 whitespace-pre-wrap text-xs text-[#374151]">{t.body_preview}</p>
+                  <p className="mt-1 text-xs text-nx-muted">{t.objective}</p>
+                  <p className="mt-2 whitespace-pre-wrap text-xs text-nx-ink">{t.body_preview}</p>
                 </div>
               ))}
             </div>
           ) : mode === 'view' && !showTimeline && !showPreviewDraft ? (
-            <p className="text-xs text-[#6b7280]">No hay toques para mostrar.</p>
+            <p className="text-xs text-nx-muted">No hay toques para mostrar.</p>
           ) : null}
 
           {(tracking?.sequence_started_at || prospect.sequence_start_at || prospect.next_touch_at) ? (
-            <div className="rounded-lg border border-dashed border-[#e5e7eb] p-3 text-xs text-[#6b7280]">
+            <div className="rounded-lg border border-dashed border-nx-border p-3 text-xs text-nx-muted">
               <p>Inicio: {fmtDateTime(tracking?.sequence_started_at || prospect.sequence_start_at)}</p>
               <p>Próximo toque: {tracking?.next_touch_label || prospect.next_touch_label || '—'}</p>
               <p>{fmtDateTime(tracking?.next_touch_at || prospect.next_touch_at)}</p>
@@ -897,9 +1092,9 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
 
       {simulateOpen ? (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-xl border border-[#e5e7eb] bg-white p-4 shadow-xl">
-            <h3 className="text-sm font-semibold text-[#111827]">Simular respuesta del prospecto</h3>
-            <p className="mt-1 text-xs text-[#6b7280]">
+          <div className="w-full max-w-lg rounded-xl border border-nx-border bg-white p-4 shadow-xl">
+            <h3 className="text-sm font-semibold text-nx-ink">Simular respuesta del prospecto</h3>
+            <p className="mt-1 text-xs text-nx-muted">
               Escribí el mensaje como si lo hubiera enviado el prospecto. Nexus pausará la secuencia,
               clasificará la respuesta y sugerirá tu próximo mensaje.
             </p>
@@ -908,7 +1103,7 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
               onChange={(e) => setSimulateMessage(e.target.value)}
               rows={5}
               placeholder="Ej: Sí, me interesa, mandame más info."
-              className="mt-3 w-full rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm"
+              className="mt-3 w-full rounded-lg border border-nx-border px-3 py-2 text-sm"
             />
             <div className="mt-3 flex flex-wrap justify-end gap-2">
               <button
@@ -918,7 +1113,7 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
                   setSimulateOpen(false)
                   setSimulateMessage('')
                 }}
-                className="rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm text-[#374151] hover:bg-[#f8fafc] disabled:opacity-50"
+                className="rounded-lg border border-nx-border px-3 py-2 text-sm text-nx-ink hover:bg-nx-card-muted disabled:opacity-50"
               >
                 Cancelar
               </button>
@@ -926,7 +1121,7 @@ export function ProspectOutreachPanel({ prospect, open, mode = 'view', onClose, 
                 type="button"
                 disabled={simulateBusy || !simulateMessage.trim()}
                 onClick={() => void handleSimulateResponse()}
-                className="rounded-lg bg-violet-700 px-3 py-2 text-sm font-medium text-white hover:bg-violet-800 disabled:opacity-50"
+                className="rounded-lg bg-zinc-700 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
               >
                 {simulateBusy ? 'Procesando…' : 'Registrar respuesta'}
               </button>

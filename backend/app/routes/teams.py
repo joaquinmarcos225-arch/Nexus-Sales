@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.deps import get_current_user, require_permission
-from app.core.permissions import Permission, normalize_role
+from app.core.permissions import Permission, is_company_admin, normalize_role
 from app.database.session import get_db
 from app.deps import get_company
 from app.models.enums import UserRole
@@ -89,8 +89,9 @@ def _format_member(
 
 
 def _capabilities_for_role(role: UserRole) -> EquipoCapabilities:
+    # Emails del equipo visibles para todos (SDR incluido): facilita coordinación.
     if role == UserRole.sdr:
-        return EquipoCapabilities()
+        return EquipoCapabilities(show_email_all=True)
     if role == UserRole.manager:
         return EquipoCapabilities(show_email_all=True, show_metrics=True)
     return EquipoCapabilities(
@@ -117,7 +118,7 @@ def get_equipo_workspace(
     counts = _member_counts(db, company_id)
     team_names = _team_name_map(db, company_id)
 
-    if role == UserRole.gerente:
+    if is_company_admin(role):
         teams = db.scalars(select(Team).where(Team.company_id == company_id).order_by(Team.name)).all()
         members = db.scalars(
             select(User).where(User.company_id == company_id).order_by(User.name)
@@ -140,8 +141,13 @@ def get_equipo_workspace(
         members = [actor] if actor.company_id == company_id else []
 
     metrics_map = None
-    if caps.show_metrics and members:
-        metrics_map = user_team_metrics(db, company_id=company_id, user_ids=[m.id for m in members])
+    from app.database.seed import is_demo_test_email
+
+    visible_members = [u for u in members if not is_demo_test_email(u.email)]
+    if caps.show_metrics and visible_members:
+        metrics_map = user_team_metrics(
+            db, company_id=company_id, user_ids=[m.id for m in visible_members]
+        )
 
     member_reads = [
         _format_member(
@@ -152,7 +158,7 @@ def get_equipo_workspace(
             show_email_all=caps.show_email_all,
             show_metrics=caps.show_metrics,
         )
-        for u in members
+        for u in visible_members
     ]
 
     return EquipoWorkspaceRead(

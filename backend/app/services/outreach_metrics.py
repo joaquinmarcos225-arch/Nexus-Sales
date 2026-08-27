@@ -87,26 +87,52 @@ def outreach_simulation_config() -> dict[str, str | bool]:
 
 
 def distinct_prospects_with_real_gmail_outbound_campaign(db: Session, campaign_id: int) -> int:
-    """Prospectos con al menos un outbound enviado por Gmail API (gmail_message_id + sender user)."""
+    """
+    Prospectos contactados de verdad: outbound con gmail_message_id
+    (manual user O automatización ai/system).
+    """
     n = db.scalar(
         select(func.count(func.distinct(OutreachMessage.prospect_id))).where(
             OutreachMessage.campaign_id == campaign_id,
             OutreachMessage.direction == "outbound",
-            OutreachMessage.sender_type == "user",
             OutreachMessage.gmail_message_id.isnot(None),
+            OutreachMessage.sender_type.in_(("user", "ai", "system")),
         )
     )
     return int(n or 0)
 
 
+def distinct_prospects_contacted_campaign(db: Session, campaign_id: int) -> int:
+    """
+    Contactados = outbound real (cualquier canal).
+    No cuenta solo «secuencia iniciada»: LinkedIn/WhatsApp pueden estar
+    en cola/verificando sin haber enviado aún (evita progreso falso al 100%).
+    """
+    from_mail = distinct_prospects_with_real_gmail_outbound_campaign(db, campaign_id)
+    from_any = db.scalar(
+        select(func.count(func.distinct(OutreachMessage.prospect_id))).where(
+            OutreachMessage.campaign_id == campaign_id,
+            OutreachMessage.direction == "outbound",
+            exclude_testing_messages(),
+        )
+    )
+    return max(int(from_mail or 0), int(from_any or 0))
+
+
 def distinct_prospects_with_real_gmail_inbound_campaign(db: Session, campaign_id: int) -> int:
-    """Prospectos con inbound importado de Gmail (gmail_message_id en el mensaje)."""
+    """Prospectos con inbound real (Gmail importado u otro canal)."""
+    from sqlalchemy import or_
+
     n = db.scalar(
         select(func.count(func.distinct(OutreachMessage.prospect_id))).where(
             OutreachMessage.campaign_id == campaign_id,
             OutreachMessage.direction == "inbound",
             OutreachMessage.sender_type == "prospect",
-            OutreachMessage.gmail_message_id.isnot(None),
+            exclude_testing_messages(),
+            or_(
+                OutreachMessage.gmail_message_id.isnot(None),
+                OutreachMessage.channel.in_(("linkedin", "whatsapp", "email")),
+            ),
         )
     )
     return int(n or 0)
@@ -275,6 +301,68 @@ def distinct_prospects_with_inbound_seller_campaigns(
             exclude_testing_messages(),
         )
     )
+    return int(n or 0)
+
+
+def count_outbound_messages_campaign(db: Session, campaign_id: int) -> int:
+    """Total de mensajes salientes reales de la campaña (email, LinkedIn, WhatsApp)."""
+    if is_real_mode():
+        # Email: solo con gmail_message_id (enviados). LinkedIn/WhatsApp: canal asistido.
+        from sqlalchemy import and_, or_
+
+        n = db.scalar(
+            select(func.count(OutreachMessage.id)).where(
+                OutreachMessage.campaign_id == campaign_id,
+                OutreachMessage.direction == "outbound",
+                OutreachMessage.sender_type.in_(("user", "ai", "system")),
+                exclude_testing_messages(),
+                or_(
+                    OutreachMessage.gmail_message_id.isnot(None),
+                    and_(
+                        OutreachMessage.channel.in_(("linkedin", "whatsapp")),
+                        OutreachMessage.sender_type.in_(("user", "ai", "system")),
+                    ),
+                ),
+            )
+        )
+    else:
+        n = db.scalar(
+            select(func.count(OutreachMessage.id)).where(
+                OutreachMessage.campaign_id == campaign_id,
+                OutreachMessage.direction == "outbound",
+                OutreachMessage.sender_type.in_(("ai", "system", "user")),
+                exclude_testing_messages(),
+            )
+        )
+    return int(n or 0)
+
+
+def count_inbound_messages_campaign(db: Session, campaign_id: int) -> int:
+    """Total de mensajes entrantes del prospecto en la campaña."""
+    if is_real_mode():
+        from sqlalchemy import or_
+
+        n = db.scalar(
+            select(func.count(OutreachMessage.id)).where(
+                OutreachMessage.campaign_id == campaign_id,
+                OutreachMessage.direction == "inbound",
+                OutreachMessage.sender_type == "prospect",
+                exclude_testing_messages(),
+                or_(
+                    OutreachMessage.gmail_message_id.isnot(None),
+                    OutreachMessage.channel.in_(("linkedin", "whatsapp", "email")),
+                ),
+            )
+        )
+    else:
+        n = db.scalar(
+            select(func.count(OutreachMessage.id)).where(
+                OutreachMessage.campaign_id == campaign_id,
+                OutreachMessage.direction == "inbound",
+                OutreachMessage.sender_type == "prospect",
+                exclude_testing_messages(),
+            )
+        )
     return int(n or 0)
 
 

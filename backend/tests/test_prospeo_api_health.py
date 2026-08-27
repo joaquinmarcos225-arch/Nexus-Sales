@@ -23,7 +23,16 @@ def test_insufficient_credits():
 def test_rate_limit_message():
     outcome, code = classify_prospeo_error(message="Rate limit exceeded", status_code=429)
     assert outcome == SEARCH_OUTCOME_BLOCKED_RATE_LIMIT
+    assert code == "RATE_LIMITED"
     assert is_search_blocked_outcome(outcome)
+
+
+def test_rate_limit_exceeded_code_normalized():
+    outcome, code = classify_prospeo_error(error_code="Rate limit exceeded", status_code=429)
+    assert outcome == SEARCH_OUTCOME_BLOCKED_RATE_LIMIT
+    assert code == "RATE_LIMITED"
+    assert effective_prospeo_search_blocked(error_code="Rate limit exceeded")
+    assert effective_prospeo_search_blocked(error_code="RATE LIMIT EXCEEDED")
 
 
 def test_zero_credits_remaining():

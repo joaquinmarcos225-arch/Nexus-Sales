@@ -16,8 +16,8 @@ export function MvpContactsTable({ rows = [], metrics, onSelectContact, selected
 
   return (
     <div className="mt-4 space-y-3">
-      <div className="rounded-xl border border-emerald-200 bg-emerald-50/30 p-3">
-        <p className="text-xs font-semibold text-emerald-950">Contactos por empresa</p>
+      <div className="rounded-xl border border-red-200 bg-red-50/30 p-3">
+        <p className="text-xs font-semibold text-red-950">Contactos por empresa</p>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
           <Metric label="Empresas" value={m.companies_found ?? 0} />
           <Metric label="Personas reales" value={m.contacts_found ?? 0} />
@@ -30,8 +30,8 @@ export function MvpContactsTable({ rows = [], metrics, onSelectContact, selected
       {realRows.length > 0 ? (
         <ContactSection
           title="Contactos reales"
-          borderClass="border-emerald-200"
-          bgClass="bg-emerald-50/30"
+          borderClass="border-red-200"
+          bgClass="bg-red-50/30"
           rows={realRows}
           onSelectContact={onSelectContact}
           selectedId={selectedId}
@@ -41,8 +41,8 @@ export function MvpContactsTable({ rows = [], metrics, onSelectContact, selected
       {genericRows.length > 0 ? (
         <ContactSection
           title="Emails genéricos (no verificados)"
-          borderClass="border-amber-200"
-          bgClass="bg-amber-50/30"
+          borderClass="border-zinc-200"
+          bgClass="bg-zinc-50/30"
           rows={genericRows}
           onSelectContact={onSelectContact}
           selectedId={selectedId}
@@ -90,6 +90,9 @@ function ContactSection({
               <th className="px-2 py-1.5">{statusOnly ? 'Estado' : generic ? 'Email' : 'Persona'}</th>
               {!statusOnly ? <th className="px-2 py-1.5">Cargo</th> : null}
               {!statusOnly ? <th className="px-2 py-1.5">Email</th> : null}
+              {!statusOnly ? <th className="px-2 py-1.5">Celular</th> : null}
+              {!statusOnly ? <th className="px-2 py-1.5">Fijo</th> : null}
+              {!statusOnly ? <th className="px-2 py-1.5">WhatsApp</th> : null}
               {!statusOnly && !generic ? <th className="px-2 py-1.5">LinkedIn</th> : null}
               {!statusOnly ? <th className="px-2 py-1.5">Conf.</th> : null}
             </tr>
@@ -103,11 +106,11 @@ function ContactSection({
                   <td className="px-2 py-1.5 font-medium text-zinc-900">{r.company_name}</td>
                   <td className="px-2 py-1.5">
                     {isStatus ? (
-                      <span className="font-medium text-amber-800">{r.status_message}</span>
+                      <span className="font-medium text-zinc-800">{r.status_message}</span>
                     ) : r.contact_external_id ? (
                       <button
                         type="button"
-                        className="font-semibold text-violet-800 hover:underline"
+                        className="font-semibold text-zinc-800 hover:underline"
                         onClick={() => onSelectContact?.(r.contact_external_id)}
                       >
                         {r.person_name}
@@ -119,7 +122,14 @@ function ContactSection({
                   {!statusOnly ? (
                     <>
                       <td className="px-2 py-1.5 text-zinc-700">{r.role || '—'}</td>
-                      <td className="px-2 py-1.5 text-zinc-700">{r.email || '—'}</td>
+                      <td className="break-all px-2 py-1.5 text-zinc-700">{r.email || '—'}</td>
+                      <td className="whitespace-nowrap px-2 py-1.5 text-zinc-700">{r.phone || '—'}</td>
+                      <td className="whitespace-nowrap px-2 py-1.5 text-zinc-700">
+                        {r.landline_phone || '—'}
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-1.5 text-zinc-700">
+                        {r.whatsapp_number || '—'}
+                      </td>
                       {!generic ? (
                         <td className="px-2 py-1.5">
                           {r.linkedin_url ? (
@@ -127,7 +137,7 @@ function ContactSection({
                               href={r.linkedin_url}
                               target="_blank"
                               rel="noreferrer"
-                              className="font-semibold text-sky-700"
+                              className="font-semibold text-zinc-700"
                             >
                               Perfil
                             </a>
@@ -155,7 +165,7 @@ function Metric({ label, value }) {
   return (
     <div className="rounded-lg border border-white bg-white px-2 py-1.5 text-center shadow-sm">
       <p className="text-[10px] font-medium text-zinc-500">{label}</p>
-      <p className="text-sm font-bold text-emerald-900">{value}</p>
+      <p className="text-sm font-bold text-red-900">{value}</p>
     </div>
   )
 }
@@ -164,14 +174,14 @@ function Metric({ label, value }) {
 export function ProspeoSearchDebugPanel({ rows = [] }) {
   if (!rows.length) return null
   return (
-    <details className="mt-3 rounded-lg border border-violet-200 bg-violet-50/40 p-3" open>
-      <summary className="cursor-pointer text-xs font-semibold text-violet-950">
+    <details className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50/40 p-3">
+      <summary className="cursor-pointer text-xs font-semibold text-zinc-950">
         Diagnóstico Prospeo — {rows.length} empresa(s)
       </summary>
       <div className="mt-2 max-h-80 overflow-auto">
         <table className="w-full min-w-[800px] text-left text-[10px]">
           <thead>
-            <tr className="border-b border-violet-200 font-bold uppercase text-zinc-500">
+            <tr className="border-b border-zinc-200 font-bold uppercase text-zinc-500">
               <th className="px-1.5 py-1">Empresa</th>
               <th className="px-1.5 py-1">Dominio enviado</th>
               <th className="px-1.5 py-1">Requests</th>
@@ -217,7 +227,7 @@ export function ProspeoSearchDebugPanel({ rows = [] }) {
                   ? '0'
                   : String(r.prospeo_results ?? 0)
               return (
-                <tr key={`${r.company_name}-${i}`} className="border-b border-violet-100/80 align-top">
+                <tr key={`${r.company_name}-${i}`} className="border-b border-zinc-100/80 align-top">
                   <td className="px-1.5 py-1 font-medium text-zinc-900">{r.company_name}</td>
                   <td className="px-1.5 py-1 font-mono text-[10px] text-zinc-800">
                     {r.domain_sent || r.domain || '—'}
@@ -227,7 +237,7 @@ export function ProspeoSearchDebugPanel({ rows = [] }) {
                   </td>
                   <td
                     className={`px-1.5 py-1 font-semibold ${
-                      blocked ? 'text-amber-800' : zero ? 'text-rose-700' : 'text-zinc-800'
+                      blocked ? 'text-zinc-800' : zero ? 'text-red-700' : 'text-zinc-800'
                     }`}
                   >
                     {resultsLabel}
@@ -235,15 +245,15 @@ export function ProspeoSearchDebugPanel({ rows = [] }) {
                       ? ` (${r.after_dedupe} únicos)`
                       : ''}
                   </td>
-                  <td className="px-1.5 py-1 font-semibold text-emerald-800">{r.valid_results ?? 0}</td>
+                  <td className="px-1.5 py-1 font-semibold text-red-800">{r.valid_results ?? 0}</td>
                   <td className="px-1.5 py-1 text-zinc-700">{r.discarded_count ?? 0}</td>
                   <td className="px-1.5 py-1 font-mono text-[9px] text-zinc-700">
                     {r.error_code || reqs.find((q) => q.error_code)?.error_code || '—'}
                   </td>
-                  <td className="px-1.5 py-1 text-violet-900">
+                  <td className="px-1.5 py-1 text-zinc-900">
                     <div>{r.status_message || '—'}</div>
                     {(r.discard_reason || r.api_error) && (
-                      <div className="mt-0.5 text-[9px] text-amber-900">
+                      <div className="mt-0.5 text-[9px] text-zinc-900">
                         {r.api_error || r.discard_reason}
                       </div>
                     )}
@@ -278,14 +288,14 @@ export function ProspeoContactDebugPanel({ rows = [] }) {
   const discarded = rows.filter((r) => r && r.ok === false)
   if (!discarded.length) return null
   return (
-    <details className="mt-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
-      <summary className="cursor-pointer text-xs font-semibold text-amber-950">
+    <details className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50/40 p-3">
+      <summary className="cursor-pointer text-xs font-semibold text-zinc-950">
         Debug Prospeo — {discarded.length} contacto(s) descartado(s)
       </summary>
       <div className="mt-2 max-h-64 overflow-auto">
         <table className="w-full min-w-[720px] text-left text-[10px]">
           <thead>
-            <tr className="border-b border-amber-200 font-bold uppercase text-zinc-500">
+            <tr className="border-b border-zinc-200 font-bold uppercase text-zinc-500">
               <th className="px-1.5 py-1">Empresa objetivo</th>
               <th className="px-1.5 py-1">Persona</th>
               <th className="px-1.5 py-1">Empresa detectada</th>
@@ -296,13 +306,13 @@ export function ProspeoContactDebugPanel({ rows = [] }) {
           </thead>
           <tbody>
             {discarded.slice(0, 60).map((r, i) => (
-              <tr key={`${r.person_name}-${r.target_company}-${i}`} className="border-b border-amber-100/80">
+              <tr key={`${r.person_name}-${r.target_company}-${i}`} className="border-b border-zinc-100/80">
                 <td className="px-1.5 py-1 text-zinc-900">{r.company_target || r.target_company}</td>
                 <td className="px-1.5 py-1">{r.person_name || '—'}</td>
                 <td className="px-1.5 py-1 text-zinc-700">{r.detected_company || '—'}</td>
                 <td className="px-1.5 py-1 text-zinc-600">{r.target_domain || '—'}</td>
                 <td className="px-1.5 py-1 text-zinc-600">{r.email_domain ? `@${r.email_domain}` : '—'}</td>
-                <td className="px-1.5 py-1 text-amber-900">{r.reason}</td>
+                <td className="px-1.5 py-1 text-zinc-900">{r.reason}</td>
               </tr>
             ))}
           </tbody>

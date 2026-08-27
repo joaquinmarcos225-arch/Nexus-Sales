@@ -39,9 +39,31 @@ _SALES_TOKENS = frozenset(
         "sdr",
         "bdr",
         "cro",
-        "founder",
-        "ceo",
+        "ae",
+        "account",
+    }
+)
+
+# Tokens demasiado genéricos: no cuentan como overlap de rol (evita Head of Design ≈ Head of Sales).
+_WEAK_ROLE_TOKENS = frozenset(
+    {
         "head",
+        "director",
+        "manager",
+        "lead",
+        "chief",
+        "senior",
+        "junior",
+        "vp",
+        "vice",
+        "president",
+        "officer",
+        "global",
+        "regional",
+        "country",
+        "team",
+        "ops",
+        "operations",
     }
 )
 
@@ -75,6 +97,13 @@ def icp_role_titles(icp_target_role: str | None) -> list[str]:
     return [cleaned] if cleaned else []
 
 
+def _has_sales_signal(norm: str, tokens: set[str]) -> bool:
+    """Señal de ventas/GTM en EN o ES (sales ↔ comercial/ventas)."""
+    if tokens & _SALES_TOKENS:
+        return True
+    return any(token in norm for token in _SALES_TOKENS)
+
+
 def role_match_score(icp_role: str | None, prospect_role: str | None) -> int:
     icp = (icp_role or "").strip()
     prospect = (prospect_role or "").strip()
@@ -86,16 +115,99 @@ def role_match_score(icp_role: str | None, prospect_role: str | None) -> int:
         return 100
     if icp_n in pr_n or pr_n in icp_n:
         return 92
-    icp_tokens = _role_tokens(icp)
-    pr_tokens = _role_tokens(prospect)
+    icp_tokens = _role_tokens(icp) - _WEAK_ROLE_TOKENS
+    pr_tokens = _role_tokens(prospect) - _WEAK_ROLE_TOKENS
     if icp_tokens and pr_tokens:
         overlap = icp_tokens & pr_tokens
         if overlap:
             return min(95, 45 + len(overlap) * 18)
-    for token in _SALES_TOKENS:
-        if token in icp_n and token in pr_n:
-            return 55
+    # Soft match ventas/GTM cross-idioma (Head of Sales ≈ Director Comercial).
+    if _has_sales_signal(icp_n, icp_tokens) and _has_sales_signal(pr_n, pr_tokens):
+        return 70
+    # Soft match ejecutivo (CEO ≈ Founder / Director General / Propietario).
+    if _has_exec_signal(icp_n, icp_tokens) and _has_exec_signal(pr_n, pr_tokens):
+        return 72
     return 0
+
+
+# Títulos extra para búsqueda Prospeo cuando el ICP es de ventas.
+_SALES_PROSPEO_ALIASES: tuple[str, ...] = (
+    "Head of Sales",
+    "VP of Sales",
+    "Director of Sales",
+    "Sales Director",
+    "Director Comercial",
+    "Director de Ventas",
+    "Gerente Comercial",
+    "Gerente de Ventas",
+    "Chief Revenue Officer",
+    "Head of Revenue",
+)
+
+# CEO / dueño / dirección general — inmobiliarias y SMB suelen no tener "CEO" en Prospeo.
+_EXEC_PROSPEO_ALIASES: tuple[str, ...] = (
+    "CEO",
+    "Chief Executive Officer",
+    "Founder",
+    "Co-Founder",
+    "Cofounder",
+    "Owner",
+    "Propietario",
+    "Dueño",
+    "Director General",
+    "Gerente General",
+    "Managing Director",
+    "President",
+    "Presidente",
+)
+
+_EXEC_ROLE_RE = re.compile(
+    r"\b("
+    r"ceo|chief\s+executive|founder|co[\s\-]?founder|owner|"
+    r"propietario|dueñ[oa]|director\s+general|gerente\s+general|"
+    r"managing\s+director|president|presidente|socio\s+fundador"
+    r")\b",
+    re.I,
+)
+
+
+def _has_exec_signal(norm: str, tokens: set[str]) -> bool:
+    if tokens & {"ceo", "founder", "owner", "presidente", "president", "propietario"}:
+        return True
+    return bool(_EXEC_ROLE_RE.search(norm))
+
+
+def prospeo_role_title_includes(icp_target_role: str | None) -> list[str]:
+    """Títulos a pedir a Prospeo (ICP + aliases ES/EN si es rol de ventas o ejecutivo)."""
+    titles = icp_role_titles(icp_target_role)
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(title: str) -> None:
+        t = (title or "").strip()
+        if not t:
+            return
+        key = _norm(t)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(t)
+
+    for t in titles:
+        _add(t)
+    title_norms = [_norm(t) for t in titles]
+    title_token_sets = [_role_tokens(t) - _WEAK_ROLE_TOKENS for t in titles]
+    if any(
+        _has_sales_signal(n, toks) for n, toks in zip(title_norms, title_token_sets, strict=False)
+    ):
+        for alias in _SALES_PROSPEO_ALIASES:
+            _add(alias)
+    if any(
+        _has_exec_signal(n, toks) for n, toks in zip(title_norms, title_token_sets, strict=False)
+    ):
+        for alias in _EXEC_PROSPEO_ALIASES:
+            _add(alias)
+    return out[:10]
 
 
 def best_icp_role_match(

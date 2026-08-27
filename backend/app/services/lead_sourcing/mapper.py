@@ -10,26 +10,25 @@ from app.services.linkedin_assisted_service import is_real_linkedin_profile_url
 
 
 def _pick_phone(person: dict) -> tuple[str | None, str | None]:
-    """(phone, whatsapp) — mobile va a whatsapp si aplica."""
+    """(phone, whatsapp) — solo móviles utilizables para WhatsApp."""
+    from app.services.whatsapp_phone_validation import sanitize_whatsapp_mobile
+
     numbers = person.get("phone_numbers") or []
     if not isinstance(numbers, list):
         return None, None
     mobile = None
-    direct = None
     for entry in numbers:
         if not isinstance(entry, dict):
             continue
-        raw = (entry.get("raw_number") or entry.get("sanitized_number") or "").strip()
+        raw = sanitize_whatsapp_mobile(
+            (entry.get("raw_number") or entry.get("sanitized_number") or "").strip() or None
+        )
         if not raw:
             continue
         kind = (entry.get("type") or "").lower()
         if kind in {"mobile", "cell", "whatsapp"} and not mobile:
             mobile = raw
-        elif not direct:
-            direct = raw
-    phone = direct or mobile
-    whatsapp = mobile if mobile and mobile != phone else mobile
-    return phone, whatsapp
+    return mobile, mobile
 
 
 def _org_field(person: dict, field: str) -> str | None:
@@ -44,7 +43,7 @@ def person_from_search_hit(hit: dict) -> LeadCandidateRead:
     first = (hit.get("first_name") or "").strip()
     last_obf = (hit.get("last_name_obfuscated") or hit.get("last_name") or "").strip()
     name = f"{first} {last_obf}".strip() or "Sin nombre"
-    org_name = _org_field(hit, "name") or "Empresa desconocida"
+    org_name = _org_field(hit, "name") or ""
     return LeadCandidateRead(
         external_id=str(hit.get("id") or ""),
         provider="apollo",
@@ -125,19 +124,40 @@ def company_from_hit(hit: dict) -> CompanyCandidateRead:
 
 
 def to_prospect_create(candidate: LeadCandidateRead) -> ProspectCreate:
+    from app.services.whatsapp_cloud_service import sanitize_stored_email, sanitize_stored_phone
+
     notes_parts = [f"Importado vía Lead Sourcing ({candidate.provider or 'pipeline'})."]
     if candidate.company_website:
         notes_parts.append(f"Web: {candidate.company_website}")
+    from app.services.whatsapp_phone_validation import sanitize_landline_phone, sanitize_whatsapp_mobile
+
+    raw_phone = sanitize_stored_phone(candidate.phone)
+    whatsapp = sanitize_whatsapp_mobile(candidate.whatsapp) or sanitize_whatsapp_mobile(
+        getattr(candidate, "whatsapp_number", None)
+    )
+    mobile = whatsapp or sanitize_whatsapp_mobile(raw_phone)
+    landline = sanitize_landline_phone(getattr(candidate, "landline_phone", None))
+    if not landline and raw_phone and not mobile:
+        landline = sanitize_landline_phone(raw_phone)
+    from app.services.outreach_display_names import resolve_prospect_company_name
+
+    company_name = resolve_prospect_company_name(
+        company_name=candidate.company_name,
+        email=candidate.email,
+        website=candidate.company_website,
+        domain=getattr(candidate, "company_domain", None),
+    ) or (candidate.company_name or "").strip() or "—"
     return ProspectCreate(
         name=candidate.name,
-        company_name=candidate.company_name,
+        company_name=company_name,
         role=candidate.role,
         industry=candidate.industry,
         country=candidate.country,
         linkedin_url=candidate.linkedin_url,
-        email=candidate.email,
-        phone=candidate.phone,
-        whatsapp=candidate.whatsapp,
+        email=sanitize_stored_email(candidate.email),
+        phone=mobile,
+        whatsapp=mobile,
+        landline_phone=landline,
         company_website=candidate.company_website,
         source_provider=candidate.provider,
         source_external_id=candidate.external_id,

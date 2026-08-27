@@ -34,11 +34,17 @@ class Campaign(Base):
     )
     autopilot_last_cycle_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # b2b | b2c — modo concreto de esta campaña (nunca híbrido)
+    outreach_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="b2b")
+
     target_company_size: Mapped[str | None] = mapped_column(String(255), nullable=True)
     target_industry: Mapped[str | None] = mapped_column(String(255), nullable=True)
     target_country: Mapped[str | None] = mapped_column(String(255), nullable=True)
     target_language: Mapped[str | None] = mapped_column(String(255), nullable=True)
     target_role: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    target_area: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # B2C: intereses / keywords del público (ej. "running, wellness, yoga")
+    target_interests: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     prospect_count: Mapped[int] = mapped_column(Integer, nullable=False)
 
@@ -47,11 +53,11 @@ class Campaign(Base):
     available_hours: Mapped[str] = mapped_column(Text, nullable=False)
     tone: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    # Canales permitidos para outreach simulado (y futuros conectores reales). Orden prioritario implícito: linkedin → email → whatsapp.
+    # Canales permitidos. MVP: LinkedIn + email (WhatsApp opcional cuando Meta esté listo).
     allowed_channels: Mapped[list[str]] = mapped_column(
         JSON,
         nullable=False,
-        default=lambda: ["linkedin", "email", "whatsapp"],
+        default=lambda: ["linkedin", "email"],
     )
 
     estimated_meetings_min: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -78,16 +84,23 @@ class Campaign(Base):
     ai_context: Mapped[str | None] = mapped_column(Text, nullable=True)
     followup_delay_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_auto_followups: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Si False, no se programan follow-ups automáticos tras la secuencia de 7 toques.
+    post_sequence_followup_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
 
-    # Modo real Gmail: draft_only (default) o auto_send (requiere NEXUS_AUTO_SEND_ENABLED=1).
-    outreach_email_mode: Mapped[str] = mapped_column(String(24), nullable=False, default="draft_only")
+    # Modo real Gmail: draft_only o auto_send (requiere NEXUS_AUTO_SEND_ENABLED=1).
+    outreach_email_mode: Mapped[str] = mapped_column(String(24), nullable=False, default="auto_send")
     # Respuesta automática a inbound: borrador vs envío (delay en minutos).
-    inbound_reply_mode: Mapped[str] = mapped_column(String(24), nullable=False, default="draft_only")
+    inbound_reply_mode: Mapped[str] = mapped_column(String(24), nullable=False, default="auto_send")
     inbound_reply_delay_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
     # Pausa instantánea de automatización (scheduler / follow-ups / ticks).
     automation_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # manual | semi_auto | full_auto — control operativo unificado
     automation_mode: Mapped[str] = mapped_column(String(24), nullable=False, default="semi_auto")
+
+    # Plantilla de secuencia elegida (forma/canales por toque). None = Nexus 7 toques por defecto.
+    sequence_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     company: Mapped[Company] = relationship("Company", back_populates="campaigns")
     seller: Mapped[User] = relationship("User", back_populates="campaigns_assigned")

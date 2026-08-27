@@ -1,0 +1,39 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --color-nx-brand: #dc2626;
+  --color-nx-ink: #1a1010;
+  --color-nx-muted: #8a6b6b;
+  --color-nx-subtle: #b08989;
+  --color-nx-border: #f0d4d0;
+  --color-nx-card: #fff8f6;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  min-height: 100dvh;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: #140808;
+  color: var(--color-nx-ink);
+}
+
+.ns-chrome {
+  background:
+    radial-gradient(ellipse 80% 120% at 0% 0%, rgb(220 38 38 / 0.28), transparent 55%),
+    linear-gradient(180deg, #1a0a0a 0%, #0c0606 100%);
+}
+
+.ns-list {
+  background: linear-gradient(180deg, #fff4f1 0%, #fde8e4 100%);
+}
+
+.ns-chat {
+  background: #ffffff;
+}

@@ -31,15 +31,20 @@ class Prospect(Base):
     country: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     linkedin_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    # URN interno LinkedIn (fsd_profile) para abrir /messaging/compose directo.
+    linkedin_profile_urn: Mapped[str | None] = mapped_column(String(128), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Hilo Gmail (threads.get) — se setea al crear borrador Nexus o al resolver búsqueda en sync.
     gmail_thread_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     whatsapp: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    landline_phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     company_website: Mapped[str | None] = mapped_column(String(2048), nullable=True)
 
     source_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source_external_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    hubspot_contact_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    salesforce_contact_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     status: Mapped[str] = mapped_column(String(32), nullable=False)
 
@@ -71,6 +76,12 @@ class Prospect(Base):
 
     preferred_channel: Mapped[str | None] = mapped_column(String(32), nullable=True)
     channel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Búsqueda de canales faltantes post-insert (Prospeo): none|searching|done|timed_out|skipped
+    channel_enrich_status: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
+    channel_enrich_deadline_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    channel_enrich_message: Mapped[str | None] = mapped_column(String(255), nullable=True)
     linkedin_assisted_draft: Mapped[str | None] = mapped_column(Text, nullable=True)
     linkedin_assist_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     linkedin_assist_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -78,6 +89,40 @@ class Prospect(Base):
         DateTime(timezone=True), nullable=True
     )
     linkedin_sdr_marked_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    linkedin_reply_available_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Flujo "Conectar" LinkedIn: invitación de conexión antes del DM.
+    # Estados: none | checking | check_queued | check_failed | invite_pending | invite_sent | connected | declined
+    linkedin_connection_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="none"
+    )
+    linkedin_invite_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    linkedin_connected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    linkedin_post_connect_draft_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    linkedin_mention_next_touch: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    whatsapp_assisted_draft: Mapped[str | None] = mapped_column(Text, nullable=True)
+    whatsapp_assist_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    whatsapp_assist_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    whatsapp_last_assisted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    whatsapp_sdr_marked_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    call_assisted_brief: Mapped[str | None] = mapped_column(Text, nullable=True)
+    call_assist_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    call_sdr_marked_done_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

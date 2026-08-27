@@ -13,11 +13,10 @@ from app.models.campaign import Campaign
 from app.models.enums import OutreachEmailMode, ProspectStatus
 from app.models.outreach import OutreachMessage
 from app.models.prospect import Prospect
-from app.services import conversation_intelligence as ci
 from app.services import followup_engine
 from app.services.gmail_drafts import create_draft_for_user, get_valid_gmail_connection
 from app.services.gmail_send import send_email_for_user
-from app.services.openai_service import generate_gmail_draft_email
+from app.services.email_deliverability import deliverable_email_skip_reason
 from app.services.outreach_simulation import make_message
 
 
@@ -72,24 +71,17 @@ def deliver_scheduled_followup_via_gmail(
     to_addr = (prospect.email or "").strip()
     if not to_addr or "@" not in to_addr:
         return "skipped"
+    if deliverable_email_skip_reason(to_addr):
+        return "skipped"
 
     allowed = campaign.allowed_channels or []
     if isinstance(allowed, list) and allowed and "email" not in allowed:
         return "skipped"
 
+    from app.services.openai_service import generate_followup_message
+
     history_rows = followup_engine._messages_desc(db, prospect.id)
     history_payload = followup_engine._payload(history_rows)
-    last_inbound = next(
-        (m for m in reversed(history_rows) if m.direction == "inbound" and m.sender_type == "prospect"),
-        None,
-    )
-    last_inbound_text = (last_inbound.message if last_inbound else None) or None
-
-    norm_in = (
-        ci.normalize_inbound_text_for_classification(last_inbound_text) if last_inbound_text else ""
-    )
-    booking_priority = bool(norm_in.strip()) and ci.inbound_wants_immediate_booking(norm_in)
-    timing_soft = False
 
     campaign_ctx = _gmail_style_campaign_ctx(campaign)
     product_ctx = followup_engine._product_dict(campaign)
@@ -102,19 +94,21 @@ def deliver_scheduled_followup_via_gmail(
         "email": to_addr,
     }
 
-    subject, body = generate_gmail_draft_email(
+    # Follow-up post-secuencia opcional: último intento con aire de despedida.
+    body = generate_followup_message(
         prospect=prospect_ctx,
+        previous_messages=history_payload,
         campaign=campaign_ctx,
         product=product_ctx,
-        tone=campaign.tone,
         education=education,
-        conversation_history=history_payload,
-        last_prospect_inbound=ci.normalize_inbound_text_for_classification(last_inbound_text)
-        if last_inbound_text
-        else None,
-        prospect_timing_soft=timing_soft,
-        prospect_booking_priority=booking_priority,
+        objection_type=prospect.objection_type,
+        interest_level=prospect.interest_level or "low",
+        outbound_seq_index=int(prospect.outreach_touch_count or 0),
+        allow_soft_meeting_hint=False,
+        is_final_goodbye=True,
     )
+    company = (prospect.company_name or "").strip() or "tu equipo"
+    subject = f"Cierro por acá — {company}"
 
     uid = int(campaign.seller_id)
     cid = int(campaign.company_id)

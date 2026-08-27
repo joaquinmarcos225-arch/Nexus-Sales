@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.models.product import Product
 from app.models.user import User
 from app.schemas.product import (
     ProductCreate,
+    ProductDocumentExtractRead,
     ProductInterpretRead,
     ProductInterpretRequest,
     ProductInterpretRootRequest,
@@ -19,6 +20,7 @@ from app.schemas.product import (
     ProductUpdate,
 )
 from app.services import openai_service
+from app.services.product_document_extract import DocumentExtractError, extract_document_text
 
 router = APIRouter(tags=["products"])
 
@@ -77,12 +79,43 @@ def _interpret_to_read(data: dict[str, str]) -> ProductInterpretRead:
     )
 
 
+@router.post(
+    "/companies/{company_id}/products/extract-document",
+    response_model=ProductDocumentExtractRead,
+)
+async def extract_company_product_document(
+    company_id: int,
+    _user: RequireProductEdit,
+    file: UploadFile = File(...),
+    _company=Depends(get_company),
+) -> ProductDocumentExtractRead:
+    """Extrae texto de PDF / DOCX / TXT / MD / CSV / HTML / JSON para el flujo de producto."""
+    data = await file.read()
+    try:
+        extracted = extract_document_text(
+            filename=file.filename or "documento",
+            data=data,
+            content_type=file.content_type,
+        )
+    except DocumentExtractError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    return ProductDocumentExtractRead(
+        text=extracted.text,
+        filename=extracted.filename,
+        format=extracted.format,
+        chars=extracted.chars,
+    )
+
+
 @router.post("/products/interpret", response_model=ProductInterpretRead)
 def interpret_product_global(
     payload: ProductInterpretRootRequest,
+    user: RequireProductEdit,
     db: Session = Depends(get_db),
 ) -> ProductInterpretRead:
     """Interpretación de producto desde texto largo (`raw_text`); requiere `company_id` válido."""
+    if user.company_id != payload.company_id:
+        raise HTTPException(status_code=403, detail="No tenés acceso a esta empresa")
     if db.get(Company, payload.company_id) is None:
         raise HTTPException(status_code=404, detail="Empresa no encontrada")
     data = openai_service.interpret_product_document(payload.raw_text)
@@ -96,6 +129,7 @@ def interpret_product_global(
 def interpret_company_product_document(
     company_id: int,
     payload: ProductInterpretRequest,
+    _user: RequireProductEdit,
     _company=Depends(get_company),
 ) -> ProductInterpretRead:
     data = openai_service.interpret_product_document(payload.document_text)
@@ -106,9 +140,9 @@ def interpret_company_product_document(
 def create_company_product(
     company_id: int,
     payload: ProductCreate,
+    _user: RequireProductCreate,
     db: Session = Depends(get_db),
     _company=Depends(get_company),
-    _user: User = Depends(RequireProductCreate),
 ) -> Product:
     product = Product(
         company_id=company_id,
@@ -116,6 +150,7 @@ def create_company_product(
         description=payload.description,
         value_proposition=payload.value_proposition,
         target_notes=payload.target_notes,
+        market_scope=payload.market_scope.value,
     )
     db.add(product)
     db.commit()
@@ -126,11 +161,14 @@ def create_company_product(
 @router.patch("/products/{product_id}", response_model=ProductRead)
 def update_product(
     payload: ProductUpdate,
+    _user: RequireProductEdit,
     db: Session = Depends(get_db),
     product: Product = Depends(get_product),
-    _user: User = Depends(RequireProductEdit),
 ) -> Product:
     data = payload.model_dump(exclude_unset=True)
+    if "market_scope" in data and data["market_scope"] is not None:
+        scope = data["market_scope"]
+        data["market_scope"] = scope.value if hasattr(scope, "value") else str(scope)
     for k, v in data.items():
         setattr(product, k, v)
     db.commit()
@@ -140,9 +178,9 @@ def update_product(
 
 @router.delete("/products/{product_id}", response_model=ProductRead)
 def soft_delete_product(
+    _user: RequireProductDelete,
     db: Session = Depends(get_db),
     product: Product = Depends(get_product),
-    _user: User = Depends(RequireProductDelete),
 ) -> Product:
     product.is_active = False
     db.commit()

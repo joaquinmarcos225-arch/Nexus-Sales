@@ -1,0 +1,22 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm 
+help npmrc` for supported config options.
+En línea: 1 Carácter: 1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...config options.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+> nexus-support@0.1.0 build
+> vite build
+
+vite v8.2.1 building client environment for production...
+[2K
+transforming...Ô£ô 19 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.99 kB Ôöé gzip:  0.47 kB
+dist/assets/index-DUJClFND.css   30.76 kB Ôöé gzip:  6.49 kB
+dist/assets/index-C-uxycgM.js   219.13 kB Ôöé gzip: 67.77 kB
+
+Ô£ô built in 374ms

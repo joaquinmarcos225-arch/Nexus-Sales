@@ -5,6 +5,7 @@ class UserRole(str, Enum):
     sdr = "sdr"
     manager = "manager"
     gerente = "gerente"
+    owner = "owner"  # dueño del workspace; mismos poderes de empresa que Director (B2B sales-led)
 
 
 class ProspectOwnershipStatus(str, Enum):
@@ -100,3 +101,18 @@ class IntegrationStatus(str, Enum):
     error = "error"
     extension_not_installed = "extension_not_installed"
     extension_connected = "extension_connected"
+
+
+class MarketScope(str, Enum):
+    """Alcance de mercado del producto (qué tipos de campaña admite)."""
+
+    b2b = "b2b"
+    b2c = "b2c"
+    both = "both"
+
+
+class OutreachMode(str, Enum):
+    """Modo concreto de una campaña (siempre B2B o B2C; nunca híbrido)."""
+
+    b2b = "b2b"
+    b2c = "b2c"

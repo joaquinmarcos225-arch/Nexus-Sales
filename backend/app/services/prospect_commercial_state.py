@@ -139,9 +139,10 @@ def resolve_commercial_state(
             return COMMERCIAL_PROSPECCION
         return COMMERCIAL_PROSPECCION
 
-    if status == ProspectStatus.not_interested.value:
+    prospect_status = (getattr(prospect, "status", None) or "").strip().lower()
+    if prospect_status == ProspectStatus.not_interested.value:
         return COMMERCIAL_NO_INTERESADO
-    if status == ProspectStatus.interested.value:
+    if prospect_status == ProspectStatus.interested.value:
         return COMMERCIAL_INTERESADO
     if getattr(prospect, "last_inbound_at", None):
         objection = (getattr(prospect, "objection_type", None) or "").strip().lower()

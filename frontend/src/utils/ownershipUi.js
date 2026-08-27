@@ -17,24 +17,38 @@ export function ownershipStatusLabel(status) {
 export function ownershipStatusBadgeClass(status) {
   const key = String(status || 'libre').toLowerCase()
   const map = {
-    libre: 'bg-emerald-50 text-emerald-800 ring-emerald-600/20',
-    tomado: 'bg-amber-50 text-amber-800 ring-amber-600/20',
-    en_secuencia: 'bg-sky-50 text-sky-800 ring-sky-600/20',
-    secuencia_finalizada: 'bg-violet-50 text-violet-800 ring-violet-600/20',
-    liberado: 'bg-slate-100 text-slate-700 ring-slate-500/20',
+    libre: 'bg-red-50 text-red-800 ring-red-600/20',
+    tomado: 'bg-zinc-100 text-zinc-800 ring-zinc-500/20',
+    en_secuencia: 'bg-zinc-900 text-white ring-zinc-900/25',
+    secuencia_finalizada: 'bg-zinc-100 text-zinc-700 ring-zinc-500/20',
+    liberado: 'bg-zinc-100 text-zinc-700 ring-zinc-500/20',
   }
-  return map[key] || 'bg-slate-100 text-slate-700 ring-slate-500/20'
+  return map[key] || 'bg-zinc-100 text-zinc-700 ring-zinc-500/20'
 }
 
-export function fmtDateTime(iso) {
+export function parseApiDateTime(iso) {
   if (!iso) {
+    return null
+  }
+  let s = String(iso).trim()
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !/(Z|[+-]\d{2}:\d{2})$/.test(s)) {
+    s = `${s}Z`
+  }
+  const d = new Date(s)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+export function fmtDateTime(iso, timezone) {
+  const d = parseApiDateTime(iso)
+  if (!d) {
     return '—'
   }
   try {
-    return new Date(iso).toLocaleString('es-AR', {
-      dateStyle: 'short',
-      timeStyle: 'short',
-    })
+    const opts = { dateStyle: 'short', timeStyle: 'short' }
+    if (timezone) {
+      opts.timeZone = timezone
+    }
+    return d.toLocaleString('es-AR', opts)
   } catch {
     return '—'
   }

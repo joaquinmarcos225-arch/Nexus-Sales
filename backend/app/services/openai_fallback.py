@@ -27,34 +27,115 @@ def is_openai_fallback_enabled() -> bool:
 
 
 def _first_name(prospect: dict[str, Any]) -> str:
-    name = (prospect.get("name") or "").strip()
-    return name.split()[0] if name else "Hola"
+    from app.services.outreach_display_names import prospect_greeting_name
+
+    return prospect_greeting_name(prospect)
+
+
+def resolve_selling_to_role(prospect: dict[str, Any]) -> str:
+    role = (prospect.get("selling_to_role") or prospect.get("role") or "").strip()
+    return role if len(role) >= 3 else "Decisor comercial"
+
+
+def follow_up_response_question_from_body(body: str) -> str:
+    lines = [ln.strip() for ln in (body or "").splitlines() if ln.strip()]
+    if not lines:
+        return "¿Tiene sentido seguir conversando?"
+    for line in reversed(lines):
+        if "?" in line and len(line) >= 12:
+            return line
+    for line in reversed(lines):
+        words = line.split()
+        if len(words) <= 2 and "?" not in line and len(line) <= 28:
+            continue
+        if len(line) >= 12:
+            return line
+    return lines[-1]
+
+
+def normalize_follow_up_internal(
+    internal: dict[str, Any],
+    *,
+    body: str,
+    prospect: dict[str, Any],
+    step_day: int,
+    step_objective: str,
+) -> dict[str, Any]:
+    out = dict(internal or {})
+    if len(str(out.get("why_it_matters") or "").strip()) < 8:
+        out["why_it_matters"] = (
+            f"Seguimiento Día {step_day}: {step_objective or 'retomar conversación'}"
+        )
+    if len(str(out.get("response_question") or "").strip()) < 8:
+        out["response_question"] = follow_up_response_question_from_body(body)
+    if len(str(out.get("selling_to_role") or "").strip()) < 3:
+        out["selling_to_role"] = resolve_selling_to_role(prospect)
+    return out
 
 
 def _sender_label(campaign: dict[str, Any]) -> str:
-    sender = (campaign.get("sender_name") or "").strip()
-    if sender:
-        return sender.split()[0]
-    return "Ana"
+    from app.services.outreach_display_names import sender_first_name
+
+    return sender_first_name(campaign_sender=campaign.get("sender_name"), fallback="Ana")
 
 
 def _brand_label(campaign: dict[str, Any]) -> str:
-    return (campaign.get("brand_name") or campaign.get("name") or "Nexus").strip()
+    from app.services.outreach_display_names import outreach_company_display
+
+    for key in ("brand_name", "company_name", "seller_company_name"):
+        label = outreach_company_display(campaign.get(key))
+        if label:
+            return label
+    return ""
 
 
-def _product_name(product: dict[str, Any] | None) -> str:
-    return (product or {}).get("name") or "Plataforma Nexus"
+def _product_name(product: dict[str, Any] | None, *, brand: str = "") -> str:
+    name = ((product or {}).get("name") or "").strip()
+    if name:
+        from app.services.outreach_display_names import is_placeholder_name
+
+        if not is_placeholder_name(name):
+            return name
+    return brand or "nuestra solución"
+
+
+def _value_proposition_benefit(product: dict[str, Any] | None) -> str:
+    """Convierte la propuesta de valor del producto a frase usable en copy de outreach."""
+    vp = re.sub(r"\s+", " ", ((product or {}).get("value_proposition") or "").strip()).rstrip(".")
+    if not vp or len(vp) < 12:
+        return "automatizar la búsqueda y el contacto por email, LinkedIn y WhatsApp"
+    if vp.lower().startswith("ayudamos"):
+        return vp[0].lower() + vp[1:] if len(vp) > 1 else vp
+    words = vp.split(None, 1)
+    first = words[0].lower()
+    rest = words[1] if len(words) > 1 else ""
+    if first.endswith("iza") and len(first) > 4:
+        infinitive = f"{first[:-3]}izar"
+    elif first.endswith("a") and len(first) > 4:
+        infinitive = f"{first[:-1]}ar"
+    else:
+        infinitive = first
+    phrase = f"{infinitive} {rest}".strip() if rest else infinitive
+    return phrase.lower()
+
+
+def _build_problem_line(product: dict[str, Any] | None) -> str:
+    """Bloque amplio desde VP del producto — sin audiencia fija («equipos comerciales»)."""
+    vp = re.sub(r"\s+", " ", ((product or {}).get("value_proposition") or "").strip()).rstrip(".")
+    if vp and vp.lower().startswith("ayudamos"):
+        clause = vp if vp.endswith(".") else f"{vp}."
+        if clause and clause[0].isupper():
+            clause = clause[0].lower() + clause[1:]
+        return f"Te escribo porque {clause}"
+    if vp and len(vp) >= 12:
+        clause = vp[0].lower() + vp[1:] if vp else vp
+        return f"Te escribo porque {clause}."
+    benefit = _value_proposition_benefit(product)
+    return f"Te escribo porque {benefit}."
 
 
 def _outcome_sentence(product: dict[str, Any] | None) -> str:
-    vp = (product or {}).get("value_proposition") or ""
-    vp = re.sub(r"\s+", " ", vp.strip())
-    if vp and len(vp) >= 24:
-        low = vp.lower()
-        if "ayudamos" in low:
-            return vp if vp.endswith(".") else f"{vp}."
-        return f"ayudamos a equipos comerciales a {vp.rstrip('.').lower()}"
-    return "equipos comerciales a contactar más prospectos en menos tiempo"
+    return _value_proposition_benefit(product)
 
 
 def _build_day1_sections(
@@ -62,47 +143,42 @@ def _build_day1_sections(
     prospect: dict[str, Any],
     campaign: dict[str, Any],
     product: dict[str, Any] | None,
+    channel: str = "linkedin",
 ) -> dict[str, str]:
-    first = _first_name(prospect)
-    sender = _sender_label(campaign)
-    brand = _brand_label(campaign)
-    product_name = _product_name(product)
-    outcome = _outcome_sentence(product)
-    role = (prospect.get("role") or prospect.get("selling_to_role") or "tu rol").strip()
-
-    problem = f"Te escribo porque ayudamos a {outcome}."
-    solution = (
-        f"Lo hacemos mediante {product_name}, que automatiza la búsqueda y el contacto "
-        f"por Mail, WhatsApp y LinkedIn desde un solo lugar."
+    """Primer contacto: una de 3 variantes automáticas (bloques grandes)."""
+    from app.services.message_structure_variants import (
+        build_first_touch_sections,
+        pick_first_touch_variant,
     )
-    benefits = (
-        "Esto les permite reducir el trabajo manual de prospección y dedicar más tiempo "
-        "a conversaciones reales."
-    )
-    cta = "¿Te interesaría coordinar una reunión breve para mostrarte cómo funciona?"
 
-    return {
-        "greeting": f"Hola {first},",
-        "presentation": f"Soy {sender} de {brand}.",
-        "problem": problem,
-        "solution": solution,
-        "benefits": benefits,
-        "cta": cta,
-        "_role": role,
-        "_product_name": product_name,
-    }
+    variant = pick_first_touch_variant(
+        channel=channel,
+        prospect_id=prospect.get("id"),
+        campaign_id=campaign.get("id") or campaign.get("campaign_id"),
+    )
+    return build_first_touch_sections(
+        channel=channel,
+        variant=variant,
+        prospect=prospect,
+        campaign=campaign,
+        product=product,
+    )
 
 
 def _build_day1_internal(sections: dict[str, str]) -> dict[str, str]:
     return {
-        "probable_problem": (
-            "reducir el trabajo manual de prospección y dedicar más tiempo a conversaciones reales"
-        ),
-        "why_it_matters": sections["problem"],
+        "probable_problem": sections.get("problem")
+        or "reducir tiempo manual de prospección y agendar más reuniones",
+        "why_it_matters": sections["presentation"],
         "hypothesis": sections["solution"],
         "response_question": sections["cta"],
         "selling_to_role": sections.get("_role") or "",
     }
+
+
+def _greet(first: str, *, suffix: str = ",") -> str:
+    first = (first or "").strip()
+    return f"Hola {first}{suffix}" if first else f"Hola{suffix}"
 
 
 def _build_followup_body(
@@ -111,54 +187,27 @@ def _build_followup_body(
     channel: str,
     prospect: dict[str, Any],
     product: dict[str, Any] | None,
+    campaign: dict[str, Any] | None = None,
 ) -> str:
-    first = _first_name(prospect)
-    product_name = _product_name(product)
+    from app.services.message_structure_variants import (
+        build_follow_up_body,
+        pick_follow_up_variant,
+    )
 
-    if step_day == 4:
-        return (
-            f"Hola {first},\n"
-            "Te había escrito hace unos días por email porque ayudamos a equipos a contactar "
-            "más prospectos en menos tiempo.\n"
-            "¿Sos la persona indicada para evaluar este tema o debería hablar con alguien más del equipo?"
-        )
-    if step_day == 7:
-        return (
-            f"Hola {first}.\n"
-            "Retomo mis mensajes anteriores para no insistir por distintos canales sin sentido.\n"
-            "¿Tiene sentido seguir conversando sobre este tema o preferís que lo deje para más adelante?"
-        )
-    if step_day == 10:
-        return (
-            f"Hola {first},\n\n"
-            f"Retomo el contacto porque vimos que equipos similares lograron más oportunidades comerciales "
-            f"al centralizar outreach en una sola herramienta como {product_name}.\n\n"
-            "Si te sirve, puedo compartirte en una charla breve cómo lo están aplicando."
-        )
-    if step_day == 13:
-        return (
-            f"Hola {first},\n"
-            "Retomo mis mensajes anteriores sobre prospección comercial.\n"
-            "¿Está en agenda para este año o preferís que lo dejemos para más adelante?"
-        )
-    if step_day == 16:
-        return (
-            f"Hola {first}.\n"
-            "Retomo mis mensajes anteriores por este canal.\n"
-            "Último intento por acá: ¿seguimos la conversación sobre outreach o preferís que lo dejemos por ahora?"
-        )
-    if step_day == 19:
-        return (
-            f"Hola {first},\n\n"
-            "Retomo brevemente porque no tuve respuesta a mis mensajes anteriores.\n"
-            "Cierro esta conversación por ahora y quedo a disposición si más adelante "
-            "tiene sentido retomar el tema con calma.\n\n"
-            "Saludos"
-        )
-
-    return (
-        f"Hola {first},\n"
-        "Retomo mis mensajes anteriores para ver si tiene sentido seguir conversando sobre este tema."
+    campaign = campaign or {}
+    variant = pick_follow_up_variant(
+        channel=channel,
+        prospect_id=prospect.get("id"),
+        campaign_id=campaign.get("id") or campaign.get("campaign_id"),
+        step_day=step_day,
+    )
+    return build_follow_up_body(
+        channel=channel,
+        variant=variant,
+        prospect=prospect,
+        campaign=campaign,
+        product=product,
+        step_day=step_day,
     )
 
 
@@ -172,50 +221,40 @@ def build_sdr_playbook_fallback_json(
     campaign: dict[str, Any] | None = None,
     prior_touches: list[dict[str, Any]] | None = None,
 ) -> str:
-    from app.services.lead_sourcing.sdr_playbook_outreach import _assemble_first_touch_body
+    """Fallback = mismo banco determinístico (sin inventar industria)."""
+    from app.services.cold_message_bank import first_touch_on_channel, render_cold_bank_touch
 
     campaign = campaign or {}
     prior = prior_touches or []
-    first_touch = not prior
-
-    if first_touch:
-        sections = _build_day1_sections(
-            prospect=prospect, campaign=campaign, product=product
-        )
-        internal = _build_day1_internal(sections)
-        body = _assemble_first_touch_body(
-            {k: sections[k] for k in ("greeting", "presentation", "problem", "solution", "benefits", "cta")}
-        )
-        product_name = sections["_product_name"]
-        payload: dict[str, Any] = {
-            "internal": internal,
-            "sections": {
-                k: sections[k]
-                for k in ("greeting", "presentation", "problem", "solution", "benefits", "cta")
-            },
-            "body": body,
-        }
-        if channel == "email":
-            payload["subject"] = product_name.split()[0] if product_name else "Seguimiento comercial"
-        return json.dumps(payload, ensure_ascii=False)
-
-    body = _build_followup_body(
-        step_day=step_day,
+    first_on_ch = first_touch_on_channel(prior, channel)
+    rendered = render_cold_bank_touch(
         channel=channel,
         prospect=prospect,
+        campaign=campaign,
         product=product,
+        prior_touches=prior,
+        first_touch=first_on_ch,
+        step_day=step_day,
     )
-    role = (prospect.get("role") or prospect.get("selling_to_role") or "").strip()
+    role = resolve_selling_to_role(prospect)
     internal = {
-        "probable_problem": _product_name(product),
-        "why_it_matters": f"Seguimiento Día {step_day}: {step_objective or 'retomar conversación'}",
-        "hypothesis": "",
-        "response_question": body.split("\n")[-1].strip() if body else "¿Tiene sentido seguir conversando?",
+        "probable_problem": (rendered.reasoning.probable_problem or "")[:400],
+        "why_it_matters": (rendered.reasoning.why_it_matters or step_objective or "")[:400],
+        "hypothesis": (rendered.reasoning.hypothesis or "")[:400],
+        "response_question": (rendered.reasoning.response_question or "")[:300],
         "selling_to_role": role,
     }
-    payload = {"internal": internal, "body": body}
+    if not first_on_ch:
+        internal = normalize_follow_up_internal(
+            internal,
+            body=rendered.body,
+            prospect=prospect,
+            step_day=step_day,
+            step_objective=step_objective,
+        )
+    payload: dict[str, Any] = {"internal": internal, "body": rendered.body}
     if channel == "email":
-        payload["subject"] = "Seguimiento"
+        payload["subject"] = rendered.subject or "Seguimiento"
     return json.dumps(payload, ensure_ascii=False)
 
 

@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Nexus Sales — Outreach Assist",
+  "version": "0.19.1",
+  "description": "FIX paste completo 0.19.1 — sin truncar a 500. Abrí WhatsApp Web desde Nexus y confirmá envíos.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["storage", "tabs", "scripting"],
+  "host_permissions": [
+    "https://web.whatsapp.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["content-whatsapp.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://nexus.costguard.com.ar/*"],
+      "js": ["page-bridge.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://nexus.costguard.com.ar/*"],
+      "js": ["content-nexus.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

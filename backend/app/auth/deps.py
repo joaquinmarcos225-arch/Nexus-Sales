@@ -83,19 +83,41 @@ RequireProductDelete = Annotated[User, Depends(require_permission(Permission.PRO
 RequireUserCreate = Annotated[User, Depends(require_permission(Permission.USER_CREATE))]
 RequireUserChangeRole = Annotated[User, Depends(require_permission(Permission.USER_CHANGE_ROLE))]
 RequireProspectReassign = Annotated[User, Depends(require_permission(Permission.PROSPECT_REASSIGN))]
+RequireCompanyConfig = Annotated[User, Depends(require_permission(Permission.COMPANY_CONFIG))]
 
 
-def user_session_payload(user: User) -> dict:
+def user_session_payload(user: User, db: Session | None = None) -> dict:
+    from app.services.support import is_nexus_support_ops
+
     role = normalize_role(user.role)
+    company_name = ""
+    try:
+        company = getattr(user, "company", None)
+        if company is not None and getattr(company, "name", None):
+            company_name = str(company.name).strip()
+        elif db is not None and user.company_id:
+            row = db.get(Company, user.company_id)
+            if row is not None and row.name:
+                company_name = str(row.name).strip()
+    except Exception:
+        company_name = ""
+
+    avatar_url = None
+    if (getattr(user, "avatar_key", None) or "").strip():
+        avatar_url = f"/users/{int(user.id)}/avatar"
+
     return {
         "user_id": user.id,
         "company_id": user.company_id,
-        "first_name": user.first_name,
-        "last_name": user.last_name,
-        "name": user.name,
+        "company_name": company_name,
+        "first_name": user.first_name or "",
+        "last_name": user.last_name or "",
+        "name": user.name or "",
         "email": user.email,
         "role": role.value,
-        "team_id": user.team_id,
-        "is_active": user.is_active,
+        "team_id": getattr(user, "team_id", None),
+        "is_active": bool(user.is_active),
         "permissions": permission_codes_for_role(role),
+        "is_support_ops": is_nexus_support_ops(user),
+        "avatar_url": avatar_url,
     }

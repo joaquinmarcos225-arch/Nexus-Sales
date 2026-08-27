@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth.deps import get_current_user
-from app.core.permissions import normalize_role
+from app.core.permissions import is_company_admin, normalize_role
 from app.database.session import get_db
 from app.deps import get_company
 from app.models.company import Company
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/companies", tags=["dev-testing"])
 
 
 def _require_gerente(user: User) -> None:
-    if normalize_role(user.role) != UserRole.gerente:
+    if not is_company_admin(user.role):
         raise HTTPException(status_code=403, detail="Solo el rol Gerente puede reiniciar el entorno de pruebas.")
 
 
@@ -42,7 +42,7 @@ def testing_reset_availability(
 ) -> TestingResetAvailabilityRead:
     if user.company_id != company_id:
         raise HTTPException(status_code=403, detail="Sin acceso a esta empresa")
-    if normalize_role(user.role) != UserRole.gerente:
+    if not is_company_admin(user.role):
         return TestingResetAvailabilityRead(
             enabled=False,
             reason="Solo visible para Gerente.",

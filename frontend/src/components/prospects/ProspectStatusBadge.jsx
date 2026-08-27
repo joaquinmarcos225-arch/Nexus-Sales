@@ -1,12 +1,12 @@
 const STYLES = {
-  imported: 'bg-slate-100 text-slate-800 border-slate-200',
-  compatible: 'bg-emerald-50 text-emerald-900 border-emerald-200',
-  not_compatible: 'bg-rose-50 text-rose-900 border-rose-200',
-  contacted: 'bg-sky-50 text-sky-900 border-sky-200',
-  replied: 'bg-indigo-50 text-indigo-900 border-indigo-200',
-  interested: 'bg-lime-50 text-lime-900 border-lime-200',
-  not_interested: 'bg-stone-100 text-stone-800 border-stone-200',
-  meeting_booked: 'bg-violet-50 text-violet-900 border-violet-200',
+  imported: 'bg-zinc-100 text-zinc-800 border-zinc-200',
+  compatible: 'bg-red-50 text-red-900 border-red-200',
+  not_compatible: 'bg-red-50 text-red-900 border-red-200',
+  contacted: 'bg-zinc-100 text-zinc-800 border-zinc-200',
+  replied: 'bg-red-50 text-red-800 border-red-200',
+  interested: 'bg-red-50 text-red-900 border-red-200',
+  not_interested: 'bg-zinc-100 text-zinc-800 border-zinc-200',
+  meeting_booked: 'bg-zinc-900 text-white border-zinc-900',
   failed: 'bg-red-100 text-red-900 border-red-200',
 }
 

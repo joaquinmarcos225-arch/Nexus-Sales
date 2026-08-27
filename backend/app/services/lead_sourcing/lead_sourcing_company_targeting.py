@@ -1,4 +1,4 @@
-"""Targeting Phantom/ICP por empresa real del pipeline (no búsqueda global genérica)."""
+"""Targeting ICP por empresa real del pipeline (no búsqueda global genérica)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from app.services.lead_sourcing.company_extraction_policy import (
     display_company_name,
     passes_phantom_company_gate,
 )
+from app.services.lead_sourcing.env_config import getenv
 MIN_COMPANY_FILTER_SCORE = 70
 
 # Solo tokens sueltos de 1 palabra que generan ruido como keyword global (no nombres de empresa multi-palabra).
@@ -42,20 +43,6 @@ LINKEDIN_SEARCH_ROLES: tuple[str, ...] = (
     "GTM",
     "Revenue",
 )
-
-# Orden fijo Phantom (ignora rol de campaña — solo fallback LinkedIn).
-PHANTOM_ROLE_FALLBACK_ORDER: tuple[str, ...] = (
-    "Founder",
-    "CEO",
-    "Co-Founder",
-    "VP Sales",
-    "Head of Sales",
-)
-
-
-def phantom_role_fallback_order() -> list[str]:
-    """Roles que Phantom prueba por empresa, en orden, hasta 3 intentos."""
-    return [_plain_role_term(r) for r in PHANTOM_ROLE_FALLBACK_ORDER]
 
 GENERIC_COMPANY_PHRASES = (
     "saas development",
@@ -268,55 +255,24 @@ def _company_priority(tc: TargetCompany) -> int:
     return score
 
 
-@dataclass
-class CompanySearchPlan:
-    company_name: str
-    linkedin_keywords: str
-    linkedin_url: str
-    role_term: str
-    icp_relevance_score: int = 0
-    role_try_order: list[str] = field(default_factory=list)
-
-    def to_debug_dict(self) -> dict[str, Any]:
-        return {
-            "company": self.company_name,
-            "role_term": self.role_term,
-            "role_try_order": list(self.role_try_order),
-            "linkedin_keywords": self.linkedin_keywords,
-            "linkedin_url": self.linkedin_url,
-            "site_query": self.linkedin_keywords,
-        }
+def _default_max_target_companies() -> int:
+    raw = (getenv("LEAD_SOURCING_MAX_TARGET_COMPANIES") or "8").strip()
+    try:
+        return max(1, min(50, int(raw)))
+    except ValueError:
+        return 8
 
 
 def collect_target_companies(
     companies: list[CompanyCandidateRead],
-    phantom_queue: dict | None,
+    _legacy_queue: dict | None = None,
     *,
     test_mode: bool = False,
     max_companies: int | None = None,
 ) -> list[TargetCompany]:
+    del test_mode
     out: list[TargetCompany] = []
     seen: set[str] = set()
-
-    def _add(name: str, url: str | None, score: int, key: str | None) -> None:
-        """Items ya en cola Phantom (dict) — sin gate de source_type."""
-        if score < MIN_COMPANY_FILTER_SCORE:
-            return
-        name = (name or "").strip()
-        if not _company_name_usable(name, url):
-            return
-        ck = _norm_company_key(key or name)
-        if not ck or ck in seen:
-            return
-        seen.add(ck)
-        out.append(
-            TargetCompany(
-                name=name,
-                url=(url or "").strip() or None,
-                icp_relevance_score=score,
-                canonical_key=ck,
-            )
-        )
 
     def _add_candidate(c: CompanyCandidateRead) -> None:
         if not passes_phantom_company_gate(c):
@@ -342,123 +298,9 @@ def collect_target_companies(
     for c in companies:
         _add_candidate(c)
 
-    if isinstance(phantom_queue, dict):
-        for item in phantom_queue.get("items") or []:
-            if not isinstance(item, dict):
-                continue
-            if item.get("kind") not in ("company", "linkedin_company"):
-                continue
-            _add(
-                str(item.get("name") or ""),
-                str(item.get("url") or "") or None,
-                int(item.get("icp_relevance_score") or 0),
-                str(item.get("external_id") or item.get("name") or ""),
-            )
-
-    from app.services.lead_sourcing.phantom_runtime import phantom_max_companies
-    from app.services.lead_sourcing.phantom_target_selection import select_phantom_target_companies
-
-    limit = max_companies if max_companies is not None else phantom_max_companies()
-    selected, _audit = select_phantom_target_companies(
-        out,
-        test_mode=test_mode,
-        max_companies=limit,
-    )
-    return selected
-
-
-def build_linkedin_keywords_query(
-    role_term: str,
-    *,
-    company_name: str | None = None,
-    industry_suffix: str = "SaaS",
-) -> str:
-    """
-    Query natural para LinkedIn Search Export (keywords / search URL).
-    Ej: "Acme Corp" Founder | "Acme Corp" CEO
-    """
-    role = _plain_role_term(role_term)
-    company = (company_name or "").strip()
-    if company and not is_generic_company_name(company):
-        return f'"{company}" {role}'
-    return f"{role} {industry_suffix}".strip()
-
-
-def search_plan_for_role(
-    tc: TargetCompany,
-    role: str,
-    *,
-    role_try_order: list[str] | None = None,
-) -> CompanySearchPlan:
-    from app.services.lead_sourcing.providers.phantombuster_linkedin_export import (
-        build_linkedin_people_search_url,
-    )
-
-    keywords = build_linkedin_keywords_query(role, company_name=tc.name)
-    order = role_try_order or [role]
-    return CompanySearchPlan(
-        company_name=tc.name,
-        linkedin_keywords=keywords,
-        linkedin_url=build_linkedin_people_search_url(keywords),
-        role_term=role,
-        icp_relevance_score=tc.icp_relevance_score,
-        role_try_order=order,
-    )
-
-
-def build_test_mode_search_plan(query: str) -> CompanySearchPlan:
-    from app.services.lead_sourcing.providers.phantombuster_linkedin_export import (
-        build_linkedin_people_search_url,
-    )
-
-    q = (query or "Head of Sales SaaS").strip()
-    return CompanySearchPlan(
-        company_name="",
-        linkedin_keywords=q,
-        linkedin_url=build_linkedin_people_search_url(q),
-        role_term="test",
-        icp_relevance_score=0,
-    )
-
-
-
-def build_company_search_plans(
-    campaign: Campaign,
-    targets: list[TargetCompany],
-    *,
-    max_companies: int = 8,
-    queries_per_company: int = 2,
-) -> list[CompanySearchPlan]:
-    """
-    Un plan por empresa; Phantom prueba hasta ``queries_per_company`` roles
-    en ``role_try_order`` hasta obtener matches válidos (fallback).
-    """
-    if not targets:
-        return []
-
-    role_order = phantom_role_fallback_order()
-
-    plans: list[CompanySearchPlan] = []
-    seen_companies: set[str] = set()
-    for tc in targets[:max_companies]:
-        from app.services.lead_sourcing.phantom_target_selection import (
-            is_blocked_phantom_target_name,
-        )
-
-        if is_blocked_phantom_target_name(tc.name) or is_generic_company_name(tc.name):
-            continue
-        ck = tc.canonical_key or _norm_company_key(tc.name)
-        if ck in seen_companies:
-            continue
-        seen_companies.add(ck)
-        plans.append(
-            search_plan_for_role(
-                tc,
-                role_order[0],
-                role_try_order=list(role_order),
-            )
-        )
-    return plans
+    limit = max_companies if max_companies is not None else _default_max_target_companies()
+    ranked = sorted(out, key=lambda tc: -tc.icp_relevance_score)
+    return [tc for tc in ranked if not is_generic_company_name(tc.name)][:limit]
 
 
 def fuzzy_match_target_company(

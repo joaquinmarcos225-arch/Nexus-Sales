@@ -1,115 +1,184 @@
 # Nexus Sales
 
-Monorepo **Nexus Sales** con frontend (React + Vite + Tailwind) y backend (FastAPI + SQLite + SQLAlchemy).
+Plataforma comercial B2B para equipos SDR: campañas, prospectos, secuencias multicanal (email, LinkedIn, WhatsApp), reuniones y métricas de equipo.
 
-**Fase 2:** empresas, usuarios por rol, productos y créditos (wallet + asignaciones).
+Monorepo con **frontend** (React + Vite + Tailwind) y **backend** (FastAPI + SQLite + SQLAlchemy).
 
-**Fase 3:** campañas comerciales (ICP, estimaciones de reuniones/costos simulados en backend, UI de listado/detalle y calculadora previa). Sin integraciones LinkedIn / Gmail / OpenAI / Calendar reales.
+## Qué incluye hoy
 
-**Fase 4:** prospectos por campaña (alta manual, bulk JSON, simulación, scoring local vs ICP, dedupe por `linkedin_url` o nombre+empresa sin LinkedIn). El endpoint bulk está pensado como receptor de futuras cargas desde extensión de Chrome sobre LinkedIn; no hay scraping ni API de LinkedIn aún.
+| Área | Estado |
+|------|--------|
+| Login JWT y roles (SDR, Manager, Gerente) | Operativo |
+| Campañas, prospectos, pipeline | Operativo |
+| Secuencia 21 días (Gmail, LinkedIn asistido, WhatsApp Cloud) | Operativo |
+| Google OAuth (Gmail + Calendar por usuario) | Operativo |
+| WhatsApp Business Cloud API | **Pendiente Meta** — MVP omite D7/D16; ver `docs/WHATSAPP_SETUP.md` |
+| Extensión Chrome LinkedIn Assist | Ver `browser-extension/TEAM_INSTALL.md` |
+| Centro de Operaciones (manager/gerente) | Operativo |
+| Lead sourcing (Brave / Prospeo / Phantom experimental) | Opcional por API keys |
+| HubSpot CRM (sync contactos + notas) | v1 con Private App token |
+| Salesforce CRM (sync contactos + tareas) | Operativo con Connected App + refresh token |
+| Deploy Docker (staging) | `docker-compose.yml` + `docs/PILOT_CHECKLIST.md` |
 
-## Requisitos (Windows)
+## Requisitos
 
 - **Node.js** LTS (incluye `npm`)
-- **Python** 3.11+ recomendado (probado también con 3.13)
-- **pip** actualizado
+- **Python** 3.11+ (probado también con 3.13)
+- Windows, macOS o Linux
 
-## Backend (FastAPI)
+## Desarrollo local (rápido)
 
-Desde la raíz del repositorio, en PowerShell o CMD:
+Piloto / staging con Docker: ver **`docs/PILOT_CHECKLIST.md`**.
 
-1. `cd backend`
-2. `pip install -r requirements.txt`  
-   *(Incluye `email-validator` para `EmailStr` en Pydantic.)*
-3. `python -m uvicorn app.main:app --reload`
+### 1. Backend
 
-*(Recomendado: entorno virtual `python -m venv .venv` y activarlo.)*
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8002 --reload
+```
 
-La API queda en `http://127.0.0.1:8000`.
+- API: [http://127.0.0.1:8002](http://127.0.0.1:8002)
+- Health: [http://127.0.0.1:8002/health](http://127.0.0.1:8002/health)
+- OpenAPI: [http://127.0.0.1:8002/docs](http://127.0.0.1:8002/docs)
 
-- **Health:** [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
-- **Documentación:** [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+SQLite se crea en `backend/data/nexus_sales.db` al primer arranque (`create_all`, sin Alembic por ahora).
 
-### Base de datos (SQLite)
+### 2. Frontend
 
-- Archivo por defecto: `backend/data/nexus_sales.db` (se crean carpeta y tablas al arrancar con `lifespan`).
-- **Sin Alembic (por ahora):** las tablas se generan con `create_all`.
-- Si venías de la **fase 1** y el SQLite no tiene las tablas nuevas, o aparece `"no such table: companies"`:
-  1. Pará uvicorn.
-  2. Borrá `backend/data/nexus_sales.db` (y la carpeta `data` si querés limpiar del todo).
-  3. Volvé a levantar el backend: se creará el archivo y correra el **seed demo** una sola vez (base vacía).
+```powershell
+cd frontend
+npm install
+copy .env.example .env
+npm run dev
+```
 
-### Seed demo (automático)
+Abre la URL de Vite (por defecto [http://localhost:5173](http://localhost:5173)).
 
-Al iniciar sin datos, se crea:
+App interna **Nexus Support** (no es Sales): `cd nexus-support && npm install && npm run dev` → [http://127.0.0.1:5174](http://127.0.0.1:5174). Ver [docs/NEXUS_SUPPORT.md](docs/NEXUS_SUPPORT.md).
 
-- Empresa **CostGuard Demo Client**
-- 1 **admin**, 1 **manager**, 3 **vendedores**
-- **2 productos**
-- **Wallet** con **500 USD** de créditos totales (enteros)
-- **Asignaciones** iniciales a los vendedores (suma asignada 400 USD; quedan **100 USD** sin asignar como demo)
+El frontend usa **proxy de Vite** hacia el backend en dev (`VITE_API_URL` en `.env` debe apuntar al mismo puerto que uvicorn, típicamente **8002**).
 
-Si la empresa demo ya existe, el seed **no duplica**.
+### 3. Login demo
 
-## Frontend (Vite + React + Tailwind)
+Tras el seed automático (base vacía), usá:
 
-1. `cd frontend`
-2. `npm install`
-3. `npm run dev`
+| Rol | Email | Contraseña |
+|-----|-------|------------|
+| SDR | `sdr@test.com` | `demo123` |
+| Manager | `manager@test.com` | `demo123` |
+| Gerente | `director@test.com` | `demo123` |
 
-Abre la URL que indique Vite (`http://localhost:5173`).
+Empresa demo: **CostGuard Demo Client**.
 
-Opcional: `frontend/.env`:
+Para omitir el seed: `NEXUS_SKIP_DEMO_SEED=1` en `backend/.env`. Con `NEXUS_REAL_MODE=1` el seed también se omite.
+
+## Variables de entorno mínimas (dev)
+
+Copiá plantillas:
+
+- `backend/.env.example` → `backend/.env`
+- `frontend/.env.example` → `frontend/.env`
+
+Para probar secuencias reales en local sin simulación:
 
 ```env
-VITE_API_URL=http://127.0.0.1:8000
+NEXUS_REAL_MODE=1
+NEXUS_ENABLE_SEQUENCE_TESTING=1
+OPENAI_API_KEY=sk-...
 ```
 
-Empresa seleccionada: se usa la primera empresa del API si no hay nada guardado en `localStorage` (`nexus_sales_company_id`). En el header verás nombre o selector si hay más de una.
+Gmail/Calendar: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `NEXUS_TOKEN_FERNET_KEY`, `NEXUS_FRONTEND_URL`.
 
-## Flujos rápidos (QA manual)
+WhatsApp sin Meta aún: `WHATSAPP_DRY_RUN=1` — ver [docs/WHATSAPP_SETUP.md](docs/WHATSAPP_SETUP.md).
 
-Arrancá backend + frontend. Abre **Productos**:
+Lista completa y comentarios: `backend/.env.example`.
 
-- Crear/editar/desactivar (soft delete) producto desde la tabla y el modal.
+## Flujos útiles en la UI
 
-**Caja / Créditos**:
+- **Consola** (`/dashboard`) — resumen del equipo
+- **Contactar** — outreach y cola LinkedIn
+- **Campañas** — ICP, secuencia, autopilot
+- **Prospectos** — detalle, historial de toques, ejecutar día N
+- **Configuración → Integraciones** — Google, WhatsApp, extensión LinkedIn
+- **Operaciones** (`/operaciones`) — solo manager/gerente: salud WhatsApp, scheduler, modo real
 
-- «Simular carga de saldo» → `POST /wallet/top-up`
-- «Asignar a vendedor» → debe bloquearse en UI si el monto es mayor que el disponible sin asignar; el backend responde 400 `"Saldo no asignado insuficiente"` si se fuerza.
+### Scripts de prueba (backend)
 
-**Equipo**, **Dashboard** y **Campañas** consumen el mismo API local.
+```powershell
+cd backend
+python scripts/setup_test_linkedin_d4.py   # prospecto listo para Día 4 LinkedIn
+python scripts/setup_test_whatsapp_d7.py   # prospecto listo para Día 7 WhatsApp
+```
 
-**Campañas (v0.3)**
+## Tests y CI
 
-- Listado: `/campanas`
-- Detalle: `/campanas/{id}` · estimaciones solo como rangos (no promesas exactas)
-- Verificación rápida backend: `POST /companies/{id}/campaigns/preview-estimates` con `{"prospect_count": N}`
+### Local
 
-La tabla `campaigns` se crea sola con `create_all` si el SQLite ya existía de fases anteriores.
+```powershell
+cd backend
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest -q
+```
 
-### CORS
+```powershell
+cd frontend
+npm run build
+```
 
-Orígenes permitidos: `http://localhost:5173` y `http://127.0.0.1:5173`.
+### GitHub Actions
 
-## Estructura del repositorio
+Workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+
+- **Backend:** `pytest` (105+ tests unitarios, sin API keys externas)
+- **Frontend:** `npm run build`
+
+Se dispara en push/PR a `main` o `master`.
+
+`npm run lint` existe pero **no bloquea CI** todavía (reglas estrictas de React 19 pendientes de limpieza).
+
+## Estructura del repo
 
 ```
-Nexus-sales/
-  frontend/
+Proyecto-J/
+  frontend/           # Nexus Sales (comercial)
+  nexus-support/      # Nexus Support (app interna, puerto 5174)
   backend/
-    app/
-      models/
-      schemas/
-      routes/
-      services/
-      database/
-    data/          # .db generado (no versionar)
-  README.md
+    app/              # FastAPI, modelos, servicios
+    data/             # SQLite (no versionar)
+    scripts/          # utilidades de QA
+  browser-extension/  # LinkedIn Assist
+  docs/
+    PRODUCTION.md     # deploy y checklist
+    WHATSAPP_SETUP.md
+  scripts/            # build manifest extensión, pack ZIP
+  dist/               # nexus-linkedin-assist.zip (generado, no versionar)
 ```
 
-## Siguientes ideas (fuera de fase 2)
+## Documentación
 
-- Migraciones formales (**Alembic**)
-- Autenticación y RBAC persistente por sesión
-- Integraciones (OpenAI, Gmail, Calendar) y extensión Chrome en paquete aparte
+| Doc | Contenido |
+|-----|-----------|
+| [docs/PRODUCTION.md](docs/PRODUCTION.md) | Deploy, seguridad, CORS, scheduler |
+| [docs/NEXUS_SUPPORT.md](docs/NEXUS_SUPPORT.md) | App interna Nexus Support (aparte de Sales) |
+| [docs/CRM_INTEGRATIONS.md](docs/CRM_INTEGRATIONS.md) | HubSpot + Salesforce |
+| [docs/WHATSAPP_SETUP.md](docs/WHATSAPP_SETUP.md) | Dry run, Meta, go-live |
+| [browser-extension/TEAM_INSTALL.md](browser-extension/TEAM_INSTALL.md) | Extensión LinkedIn para el equipo |
+
+Empaquetar extensión: `node scripts/pack-extension.mjs` → `dist/nexus-linkedin-assist.zip`
+
+## CORS
+
+En desarrollo: `localhost:5173` y `127.0.0.1:5173` (más regex local).
+
+En producción: definí `NEXUS_FRONTEND_URL` y/o `NEXUS_CORS_ORIGINS` (CSV). Detalle en [docs/PRODUCTION.md](docs/PRODUCTION.md).
+
+## Roadmap cercano
+
+- Verificación Meta / WhatsApp real (E2E Día 7)
+- HubSpot Salesforce OAuth por empresa en UI
+- Migraciones Alembic
+- ESLint en CI (limpiar ~70 avisos React 19)

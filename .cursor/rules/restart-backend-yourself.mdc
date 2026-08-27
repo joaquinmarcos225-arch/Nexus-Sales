@@ -1,0 +1,16 @@
+---
+description: El agente reinicia el backend cuando hace falta; nunca pedirle al usuario que lo haga.
+alwaysApply: true
+---
+
+# Reinicio del backend
+
+Cuando un cambio de Python/backend necesite reinicio (o el usuario diga que hay que reiniciar):
+
+1. **Reinicialo vos** (agente). No digas “reiniciá el backend” ni lo dejes como tarea del usuario.
+2. Puerto habitual: **8002** (`uvicorn app.main:app --host 127.0.0.1 --port 8002`).
+3. Procedimiento típico en Windows:
+   - Matar el proceso que escucha en 8002 (o el PID de uvicorn conocido).
+   - Arrancar de nuevo desde `backend/` con el mismo comando de README.
+   - Verificar `http://127.0.0.1:8002/health` (HTTP 200) antes de dar por hecho el reinicio.
+4. Si `--reload` ya está activo y el cambio se hot-reloadeó, podés omitir kill/start, pero **confirmá health** si el usuario va a probar ya.

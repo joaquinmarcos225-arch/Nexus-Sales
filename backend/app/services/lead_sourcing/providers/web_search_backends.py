@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -16,6 +17,62 @@ SearchHit = tuple[str, str, str]  # (url, title, snippet)
 # Único endpoint de búsqueda de empresas en Nexus (Brave Web Search API).
 _BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
 _SERPAPI_URL = "https://serpapi.com/search.json"
+
+# Brave Web Search solo acepta este enum (ISO). Códigos LATAM como CO/PE/UY fallan 422.
+_BRAVE_COUNTRY_CODES = frozenset(
+    {
+        "ALL",
+        "AR",
+        "AU",
+        "AT",
+        "BE",
+        "BR",
+        "CA",
+        "CL",
+        "CN",
+        "DK",
+        "FI",
+        "FR",
+        "DE",
+        "HK",
+        "IN",
+        "ID",
+        "IT",
+        "JP",
+        "KR",
+        "MY",
+        "MX",
+        "NL",
+        "NZ",
+        "NO",
+        "PL",
+        "PT",
+        "PH",
+        "RU",
+        "SA",
+        "ZA",
+        "ES",
+        "SE",
+        "CH",
+        "TW",
+        "TR",
+        "GB",
+        "US",
+    }
+)
+
+
+def brave_country_param(country: str | None) -> str | None:
+    """Normaliza country para Brave; None = no enviar el param (evita 422)."""
+    if not country:
+        return None
+    code = country.strip().upper()
+    if len(code) != 2:
+        return None
+    if code in _BRAVE_COUNTRY_CODES:
+        return code
+    return None
+
 
 
 @dataclass(frozen=True)
@@ -76,25 +133,6 @@ def _search_fn(name: str) -> Callable[..., list[SearchHit]]:
     return {"brave": _search_brave, "serpapi": _search_serpapi}[name]
 
 
-def search_web(
-    query: str,
-    *,
-    limit: int = 20,
-    country: str | None = None,
-    provider: str = "web_search",
-) -> list[SearchHit]:
-    backend, fn = resolve_backend()
-    if not backend or not fn:
-        hint = missing_keys_hint()
-        if legacy_google_search_env_present():
-            hint += (
-                " Detectamos GOOGLE_SEARCH_API_KEY en .env: esa integración fue "
-                "reemplazada; no se llama a Google Custom Search."
-            )
-        raise ProviderAPIError(f"Web Search no configurado. {hint}", provider=provider)
-    return fn(query, limit=limit, country=country, provider=provider, backend=backend)
-
-
 def _search_brave(
     query: str,
     *,
@@ -105,8 +143,9 @@ def _search_brave(
 ) -> list[SearchHit]:
     api_key = getenv(backend.env_key)
     params: dict[str, str | int] = {"q": query, "count": min(max(limit, 1), 20)}
-    if country and len(country.strip()) == 2:
-        params["country"] = country.strip().upper()
+    brave_country = brave_country_param(country)
+    if brave_country:
+        params["country"] = brave_country
     headers = {"Accept": "application/json", "X-Subscription-Token": api_key}
     data = _http_get(_BRAVE_URL, headers=headers, params=params, provider=provider, label="Brave")
     web = data.get("web") if isinstance(data, dict) else {}
@@ -161,6 +200,19 @@ def _parse_response(resp: httpx.Response, *, provider: str, label: str) -> dict:
             provider=provider,
             status_code=401,
         )
+    if resp.status_code == 402:
+        raise ProviderAPIError(
+            f"Web Search ({label}): límite de uso agotado (402). "
+            "Renová el plan de Brave o agregá SERPAPI_API_KEY como fallback.",
+            provider=provider,
+            status_code=402,
+        )
+    if resp.status_code == 429:
+        raise ProviderAPIError(
+            f"Web Search ({label}): rate limit (429). Reintentá en unos minutos.",
+            provider=provider,
+            status_code=429,
+        )
     if resp.status_code >= 400:
         raise ProviderAPIError(
             f"Web Search ({label}) {resp.status_code}: {resp.text[:300]}",
@@ -168,6 +220,166 @@ def _parse_response(resp: httpx.Response, *, provider: str, label: str) -> dict:
             status_code=resp.status_code,
         )
     return resp.json() if resp.text else {}
+
+
+_BRAVE_QUOTA_EXHAUSTED_UNTIL: float = 0.0
+
+
+def brave_quota_exhausted() -> bool:
+    return time.monotonic() < _BRAVE_QUOTA_EXHAUSTED_UNTIL
+
+
+def mark_brave_quota_exhausted(*, cooldown_sec: int = 1800) -> None:
+    global _BRAVE_QUOTA_EXHAUSTED_UNTIL
+    _BRAVE_QUOTA_EXHAUSTED_UNTIL = time.monotonic() + max(300, int(cooldown_sec))
+
+
+def search_web(
+    query: str,
+    *,
+    limit: int = 20,
+    country: str | None = None,
+    provider: str = "web_search",
+) -> list[SearchHit]:
+    backend, fn = resolve_backend()
+    if not backend or not fn:
+        hint = missing_keys_hint()
+        if legacy_google_search_env_present():
+            hint += (
+                " Detectamos GOOGLE_SEARCH_API_KEY en .env: esa integración fue "
+                "reemplazada; no se llama a Google Custom Search."
+            )
+        raise ProviderAPIError(f"Web Search no configurado. {hint}", provider=provider)
+    if backend.name == "brave" and brave_quota_exhausted():
+        # No martillar Brave 402: ir directo a SerpAPI / DDG.
+        serp = next((b for b in BACKENDS if b.name == "serpapi" and getenv(b.env_key)), None)
+        if serp is not None:
+            try:
+                hits = _search_serpapi(
+                    query,
+                    limit=limit,
+                    country=country,
+                    provider=provider,
+                    backend=serp,
+                )
+                _record_web_cogs("serpapi")
+                return hits
+            except ProviderAPIError:
+                pass
+        hits = _search_ddg_html(query, limit=limit, provider=provider)
+        if hits:
+            _record_web_cogs("ddg")
+            return hits
+        raise ProviderAPIError(
+            "Web Search (Brave): límite de uso agotado (402). "
+            "Renová el plan de Brave o agregá SERPAPI_API_KEY como fallback.",
+            provider=provider,
+            status_code=402,
+        )
+    try:
+        hits = fn(query, limit=limit, country=country, provider=provider, backend=backend)
+        _record_web_cogs(backend.name)
+        return hits
+    except ProviderAPIError as exc:
+        # Brave quota / outage → SerpAPI (si hay key) → HTML DuckDuckGo.
+        if backend.name == "brave" and exc.status_code in (402, 429, 503):
+            if exc.status_code == 402:
+                mark_brave_quota_exhausted()
+            # Contar el intento Brave fallido por cuota (igual consumió request).
+            if exc.status_code in (402, 429):
+                _record_web_cogs("brave")
+            serp = next((b for b in BACKENDS if b.name == "serpapi" and getenv(b.env_key)), None)
+            if serp is not None:
+                try:
+                    hits = _search_serpapi(
+                        query,
+                        limit=limit,
+                        country=country,
+                        provider=provider,
+                        backend=serp,
+                    )
+                    _record_web_cogs("serpapi")
+                    return hits
+                except ProviderAPIError:
+                    pass
+            hits = _search_ddg_html(query, limit=limit, provider=provider)
+            if hits:
+                _record_web_cogs("ddg")
+                return hits
+        raise
+
+
+def _record_web_cogs(backend: str) -> None:
+    try:
+        from app.services.lead_sourcing.cogs_runtime_metrics import record_web_search
+
+        record_web_search(backend=backend, n=1)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _search_ddg_html(
+    query: str,
+    *,
+    limit: int,
+    provider: str,
+) -> list[SearchHit]:
+    """Fallback sin API key cuando Brave está sin cuota."""
+    import re
+    from html import unescape
+    from urllib.parse import quote_plus, unquote
+
+    url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+    # UA de navegador: el bot-style a veces devuelve HTML vacío / sin result__a.
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-AR,es;q=0.9,en;q=0.8",
+    }
+    try:
+        with httpx.Client(timeout=WEB_SEARCH_HTTP_TIMEOUT, follow_redirects=True) as client:
+            resp = client.get(url, headers=headers)
+    except httpx.RequestError:
+        return []
+    if resp.status_code >= 400 or not resp.text:
+        return []
+
+    # class puede ir antes o después de href en el HTML lite de DDG.
+    patterns = (
+        re.compile(
+            r'class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+            re.IGNORECASE | re.DOTALL,
+        ),
+        re.compile(
+            r'<a[^>]*href="([^"]+)"[^>]*class="[^"]*result__a[^"]*"[^>]*>(.*?)</a>',
+            re.IGNORECASE | re.DOTALL,
+        ),
+    )
+    hits: list[SearchHit] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        for href, title_html in pattern.findall(resp.text):
+            title = re.sub(r"<[^>]+>", "", unescape(title_html)).strip()
+            link = unescape(href).strip().replace("&amp;", "&")
+            if link.startswith("//"):
+                link = "https:" + link
+            if "uddg=" in link:
+                m = re.search(r"uddg=([^&]+)", link)
+                if m:
+                    link = unquote(m.group(1))
+            if not link.startswith("http") or not title:
+                continue
+            key = link.lower().rstrip("/")
+            if key in seen:
+                continue
+            seen.add(key)
+            hits.append((link, title, ""))
+            if len(hits) >= max(limit, 1):
+                return hits
+    return hits
 
 
 def _hits_from_items(

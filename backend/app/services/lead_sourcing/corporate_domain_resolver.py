@@ -21,6 +21,7 @@ from app.services.lead_sourcing.domain_semantic_validation import (
     classify_domain_trust,
     domain_semantically_matches_company,
 )
+from app.services.lead_sourcing.icp_region import brave_country_for_query, resolve_region_search_context
 from app.services.lead_sourcing.prospeo_contact_validation import (
     company_names_match,
     is_directory_host,
@@ -127,6 +128,60 @@ def _website_from_domain(domain: str) -> str:
     return f"https://{d}"
 
 
+def _lookup_domain_from_nexus_company_cache(company_name: str) -> CorporateDomainResolution | None:
+    """Lee dominio ya pagado/resuelto en nexus_company_cache (sesión corta propia)."""
+    try:
+        from app.database.session import SessionLocal
+        from app.services.nexus_contact_cache import find_company_domain_by_name
+
+        db = SessionLocal()
+        try:
+            hit = find_company_domain_by_name(db, company_name)
+        finally:
+            db.close()
+    except Exception:
+        return None
+    if not hit:
+        return None
+    dom, web = hit
+    if not dom or is_directory_host(dom) or _is_reject_resolution_host(dom):
+        return None
+    sem_ok, _ = domain_semantically_matches_company(company_name, dom)
+    if not sem_ok:
+        return None
+    return CorporateDomainResolution(
+        dom,
+        web or _website_from_domain(dom),
+        "nexus_company_cache",
+        message="ok",
+    )
+
+
+def _remember_domain_in_nexus_company_cache(
+    company_name: str, res: CorporateDomainResolution
+) -> None:
+    if not res.resolved or not res.domain:
+        return
+    try:
+        from app.database.session import SessionLocal
+        from app.services.nexus_contact_cache import remember_company_domain
+
+        db = SessionLocal()
+        try:
+            remember_company_domain(
+                db,
+                name=company_name,
+                domain=res.domain,
+                website_url=res.website_url,
+                source_provider=res.source or "domain_resolver",
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        _logger.debug("nexus company domain remember failed", exc_info=True)
+
+
 def _root_domain_bonus(host: str) -> int:
     """Priorizar dominio raíz (cube.dev) sobre subdominios profundos."""
     parts = host.lower().split(".")
@@ -184,14 +239,19 @@ def _guess_domain_candidates(company_name: str) -> list[str]:
     return out
 
 
-def _build_domain_search_queries(company_name: str) -> list[str]:
+def _build_domain_search_queries(
+    company_name: str,
+    *,
+    region_phrase: str | None = None,
+) -> list[str]:
     norm = (normalize_company_name(company_name) or company_name or "").strip()
     if not norm:
         return []
+    region_bit = f" {region_phrase}" if region_phrase else ""
     queries = [
-        f'"{norm}" official website {_SEARCH_EXCLUDES}',
-        f'"{norm}" homepage {_SEARCH_EXCLUDES}',
-        f"{norm} company website {_SEARCH_EXCLUDES}",
+        f'"{norm}" official website{region_bit} {_SEARCH_EXCLUDES}',
+        f'"{norm}" homepage{region_bit} {_SEARCH_EXCLUDES}',
+        f"{norm} company website{region_bit} {_SEARCH_EXCLUDES}",
     ]
     short_tokens = _name_tokens(norm)
     if short_tokens:
@@ -257,7 +317,8 @@ def _pick_best_from_hits(
 def _resolve_via_web_search(
     company_name: str,
     *,
-    country: str | None,
+    region_phrase: str | None = None,
+    region_ctx=None,
     deadline: float | None = None,
     max_queries: int = 5,
 ) -> CorporateDomainResolution:
@@ -273,11 +334,14 @@ def _resolve_via_web_search(
     seen_urls: set[str] = set()
     min_score = _min_hit_score()
 
-    for query in _build_domain_search_queries(company_name)[:max_queries]:
+    for i, query in enumerate(
+        _build_domain_search_queries(company_name, region_phrase=region_phrase)[:max_queries]
+    ):
         if deadline and time.monotonic() > deadline:
             break
+        brave_country = brave_country_for_query(region_ctx, i)
         try:
-            batch = search_web(query, limit=6, country=country, provider="domain_resolver")
+            batch = search_web(query, limit=6, country=brave_country, provider="domain_resolver")
         except ProviderAPIError as e:
             _logger.debug("domain search failed %s: %s", company_name, e)
             continue
@@ -287,10 +351,10 @@ def _resolve_via_web_search(
                 continue
             seen_urls.add(key)
             all_hits.append((url, title, snippet))
-
-    picked = _pick_best_from_hits(all_hits, company_name, min_score=min_score)
-    if picked:
-        return picked
+        # Early-exit: primer hit usable → no seguir quemando Brave.
+        picked = _pick_best_from_hits(all_hits, company_name, min_score=min_score)
+        if picked:
+            return picked
 
     if all_hits:
         picked_relaxed = _pick_best_from_hits(all_hits, company_name, min_score=max(8, min_score - 4))
@@ -330,9 +394,22 @@ def _resolve_via_domain_guesses(
     deadline: float | None = None,
     max_guesses: int = 6,
 ) -> CorporateDomainResolution:
+    from app.services.lead_sourcing.nexus_public_fetch import fetch_company_page_signals
+
     for guess in _guess_domain_candidates(company_name)[:max_guesses]:
         if deadline and time.monotonic() > deadline:
             break
+        if _domain_slug_matches_company(guess, company_name):
+            sig = fetch_company_page_signals(guess)
+            if sig is not None:
+                res = CorporateDomainResolution(
+                    guess,
+                    sig.url or _website_from_domain(guess),
+                    "nexus_fetch",
+                    message="ok",
+                )
+                _remember_domain_in_nexus_company_cache(company_name, res)
+                return res
         pros = _resolve_via_prospeo(company_name, domain_hint=guess)
         if pros.resolved:
             return pros
@@ -387,27 +464,38 @@ def resolve_corporate_domain_for_company(
             message="ok",
         )
 
-    country = (campaign.target_country if campaign else None) or company.country
-    max_queries = 2 if fast_mode else 5
-    max_guesses = 2 if fast_mode else 4
+    # Reusar dominio ya conocido en base propia Nexus (evita Brave).
+    cached = _lookup_domain_from_nexus_company_cache(name)
+    if cached is not None:
+        return cached
+
+    region_label = (campaign.target_country if campaign else None) or company.country
+    region_ctx = resolve_region_search_context(region_label)
+    region_phrase = region_ctx.query_phrase if region_ctx else region_label
+    max_queries = 3 if fast_mode else 5
+    max_guesses = 3 if fast_mode else 4
 
     if try_web_search and not _expired():
         web = _resolve_via_web_search(
             name,
-            country=country,
+            region_phrase=region_phrase,
+            region_ctx=region_ctx,
             deadline=deadline,
             max_queries=max_queries,
         )
         if web.resolved:
+            _remember_domain_in_nexus_company_cache(name, web)
             return web
 
     if try_prospeo and not _expired():
         pros = _resolve_via_prospeo(name)
         if pros.resolved:
+            _remember_domain_in_nexus_company_cache(name, pros)
             return pros
         if not _expired():
             guessed = _resolve_via_domain_guesses(name, deadline=deadline, max_guesses=max_guesses)
             if guessed.resolved:
+                _remember_domain_in_nexus_company_cache(name, guessed)
                 return guessed
 
     if _expired():

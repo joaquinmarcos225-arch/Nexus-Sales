@@ -48,11 +48,51 @@ class Permission(str, Enum):
     USER_CHANGE_ROLE = "user.change_role"
     USER_ACTIVATE = "user.activate"
     COMPANY_CONFIG = "company.config"
+    BILLING_MANAGE = "billing.manage"
     CONNECTIONS_OWN = "connections.own"
 
-    # Métricas (futuro)
+    # Métricas y operaciones
     METRICS_TEAM = "metrics.team"
+    OPERATIONS_CONTROL = "operations.control"
 
+
+_GERENTE_BASE = frozenset(
+    {
+        Permission.CAMPAIGN_VIEW,
+        Permission.CAMPAIGN_CREATE,
+        Permission.CAMPAIGN_VIEW_TEAM,
+        Permission.LEAD_SOURCING_RUN,
+        Permission.OUTREACH_GENERATE,
+        Permission.OUTREACH_EDIT_OWN,
+        Permission.OUTREACH_REVIEW_TEAM,
+        Permission.PROSPECT_VIEW,
+        Permission.PROSPECT_CLAIM,
+        Permission.PROSPECT_ACT_OWN,
+        Permission.PROSPECT_ACT_TEAM,
+        Permission.PROSPECT_RELEASE,
+        Permission.PROSPECT_REASSIGN,
+        Permission.PROSPECT_RULES,
+        Permission.SEQUENCE_VIEW_OWN,
+        Permission.SEQUENCE_VIEW_TEAM,
+        Permission.SEQUENCE_PAUSE_TEAM,
+        Permission.PRODUCT_VIEW,
+        Permission.PRODUCT_CREATE,
+        Permission.PRODUCT_EDIT,
+        Permission.PRODUCT_DELETE,
+        Permission.ICP_MANAGE,
+        Permission.PLAYBOOK_MANAGE,
+        Permission.TEAM_VIEW,
+        Permission.TEAM_CREATE,
+        Permission.TEAM_EDIT,
+        Permission.USER_CREATE,
+        Permission.USER_EDIT,
+        Permission.USER_CHANGE_ROLE,
+        Permission.USER_ACTIVATE,
+        Permission.COMPANY_CONFIG,
+        Permission.CONNECTIONS_OWN,
+        Permission.METRICS_TEAM,
+    }
+)
 
 ROLE_PERMISSIONS: dict[UserRole, frozenset[Permission]] = {
     UserRole.sdr: frozenset(
@@ -91,48 +131,44 @@ ROLE_PERMISSIONS: dict[UserRole, frozenset[Permission]] = {
             Permission.TEAM_VIEW,
             Permission.CONNECTIONS_OWN,
             Permission.METRICS_TEAM,
+            Permission.OPERATIONS_CONTROL,
         }
     ),
-    UserRole.gerente: frozenset(
-        {
-            Permission.CAMPAIGN_VIEW,
-            Permission.CAMPAIGN_CREATE,
-            Permission.CAMPAIGN_VIEW_TEAM,
-            Permission.OUTREACH_REVIEW_TEAM,
-            Permission.PROSPECT_VIEW,
-            Permission.PROSPECT_ACT_TEAM,
-            Permission.PROSPECT_RELEASE,
-            Permission.PROSPECT_REASSIGN,
-            Permission.PROSPECT_RULES,
-            Permission.SEQUENCE_VIEW_TEAM,
-            Permission.SEQUENCE_PAUSE_TEAM,
-            Permission.PRODUCT_VIEW,
-            Permission.PRODUCT_CREATE,
-            Permission.PRODUCT_EDIT,
-            Permission.PRODUCT_DELETE,
-            Permission.ICP_MANAGE,
-            Permission.PLAYBOOK_MANAGE,
-            Permission.TEAM_VIEW,
-            Permission.TEAM_CREATE,
-            Permission.TEAM_EDIT,
-            Permission.USER_CREATE,
-            Permission.USER_EDIT,
-            Permission.USER_CHANGE_ROLE,
-            Permission.USER_ACTIVATE,
-            Permission.COMPANY_CONFIG,
-            Permission.CONNECTIONS_OWN,
-            Permission.METRICS_TEAM,
-        }
-    ),
+    # Director / gerente: opera la empresa e también puede tomar y ejecutar outreach propio
+    UserRole.gerente: _GERENTE_BASE,
+    # Owner: mismo alcance que Director (billing self-serve removido; B2B sales-led)
+    UserRole.owner: _GERENTE_BASE,
 }
 
 
 def normalize_role(raw: str) -> UserRole:
     """Acepta roles legacy (seller/admin) y los normaliza."""
-    legacy = {"seller": UserRole.sdr, "admin": UserRole.gerente, "director": UserRole.gerente}
-    if raw in legacy:
-        return legacy[raw]
-    return UserRole(raw)
+    key = (raw or "").strip().lower()
+    legacy = {
+        "seller": UserRole.sdr,
+        "admin": UserRole.gerente,
+        "director": UserRole.gerente,
+    }
+    if key in legacy:
+        return legacy[key]
+    try:
+        return UserRole(key)
+    except ValueError as exc:
+        raise ValueError(f"Rol inválido: {raw!r}") from exc
+
+
+def safe_normalize_role(raw: str, *, default: UserRole = UserRole.sdr) -> UserRole:
+    try:
+        return normalize_role(raw)
+    except ValueError:
+        return default
+
+
+def is_company_admin(role: UserRole | str) -> bool:
+    """Gerente (director) u owner — administración de empresa / pool de créditos."""
+    if isinstance(role, str):
+        role = normalize_role(role)
+    return role in (UserRole.gerente, UserRole.owner)
 
 
 def permissions_for_role(role: UserRole | str) -> frozenset[Permission]:

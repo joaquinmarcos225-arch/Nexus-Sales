@@ -1,53 +1,65 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 export function CollapsibleSection({
+  id,
   title,
   subtitle,
   badge,
   defaultOpen = false,
-  accent = 'brand',
+  open: openProp,
+  onOpenChange,
+  tone = 'default',
   children,
 }) {
-  const [open, setOpen] = useState(defaultOpen)
+  const [internalOpen, setInternalOpen] = useState(defaultOpen)
+  const open = openProp !== undefined ? openProp : internalOpen
 
-  const accentRing =
-    accent === 'notifications'
-      ? 'ring-amber-200/60 hover:ring-amber-300/70'
-      : 'ring-rose-200/50 hover:ring-rose-300/60'
+  useEffect(() => {
+    if (defaultOpen) {
+      setInternalOpen(true)
+    }
+  }, [defaultOpen])
+
+  function setOpen(next) {
+    const value = typeof next === 'function' ? next(open) : next
+    onOpenChange?.(value)
+    if (openProp === undefined) {
+      setInternalOpen(value)
+    }
+  }
+
+  const toneAttr =
+    tone === 'linkedin' || tone === 'whatsapp' || tone === 'mail' || tone === 'call' ? tone : undefined
 
   return (
     <section
-      className={`overflow-hidden rounded-xl border border-zinc-200/90 bg-white shadow-sm shadow-zinc-900/5 ring-1 transition-shadow ${accentRing}`}
+      id={id}
+      className="nx-fold-panel transition-shadow"
+      data-tone={toneAttr}
     >
       <button
         type="button"
-        className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-zinc-50/80 sm:px-5"
+        className="nx-fold-header flex w-full items-center gap-2.5 px-4 py-2.5 text-left transition sm:px-5"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen((value) => !value)}
       >
-        <span
-          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${
-            accent === 'notifications'
-              ? 'from-amber-600 to-zinc-900'
-              : 'from-red-700 via-rose-900 to-zinc-900'
-          } text-white shadow-sm`}
-        >
+        <span className="nx-fold-chevron flex h-6 w-6 shrink-0 items-center justify-center rounded-md border shadow-none">
           <Chevron open={open} />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold text-zinc-900">{title}</span>
+          <span className="nx-fold-title block text-sm font-semibold leading-snug">{title}</span>
           {subtitle ? (
-            <span className="mt-0.5 block text-xs text-zinc-500">{subtitle}</span>
+            <span className="nx-fold-subtitle mt-0.5 block text-xs leading-snug">{subtitle}</span>
           ) : null}
         </span>
         {badge != null ? (
-          <span className="shrink-0 rounded-full bg-zinc-900 px-2.5 py-0.5 text-[11px] font-bold text-white">
+          <span className="nx-fold-badge shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold">
             {badge}
           </span>
         ) : null}
       </button>
       {open ? (
-        <div className="border-t border-zinc-100 px-4 py-4 sm:px-5 sm:py-5">{children}</div>
+        <div className="nx-fold-body px-4 py-3 sm:px-5">{children}</div>
       ) : null}
     </section>
   )

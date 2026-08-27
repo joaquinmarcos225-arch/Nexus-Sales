@@ -8,7 +8,8 @@ import { ActiveSequencesPanel } from '../components/prospects/ActiveSequencesPan
 import { ProspectConversationModal } from '../components/prospects/ProspectConversationModal.jsx'
 import { ProspectOutreachPanel } from '../components/prospects/ProspectOutreachPanel.jsx'
 import { PageHeader } from '../layout/PageHeader'
-import { ROLES, normalizeRole } from '../data/navigation.js'
+import { PageSection } from '../components/ui/PageSection.jsx'
+import { ROLES, normalizeRole, isCompanyAdmin } from '../data/navigation.js'
 import {
   claimProspect,
   fetchActiveSequences,
@@ -141,8 +142,7 @@ export default function ProspectosPage() {
       setTestingResetAvailable(false)
       return
     }
-    const role = normalizeRole(authUser?.role)
-    if (role !== ROLES.gerente) {
+    if (!isCompanyAdmin(authUser)) {
       setTestingResetAvailable(false)
       return
     }
@@ -207,11 +207,9 @@ export default function ProspectosPage() {
   }
 
   const viewerRoleNorm = normalizeRole(viewerRole)
+  const isAdminViewer = isCompanyAdmin({ role: viewerRoleNorm })
 
   function showClaimButton(prospect) {
-    if (viewerRoleNorm === ROLES.gerente) {
-      return false
-    }
     if (!prospect.can_claim) {
       return false
     }
@@ -219,17 +217,14 @@ export default function ProspectosPage() {
   }
 
   function showReleaseButton(prospect) {
-    return viewerRoleNorm === ROLES.gerente && prospect.can_release
+    return isAdminViewer && prospect.can_release
   }
 
   function showReassignButton(prospect) {
-    return viewerRoleNorm === ROLES.gerente && prospect.can_reassign
+    return isAdminViewer && prospect.can_reassign
   }
 
   function showCompleteOutreachButton(prospect) {
-    if (viewerRoleNorm === ROLES.gerente) {
-      return false
-    }
     return prospect.can_complete_outreach
   }
 
@@ -238,23 +233,14 @@ export default function ProspectosPage() {
   }
 
   function showGenerateSequenceButton(prospect) {
-    if (viewerRoleNorm === ROLES.gerente) {
-      return false
-    }
     return prospect.can_generate_sequence
   }
 
   function showViewSequenceButton(prospect) {
-    if (viewerRoleNorm === ROLES.gerente) {
-      return false
-    }
     return prospect.can_view_sequence
   }
 
   function showStartSequenceButton(prospect) {
-    if (viewerRoleNorm === ROLES.gerente) {
-      return false
-    }
     return prospect.can_start_sequence
   }
 
@@ -270,9 +256,6 @@ export default function ProspectosPage() {
   }
 
   function showConversationButton(prospect) {
-    if (viewerRoleNorm === ROLES.gerente) {
-      return false
-    }
     return (
       prospect.can_view_sequence ||
       prospect.ownership_status === 'en_secuencia' ||
@@ -328,7 +311,11 @@ export default function ProspectosPage() {
 
   return (
     <>
-      <PageHeader title="Prospectos" description={pageDescription(viewerRole)} />
+      <PageHeader
+        kicker="Operaciones"
+        title="Prospectos"
+        description={pageDescription(viewerRole)}
+      />
       <AlertBanner message={error} onDismiss={() => setError(null)} />
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -337,12 +324,12 @@ export default function ProspectosPage() {
           placeholder="Buscar por nombre, empresa, email..."
           value={search}
           onChange={(ev) => setSearch(ev.target.value)}
-          className="min-w-[220px] flex-1 rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm"
+          className="nx-input min-w-[220px] flex-1"
         />
         <select
           value={statusFilter}
           onChange={(ev) => setStatusFilter(ev.target.value)}
-          className="rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm"
+          className="nx-input w-auto min-w-[10rem]"
         >
           {OWNERSHIP_FILTER_OPTIONS.map((o) => (
             <option key={o.value || 'all-own'} value={o.value}>
@@ -353,7 +340,7 @@ export default function ProspectosPage() {
         <select
           value={commercialFilter}
           onChange={(ev) => setCommercialFilter(ev.target.value)}
-          className="rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm"
+          className="nx-input w-auto min-w-[10rem]"
         >
           {COMMERCIAL_FILTER_OPTIONS.map((o) => (
             <option key={o.value || 'all-comm'} value={o.value}>
@@ -361,22 +348,22 @@ export default function ProspectosPage() {
             </option>
           ))}
         </select>
-        <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm text-[#374151]">
+        <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-nx-border px-3 py-2 text-sm text-nx-ink">
           <input
             type="checkbox"
             checked={showSimulations}
             onChange={(ev) => setShowSimulations(ev.target.checked)}
-            className="rounded border-[#d1d5db]"
+            className="rounded border-nx-border"
           />
-          Mostrar simulaciones
+          Simulaciones
         </label>
         {caps.can_configure_rules ? (
           <button
             type="button"
             onClick={() => setRulesOpen(true)}
-            className="rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm hover:bg-[#f8fafc]"
+            className="nx-btn nx-btn-secondary"
           >
-            Configurar reglas
+            Reglas
           </button>
         ) : null}
         {testingResetAvailable ? (
@@ -386,26 +373,26 @@ export default function ProspectosPage() {
               setResetResult(null)
               setResetOpen(true)
             }}
-            className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100"
+            className="nx-btn border border-zinc-300 bg-zinc-50 text-zinc-900 hover:bg-zinc-100"
           >
-            Reiniciar entorno de pruebas
+            Reiniciar pruebas
           </button>
         ) : null}
       </div>
 
       {resetResult ? (
-        <p className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+        <p className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
           {resetResult.detail ||
             `Reiniciados ${resetResult.prospects_reset ?? 0} prospectos.`}
         </p>
       ) : null}
 
       {(ctxLoading || loading) && companyId ? (
-        <p className="text-sm text-[#6b7280]">Cargando prospectos...</p>
+        <p className="text-sm text-nx-muted">Cargando prospectos...</p>
       ) : null}
 
       {!companyId && !ctxLoading ? (
-        <p className="rounded-xl border border-dashed border-[#e5e7eb] bg-white px-4 py-8 text-center text-sm text-[#6b7280] shadow-sm">
+        <p className="rounded-xl border border-dashed border-nx-border bg-white px-4 py-8 text-center text-sm text-nx-muted shadow-sm">
           Sin empresa seleccionada.
         </p>
       ) : null}
@@ -413,10 +400,12 @@ export default function ProspectosPage() {
       {companyId && !loading ? (
         <>
           {commercialSummary ? (
-            <div className="mb-4 rounded-xl border border-[#e5e7eb] bg-white px-4 py-3 shadow-sm">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#6b7280]">
-                Pipeline comercial
-              </p>
+            <PageSection
+              title="Pipeline comercial"
+              description="Tocá un chip para filtrar la tabla."
+              defaultOpen={false}
+              className="mb-4"
+            >
               <div className="flex flex-wrap gap-2">
                 {COMMERCIAL_PIPELINE_CHIPS.map((chip) => (
                   <PipelineChip
@@ -431,17 +420,23 @@ export default function ProspectosPage() {
                   />
                 ))}
               </div>
-            </div>
+            </PageSection>
           ) : null}
           <ActiveSequencesPanel
             sequences={activeSequences}
             loading={activeLoading}
             onOpenProspect={openActiveSequence}
           />
-        <div className="overflow-hidden rounded-xl border border-[#e5e7eb] bg-white shadow-sm shadow-[#111827]/5">
+        <div className="nx-card overflow-hidden">
+          <div className="border-b border-nx-border/60 px-4 py-3">
+            <h2 className="text-sm font-semibold text-nx-ink">Bandeja de prospectos</h2>
+            <p className="mt-0.5 text-xs text-nx-muted">
+              {filtered.length} de {prospects.length} visibles con los filtros actuales.
+            </p>
+          </div>
           <div className="overflow-x-auto">
-            <table className="min-w-[1500px] w-full divide-y divide-[#e5e7eb] text-sm">
-              <thead className="bg-[#f8fafc] text-left text-xs font-semibold uppercase tracking-wide text-[#6b7280]">
+            <table className="min-w-[1500px] w-full divide-y divide-nx-border text-sm">
+              <thead className="bg-nx-card-muted text-left text-xs font-semibold uppercase tracking-wide text-nx-muted">
                 <tr>
                   <th className="whitespace-nowrap px-3 py-3">Empresa</th>
                   <th className="whitespace-nowrap px-3 py-3">Nombre</th>
@@ -457,10 +452,10 @@ export default function ProspectosPage() {
                   <th className="whitespace-nowrap px-3 py-3">Acciones</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#e5e7eb] text-[#374151]">
+              <tbody className="divide-y divide-nx-border text-nx-ink">
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={12} className="px-4 py-10 text-center text-[#6b7280]">
+                    <td colSpan={12} className="px-4 py-10 text-center text-nx-muted">
                       No hay prospectos para mostrar.
                     </td>
                   </tr>
@@ -477,11 +472,11 @@ export default function ProspectosPage() {
                       showReleaseButton(p) ||
                       showReassignButton(p)
                     return (
-                      <tr key={p.id} className="hover:bg-[#f8fafc]/90">
-                        <td className="px-3 py-3 text-[#374151]">{p.company_name || '—'}</td>
+                      <tr key={p.id} className="hover:bg-nx-card-muted/90">
+                        <td className="px-3 py-3 text-nx-ink">{p.company_name || '—'}</td>
                         <td className="px-3 py-3">
-                          <p className="font-medium text-[#111827]">{p.name || '—'}</p>
-                          <p className="text-xs text-[#9ca3af]">{p.email || '—'}</p>
+                          <p className="font-medium text-nx-ink">{p.name || '—'}</p>
+                          <p className="text-xs text-nx-subtle">{p.email || '—'}</p>
                         </td>
                         <td className="px-3 py-3">
                           <span
@@ -511,30 +506,30 @@ export default function ProspectosPage() {
                             ) : null}
                           </div>
                         </td>
-                        <td className="px-3 py-3 text-[#6b7280]">
+                        <td className="px-3 py-3 text-nx-muted">
                           <p>{ownerDisplayLabel(p)}</p>
-                          <p className="text-xs text-[#9ca3af]">{p.owner_team_name || ''}</p>
+                          <p className="text-xs text-nx-subtle">{p.owner_team_name || ''}</p>
                         </td>
-                        <td className="px-3 py-3 text-[#6b7280]">
+                        <td className="px-3 py-3 text-nx-muted">
                           <p>{p.sequence_current_day_label || p.sequence_current_label || formatLastSequence(p)}</p>
                           {p.ownership_status === 'en_secuencia' && p.next_touch_label ? (
-                            <p className="text-xs text-[#9ca3af]">{p.next_touch_label}</p>
+                            <p className="text-xs text-nx-subtle">{p.next_touch_label}</p>
                           ) : null}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3 text-[#6b7280]">
+                        <td className="whitespace-nowrap px-3 py-3 text-nx-muted">
                           <p>{p.next_touch_label || '—'}</p>
                           <p className="text-xs">{fmtDateTime(p.next_touch_at)}</p>
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3 text-[#6b7280]">
+                        <td className="whitespace-nowrap px-3 py-3 text-nx-muted">
                           {fmtDateTime(p.last_touch_at)}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3 text-[#6b7280]">
+                        <td className="whitespace-nowrap px-3 py-3 text-nx-muted">
                           {fmtDateTime(p.sequence_start_at || p.sequence_started_at)}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3 text-[#6b7280]">
+                        <td className="whitespace-nowrap px-3 py-3 text-nx-muted">
                           {fmtDateTime(p.sequence_end_at || p.sequence_completed_at)}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-3 text-[#6b7280]">
+                        <td className="whitespace-nowrap px-3 py-3 text-nx-muted">
                           {fmtDateTime(p.estimated_release_at || p.released_at)}
                         </td>
                         <td className="px-3 py-3">
@@ -544,7 +539,7 @@ export default function ProspectosPage() {
                                 type="button"
                                 disabled={busy}
                                 onClick={() => void runAction(p.id, () => claimProspect(p.id))}
-                                className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+                                className="rounded border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
                               >
                                 Tomar
                               </button>
@@ -554,7 +549,7 @@ export default function ProspectosPage() {
                                 type="button"
                                 disabled={busy}
                                 onClick={() => openOutreach(p, 'prepare')}
-                                className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                                className="rounded border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-50"
                               >
                                 {completeOutreachLabel(p)}
                               </button>
@@ -574,7 +569,7 @@ export default function ProspectosPage() {
                                 type="button"
                                 disabled={busy}
                                 onClick={() => openOutreach(p, 'view')}
-                                className="rounded border border-[#e5e7eb] px-2 py-1 text-xs font-medium text-[#374151] hover:bg-[#f8fafc] disabled:opacity-50"
+                                className="rounded border border-nx-border px-2 py-1 text-xs font-medium text-nx-ink hover:bg-nx-card-muted disabled:opacity-50"
                               >
                                 Ver Secuencia
                               </button>
@@ -584,7 +579,7 @@ export default function ProspectosPage() {
                                 type="button"
                                 disabled={busy}
                                 onClick={() => openConversation(p)}
-                                className="rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-900 hover:bg-indigo-100 disabled:opacity-50"
+                                className="rounded border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-50"
                               >
                                 Ver conversación
                               </button>
@@ -594,7 +589,7 @@ export default function ProspectosPage() {
                                 type="button"
                                 disabled={busy}
                                 onClick={() => void handleStartSequence(p)}
-                                className="rounded border border-nx-brand/30 bg-nx-brand px-2 py-1 text-xs font-medium text-white hover:bg-nx-brand/90 disabled:opacity-50"
+                                className="nx-btn nx-btn-primary px-2 py-1 text-xs"
                               >
                                 Iniciar Secuencia
                               </button>
@@ -606,7 +601,7 @@ export default function ProspectosPage() {
                                 onClick={() =>
                                   void runAction(p.id, () => releaseProspect(p.id))
                                 }
-                                className="rounded border border-[#e5e7eb] px-2 py-1 text-xs hover:bg-[#f8fafc] disabled:opacity-50"
+                                className="rounded border border-nx-border px-2 py-1 text-xs hover:bg-nx-card-muted disabled:opacity-50"
                               >
                                 Liberar
                               </button>
@@ -616,13 +611,13 @@ export default function ProspectosPage() {
                                 type="button"
                                 disabled={busy}
                                 onClick={() => openReassign(p)}
-                                className="rounded border border-[#e5e7eb] px-2 py-1 text-xs hover:bg-[#f8fafc] disabled:opacity-50"
+                                className="rounded border border-nx-border px-2 py-1 text-xs hover:bg-nx-card-muted disabled:opacity-50"
                               >
                                 Reasignar
                               </button>
                             ) : null}
                             {!hasActions ? (
-                              <span className="text-xs text-[#9ca3af]">—</span>
+                              <span className="text-xs text-nx-subtle">—</span>
                             ) : null}
                           </div>
                         </td>
@@ -633,7 +628,7 @@ export default function ProspectosPage() {
               </tbody>
             </table>
           </div>
-          <p className="border-t border-[#e5e7eb] px-4 py-2 text-xs text-[#9ca3af]">
+          <p className="border-t border-nx-border px-4 py-2 text-xs text-nx-subtle">
             {filtered.length} prospecto{filtered.length === 1 ? '' : 's'}
             {statusFilter ? ` · ownership: ${ownershipStatusLabel(statusFilter)}` : ''}
             {commercialFilter ? ` · comercial: ${commercialStateLabel(commercialFilter)}` : ''}
@@ -647,8 +642,8 @@ export default function ProspectosPage() {
           title="Reiniciar entorno de pruebas"
           onClose={() => !resetBusy && setResetOpen(false)}
         >
-          <div className="space-y-4 text-sm text-[#374151]">
-            <p className="font-medium text-[#111827]">
+          <div className="space-y-4 text-sm text-nx-ink">
+            <p className="font-medium text-nx-ink">
               ¿Seguro que querés reiniciar todo el entorno de pruebas?
             </p>
             <p>
@@ -661,7 +656,7 @@ export default function ProspectosPage() {
                 type="button"
                 onClick={() => setResetOpen(false)}
                 disabled={resetBusy}
-                className="rounded-lg border border-[#e5e7eb] px-4 py-2 text-sm disabled:opacity-60"
+                className="rounded-lg border border-nx-border px-4 py-2 text-sm disabled:opacity-60"
               >
                 Cancelar
               </button>
@@ -669,7 +664,7 @@ export default function ProspectosPage() {
                 type="button"
                 onClick={() => void handleConfirmReset()}
                 disabled={resetBusy}
-                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60"
+                className="rounded-lg bg-zinc-600 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
               >
                 {resetBusy ? 'Reiniciando…' : 'Confirmar reinicio'}
               </button>
@@ -685,12 +680,12 @@ export default function ProspectosPage() {
         >
           <form onSubmit={submitReassign} className="space-y-4">
             <label className="block text-sm">
-              <span className="mb-1 block font-medium text-[#374151]">Nuevo SDR</span>
+              <span className="mb-1 block font-medium text-nx-ink">Nuevo SDR</span>
               <select
                 required
                 value={reassignUserId}
                 onChange={(ev) => setReassignUserId(ev.target.value)}
-                className="w-full rounded-lg border border-[#e5e7eb] px-3 py-2 text-sm"
+                className="w-full rounded-lg border border-nx-border px-3 py-2 text-sm"
               >
                 <option value="">Seleccionar SDR</option>
                 {sdrUsers.map((u) => (
@@ -704,14 +699,14 @@ export default function ProspectosPage() {
               <button
                 type="button"
                 onClick={() => setReassignOpen(false)}
-                className="rounded-lg border border-[#e5e7eb] px-4 py-2 text-sm"
+                className="rounded-lg border border-nx-border px-4 py-2 text-sm"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
                 disabled={busyId != null}
-                className="rounded-lg bg-nx-brand px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+                className="nx-btn nx-btn-primary px-4 py-2 text-sm"
               >
                 Reasignar
               </button>
@@ -722,7 +717,7 @@ export default function ProspectosPage() {
 
       {rulesOpen ? (
         <Modal title="Reglas de prospectos" onClose={() => setRulesOpen(false)}>
-          <div className="space-y-4 text-sm text-[#374151]">
+          <div className="space-y-4 text-sm text-nx-ink">
             <p>
               Reglas de ownership entre SDRs de la empresa. Los cambios avanzados de
               configuración estarán en{' '}
@@ -747,7 +742,7 @@ export default function ProspectosPage() {
                 <strong>Reasignar:</strong> solo a usuarios con rol SDR de la misma empresa.
               </li>
             </ul>
-            <p className="rounded-lg bg-[#f8fafc] px-3 py-2 text-xs text-[#6b7280]">
+            <p className="rounded-lg bg-nx-card-muted px-3 py-2 text-xs text-nx-muted">
               Cooldown post-secuencia: 20 días (constante del sistema en esta etapa).
             </p>
           </div>

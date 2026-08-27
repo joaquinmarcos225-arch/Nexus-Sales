@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -11,8 +12,33 @@ from app.models.seller_allocation import SellerCreditAllocation
 from app.models.team import Team
 from app.models.user import User
 from app.schemas.user import UserCreate, UserReadWithCredit, UserUpdate
+from app.services import user_avatar as avatar_svc
 
 router = APIRouter(tags=["users"])
+
+
+@router.get("/users/{user_id}/avatar")
+def get_user_avatar(
+    user_id: int,
+    db: Session = Depends(get_db),
+    viewer: User = Depends(get_current_user),
+):
+    """Sirve la foto interna de un usuario de la misma empresa."""
+    target = db.get(User, user_id)
+    if target is None or not target.is_active:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if int(target.company_id) != int(viewer.company_id):
+        raise HTTPException(status_code=403, detail="No tenés acceso a este perfil")
+    path = avatar_svc.avatar_abs_path(target.avatar_key)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Sin foto de perfil")
+    media = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media, filename=path.name)
 
 
 def _user_dict(u: User, team_names: dict[int, str] | None = None) -> dict:
@@ -32,6 +58,7 @@ def _user_dict(u: User, team_names: dict[int, str] | None = None) -> dict:
         "email": u.email,
         "role": u.role,
         "is_active": u.is_active,
+        "avatar_url": f"/users/{u.id}/avatar" if (getattr(u, "avatar_key", None) or "").strip() else None,
         "created_at": u.created_at,
         "updated_at": u.updated_at,
     }
@@ -55,15 +82,21 @@ def list_users(
             select(SellerCreditAllocation).where(SellerCreditAllocation.company_id == company_id)
         ).all()
     }
+    from app.services.credits import _is_credit_eligible_role
+
+    from app.database.seed import is_demo_test_email
+
     out: list[UserReadWithCredit] = []
     for u in users:
+        if is_demo_test_email(u.email) or not u.is_active:
+            continue
         extra: dict = {}
-        if u.role == UserRole.sdr.value and u.id in alloc_map:
+        if _is_credit_eligible_role(u.role) and u.id in alloc_map:
             a = alloc_map[u.id]
             extra["allocated_balance"] = int(a.allocated_balance)
             extra["used_balance"] = int(a.used_balance)
             extra["available_balance"] = int(a.allocated_balance) - int(a.used_balance)
-        elif u.role == UserRole.sdr.value:
+        elif _is_credit_eligible_role(u.role):
             extra["allocated_balance"] = 0
             extra["used_balance"] = 0
             extra["available_balance"] = 0
@@ -75,9 +108,9 @@ def list_users(
 def create_user(
     company_id: int,
     payload: UserCreate,
+    _actor: RequireUserCreate,
     db: Session = Depends(get_db),
     _company=Depends(get_company),
-    _actor: User = Depends(RequireUserCreate),
 ) -> UserReadWithCredit:
     exists = db.scalars(
         select(User).where(User.company_id == company_id, User.email == str(payload.email))
@@ -127,33 +160,30 @@ def update_user(
 
     data = payload.model_dump(exclude_unset=True)
     if "role" in data and data["role"] is not None:
-        from app.core.permissions import normalize_role
-        from app.models.enums import UserRole as UR
+        from app.core.permissions import is_company_admin
 
-        if normalize_role(actor.role) != UR.gerente:
-            raise HTTPException(status_code=403, detail="Solo Gerente puede cambiar roles")
+        if not is_company_admin(actor.role):
+            raise HTTPException(status_code=403, detail="Solo Owner/Director puede cambiar roles")
         user.role = data["role"].value
         del data["role"]
     if "password" in data and data["password"]:
         user.password_hash = hash_password(data["password"])
         del data["password"]
     if "is_active" in data and data["is_active"] is not None:
-        from app.core.permissions import normalize_role
-        from app.models.enums import UserRole as UR
+        from app.core.permissions import is_company_admin
 
-        if normalize_role(actor.role) != UR.gerente:
-            raise HTTPException(status_code=403, detail="Solo Gerente puede activar/desactivar usuarios")
+        if not is_company_admin(actor.role):
+            raise HTTPException(status_code=403, detail="Solo Owner/Director puede activar/desactivar usuarios")
         user.is_active = data["is_active"]
     if "first_name" in data and data["first_name"]:
         user.first_name = data["first_name"].strip()
     if "last_name" in data and data["last_name"]:
         user.last_name = data["last_name"].strip()
     if "team_id" in data:
-        from app.core.permissions import normalize_role
-        from app.models.enums import UserRole as UR
+        from app.core.permissions import is_company_admin
 
-        if normalize_role(actor.role) != UR.gerente:
-            raise HTTPException(status_code=403, detail="Solo Gerente puede asignar equipos")
+        if not is_company_admin(actor.role):
+            raise HTTPException(status_code=403, detail="Solo Owner/Director puede asignar equipos")
         new_team_id = data["team_id"]
         if new_team_id is not None:
             team = db.get(Team, new_team_id)

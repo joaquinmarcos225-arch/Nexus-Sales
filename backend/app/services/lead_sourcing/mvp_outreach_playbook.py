@@ -1,4 +1,7 @@
-"""Playbook MVP — un toque por vez según día, canal y contexto previo."""
+"""Playbook MVP — un toque por vez según día, canal y contexto previo.
+
+Definición canónica de días/canales: `app/core/sequence_playbook.py`.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Literal
 
-Channel = Literal["email", "linkedin", "whatsapp"]
+Channel = Literal["email", "linkedin", "whatsapp", "call"]
 
 
 @dataclass(frozen=True)
@@ -16,42 +19,62 @@ class PlaybookStepDef:
     objective: str
 
 
-# Playbook por defecto hasta que el SDR configure playbooks completos.
+# Playbook Nexus aprobado — días 1, 4, 7, 10, 13, 16, 19
 DEFAULT_MVP_PLAYBOOK: tuple[PlaybookStepDef, ...] = (
     PlaybookStepDef(
         day=1,
         channel="email",
-        objective="Día 1 — Email: explicar qué hacemos, qué resultado genera y pedir reunión (único pitch completo).",
+        objective=(
+            "Día 1 — Email personalizado: asunto breve con curiosidad; gancho investigado "
+            "(empresa B2B / persona B2C); problema sectorial + solución del producto; "
+            "CTA reunión 10 min. Nunca cerrar venta."
+        ),
     ),
     PlaybookStepDef(
         day=4,
         channel="linkedin",
-        objective="Día 4 — LinkedIn: seguimiento humano. Referenciar Día 1. NO re-vender el producto. Preguntar si es la persona indicada o a quién hablar.",
+        objective=(
+            "Día 4 — LinkedIn seguimiento: puente corto sin culpa + ángulo nuevo "
+            "(dato/caso) + CTA videollamada 10 min. Sin re-pitch ni '¿pudiste leer?'."
+        ),
     ),
     PlaybookStepDef(
         day=7,
         channel="whatsapp",
-        objective="Día 7 — WhatsApp: contacto rápido. Referenciar mensajes previos. ¿Seguir conversando o dejarlo para más adelante? Sin explicar producto.",
+        objective=(
+            "Día 7 — WhatsApp seguimiento ultra corto: facilitar agenda "
+            "(esta tarde vs lunes / 5 min). Sin reproche."
+        ),
     ),
     PlaybookStepDef(
         day=10,
         channel="email",
-        objective="Día 10 — Email: aportar valor (dato, caso o aprendizaje). NO repetir pitch. Invitación suave a conversar.",
+        objective=(
+            "Día 10 — Email mismo hilo: dejar arriba + caso/dato nuevo + CTA reunión 10 min. "
+            "Sin repetir pitch del Día 1."
+        ),
     ),
     PlaybookStepDef(
         day=13,
         channel="linkedin",
-        objective="Día 13 — LinkedIn: nuevo ángulo (timing/prioridad). ¿Está en agenda este año o no es prioridad ahora?",
+        objective=(
+            "Día 13 — LinkedIn: puente + beneficio/dato distinto + CTA reunión. "
+            "PROHIBIDO preguntar si revisó el mensaje anterior."
+        ),
     ),
     PlaybookStepDef(
         day=16,
         channel="whatsapp",
-        objective="Día 16 — WhatsApp: último intento humano. Referenciar historial. ¿Seguir o dejarlo? Sin explicar producto.",
+        objective=(
+            "Día 16 — WhatsApp break-up suave: otras prioridades; puerta abierta. Sin culpa."
+        ),
     ),
     PlaybookStepDef(
         day=19,
         channel="email",
-        objective="Día 19 — Email: ruptura elegante. Cerrar sin vender, sin explicar, sin insistir. Puerta abierta.",
+        objective=(
+            "Día 19 — Email cierre: último mensaje, no ocupar bandeja, recontacto si cambian prioridades."
+        ),
     ),
 )
 
@@ -66,16 +89,24 @@ def lead_available_channels(
     linkedin_url: str | None,
     phone: str | None,
     whatsapp_number: str | None,
+    landline_phone: str | None = None,
 ) -> set[Channel]:
     from app.services.lead_sourcing.linkedin_identity import is_personal_linkedin_url
+    from app.services.whatsapp_phone_validation import (
+        sanitize_landline_phone,
+        sanitize_whatsapp_mobile,
+    )
 
     channels: set[Channel] = set()
     if (email or "").strip() and "@" in (email or ""):
         channels.add("email")
     if is_personal_linkedin_url(linkedin_url):
         channels.add("linkedin")
-    if (whatsapp_number or phone or "").strip():
+    mobile = sanitize_whatsapp_mobile(whatsapp_number) or sanitize_whatsapp_mobile(phone)
+    if mobile:
         channels.add("whatsapp")
+    if mobile or sanitize_landline_phone(landline_phone) or sanitize_landline_phone(phone):
+        channels.add("call")
     return channels
 
 

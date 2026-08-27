@@ -109,6 +109,7 @@ def test_queue_touch_invite_sent_within_window_is_message():
 
 
 def test_promote_stale_connection_check():
+    """Tras 120s sin lectura → check_failed (NO Contactar)."""
     now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     young = _prospect(
         linkedin_connection_status="checking",
@@ -119,7 +120,40 @@ def test_promote_stale_connection_check():
 
     stale = _prospect(
         linkedin_connection_status="checking",
-        linkedin_last_assisted_at=now - timedelta(seconds=76),
+        linkedin_last_assisted_at=now - timedelta(seconds=lsp.CHECKING_FALLBACK_SECONDS + 1),
     )
     assert lsp.promote_stale_connection_check(stale, now=now) is True
-    assert stale.linkedin_connection_status == las.CONN_INVITE_PENDING
+    assert stale.linkedin_connection_status == "check_failed"
+
+
+def test_heal_unverified_invite_pending():
+    """Contactar sin reloj ni borrador → check_queued (no satura checking)."""
+    p = _prospect(
+        linkedin_connection_status="invite_pending",
+        linkedin_last_assisted_at=None,
+        linkedin_invite_sent_at=None,
+        linkedin_assisted_draft=None,
+    )
+    assert lsp.heal_unverified_invite_pending(p) is True
+    assert p.linkedin_connection_status == "check_queued"
+
+    with_draft = _prospect(
+        linkedin_connection_status="invite_pending",
+        linkedin_last_assisted_at=None,
+        linkedin_assisted_draft="Hola, gracias por conectar.",
+    )
+    assert lsp.heal_unverified_invite_pending(with_draft) is False
+    assert with_draft.linkedin_connection_status == "invite_pending"
+
+    verified = _prospect(
+        linkedin_connection_status="invite_pending",
+        linkedin_last_assisted_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+    )
+    assert lsp.heal_unverified_invite_pending(verified) is False
+    assert verified.linkedin_connection_status == "invite_pending"
+
+
+def test_revive_check_failed_requeues():
+    p = _prospect(linkedin_connection_status="check_failed")
+    assert lsp.revive_check_failed_for_retry(p) is True
+    assert p.linkedin_connection_status == "check_queued"

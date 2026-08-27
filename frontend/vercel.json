@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/inicio", "destination": "/inicio.html" },
+    { "source": "/privacidad-extension", "destination": "/privacidad-extension.html" },
+    { "source": "/((?!.*\\.zip$).*)", "destination": "/index.html" }
+  ]
+}

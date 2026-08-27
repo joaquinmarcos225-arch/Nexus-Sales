@@ -38,11 +38,20 @@ REAL_BLOCK_ERROR_CODES: frozenset[str] = frozenset(
     {
         "INSUFFICIENT_CREDITS",
         "RATE_LIMITED",
+        "RATE_LIMIT_EXCEEDED",
         "INVALID_API_KEY",
         "PLAN_REQUIRED",
         "UNAUTHORIZED",
     }
 )
+
+
+def _normalize_error_code(error_code: str | None) -> str:
+    """Unifica variantes de Prospeo (p.ej. 'Rate limit exceeded' → RATE_LIMITED)."""
+    code = (error_code or "").strip().upper().replace(" ", "_").replace("-", "_")
+    if "RATE_LIMIT" in code:
+        return "RATE_LIMITED"
+    return code
 
 
 def is_http_success_error_code(error_code: str | None) -> bool:
@@ -69,10 +78,13 @@ def effective_prospeo_search_blocked(
         return False
     if remaining_credits is not None and remaining_credits <= 0:
         return True
-    code = (error_code or "").strip().upper()
+    code = _normalize_error_code(error_code)
     if code in REAL_BLOCK_ERROR_CODES:
         return True
     if insufficient_credits or rate_limited:
+        return True
+    # search_blocked solo cuenta si hay código/flag real de bloqueo (evita stale HTTP_200).
+    if search_blocked and (insufficient_credits or rate_limited or code in REAL_BLOCK_ERROR_CODES):
         return True
     return False
 
@@ -113,12 +125,16 @@ def classify_prospeo_error(
     remaining_credits: int | None = None,
 ) -> tuple[str, str | None]:
     """Devuelve (search_outcome, error_code normalizado)."""
-    code = (error_code or "").strip().upper()
-    msg = (message or "").strip()
-    msg_l = msg.lower()
-
+    code = _normalize_error_code(error_code)
+    # Conservar códigos HTTP_2xx tal cual para is_http_success_error_code.
+    raw_code = (error_code or "").strip().upper()
+    if is_http_success_error_code(raw_code):
+        return SEARCH_OUTCOME_OK, None
     if is_http_success_error_code(code):
         return SEARCH_OUTCOME_OK, None
+
+    msg = (message or "").strip()
+    msg_l = msg.lower()
 
     if remaining_credits is not None and remaining_credits <= 0:
         return SEARCH_OUTCOME_BLOCKED_CREDITS, code or "INSUFFICIENT_CREDITS"
@@ -132,7 +148,7 @@ def classify_prospeo_error(
         or "rate limit" in msg_l
         or "rate_limit" in msg_l
     ):
-        return SEARCH_OUTCOME_BLOCKED_RATE_LIMIT, code or "RATE_LIMITED"
+        return SEARCH_OUTCOME_BLOCKED_RATE_LIMIT, "RATE_LIMITED"
 
     if code == "PLAN_REQUIRED" or "plan_required" in msg_l:
         return SEARCH_OUTCOME_BLOCKED_PLAN, code or "PLAN_REQUIRED"
@@ -316,10 +332,74 @@ def sanitize_prospeo_health_dict(raw: dict[str, Any] | None) -> dict[str, Any]:
     out["search_blocked"] = blocked
     if not blocked:
         out["banner_message"] = None
+        out["rate_limited"] = False
+        out.pop("rate_limited_until", None)
         detail = str(out.get("detail") or "")
         if "HTTP_200" in detail or "integración Prospeo (HTTP_200)" in detail:
             out["detail"] = None
     return out
+
+
+def stamp_prospeo_rate_limit(
+    health: dict[str, Any] | None,
+    *,
+    cooldown_sec: int = 480,
+    error_code: str | None = "RATE_LIMITED",
+    detail: str | None = None,
+) -> dict[str, Any]:
+    """Marca rate limit con cooldown (default 45 min) para no martillar la API."""
+    from datetime import UTC, datetime, timedelta
+
+    base = sanitize_prospeo_health_dict(health if isinstance(health, dict) else None)
+    existing_until = base.get("rate_limited_until")
+    if existing_until and prospeo_rate_limit_cooldown_active(
+        {**base, "rate_limited": True, "rate_limited_until": existing_until}
+    ):
+        until_iso = existing_until
+    else:
+        until = datetime.now(UTC) + timedelta(seconds=max(300, int(cooldown_sec)))
+        until_iso = until.isoformat()
+    base.update(
+        {
+            "rate_limited": True,
+            "search_blocked": True,
+            "error_code": error_code or "RATE_LIMITED",
+            "rate_limited_until": until_iso,
+            "detail": detail or base.get("detail") or "Prospeo rate limit",
+            "banner_message": (
+                "Prospeo en rate limit. Nexus pausa búsquedas unos minutos y reintenta sola."
+            ),
+        }
+    )
+    return sanitize_prospeo_health_dict(base)
+
+
+def prospeo_rate_limit_cooldown_active(meta_or_health: dict[str, Any] | None) -> bool:
+    """True si el meta/health dice rate limit y el cooldown no expiró."""
+    from datetime import UTC, datetime
+
+    if not isinstance(meta_or_health, dict):
+        return False
+    health = meta_or_health.get("prospeo_health")
+    if isinstance(health, dict):
+        data = health
+    else:
+        data = meta_or_health
+    if not bool(data.get("rate_limited")) and "RATE_LIMIT" not in str(
+        data.get("error_code") or ""
+    ).upper():
+        return False
+    until_raw = data.get("rate_limited_until")
+    if not until_raw:
+        # Rate limit sin timestamp: tratar como activo (evitar hammering).
+        return True
+    try:
+        until = datetime.fromisoformat(str(until_raw).replace("Z", "+00:00"))
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=UTC)
+        return datetime.now(UTC) < until
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _sanitize_search_debug_row(row: dict[str, Any]) -> dict[str, Any]:

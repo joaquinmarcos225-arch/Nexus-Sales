@@ -411,6 +411,11 @@ def build_signals_from_keywords(text: str, prior_interest: str | None) -> Inboun
         iq = merge_interest_level(iq, "medium", objection)
     asks_q = "?" in text and len(text) > 15
     explicit = _explicit_meeting_commitment_heuristic(text)
+    defer_iso: str | None = None
+    if timing_hold or objection == "timing":
+        defer_iso = infer_defer_resume_utc(
+            inbound_text=text, defer_iso=None
+        ).isoformat()
     return InboundSignals(
         objection_type=objection,
         interest_level=iq,
@@ -419,8 +424,60 @@ def build_signals_from_keywords(text: str, prior_interest: str | None) -> Inboun
         asks_concrete_questions=asks_q,
         is_brushoff=brushoff and objection is None,
         prospect_timing_hold=timing_hold,
-        defer_resume_at_iso=None,
+        defer_resume_at_iso=defer_iso,
     )
+
+
+def inbound_classifier_confident_without_llm(text: str, sig: InboundSignals) -> bool:
+    """
+    True cuando heurísticas bastan (no llamar OpenAI para clasificar inbound).
+    Conservador: mensajes largos con preguntas ambiguas siguen yendo al modelo.
+    """
+    t = (text or "").strip()
+    if not t:
+        return True
+
+    if sig.objection_type == "not_interested":
+        return True
+    if sig.prospect_timing_hold or sig.objection_type == "timing":
+        return True
+    if sig.objection_type in ("no_time", "competitor", "not_priority", "send_info"):
+        return True
+    if sig.explicit_meeting_commitment and not sig.prospect_timing_hold:
+        return True
+
+    folded = fold_accents(t)
+    short_simple = len(t) < 40 and "?" not in t
+    if short_simple:
+        if sig.is_brushoff:
+            return True
+        if folded.rstrip(".") in {
+            "ok",
+            "dale",
+            "gracias",
+            "perfecto",
+            "listo",
+            "bien",
+            "genial",
+            "entendido",
+            "de acuerdo",
+            "si",
+            "no",
+        }:
+            return True
+
+    if "?" in t and len(t) > 40 and sig.objection_type is None:
+        return False
+    if len(t) > 200 and sig.objection_type is None and not sig.explicit_meeting_commitment:
+        return False
+    if sig.objection_type is None and not sig.explicit_meeting_commitment and not sig.is_brushoff:
+        if sig.interest_level in ("medium", "high") and not sig.asks_concrete_questions:
+            return True
+        if sig.interest_level == "low" and short_simple:
+            return True
+        return False
+
+    return True
 
 
 def normalize_inbound_text_for_classification(raw: str | None) -> str:
@@ -510,21 +567,31 @@ def classify_inbound_full(
     conversation_digest: str,
     education: str,
 ) -> InboundSignals:
-    """Keywords + clasificación compacta por modelo (fallback silencioso a keywords)."""
+    """Keywords primero; OpenAI solo si el mensaje es ambiguo."""
     from app.services import openai_service
 
     text = normalize_inbound_text_for_classification(inbound_text)
     kw = build_signals_from_keywords(text, prior_interest)
-    try:
-        raw = openai_service.classify_inbound_json_raw(
-            inbound_text=text,
-            conversation_digest=conversation_digest,
-            education=education,
-        )
-        llm = parse_classifier_json(raw)
-        merged = merge_llm_signals(kw, llm, prior_interest)
-    except Exception:
-        merged = kw
+    skip_llm = inbound_classifier_confident_without_llm(text, kw)
+    merged = kw
+    if not skip_llm and openai_service.openai_configured():
+        try:
+            raw = openai_service.classify_inbound_json_raw(
+                inbound_text=text,
+                conversation_digest=conversation_digest,
+                education=education,
+            )
+            llm = parse_classifier_json(raw)
+            merged = merge_llm_signals(kw, llm, prior_interest)
+        except Exception:
+            merged = kw
+    elif skip_llm:
+        try:
+            from app.services.lead_sourcing.cogs_runtime_metrics import record_openai_skipped_trivial
+
+            record_openai_skipped_trivial()
+        except Exception:
+            pass
     return _apply_booking_priority_to_signals(text, merged)
 
 

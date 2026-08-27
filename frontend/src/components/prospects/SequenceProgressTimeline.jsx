@@ -2,6 +2,7 @@ const CHANNEL_LABELS = {
   email: 'Email',
   linkedin: 'LinkedIn',
   whatsapp: 'WhatsApp',
+  call: 'Llamada',
 }
 
 function stepIcon(status) {
@@ -22,7 +23,7 @@ function stepIcon(status) {
 
 function stepClasses(status) {
   if (status === 'sent' || status === 'respondido') {
-    return 'border-emerald-200 bg-emerald-50 text-emerald-900'
+    return 'border-red-200 bg-red-50 text-red-900'
   }
   if (status === 'current') {
     return 'border-nx-brand/40 bg-nx-brand/10 text-nx-brand ring-2 ring-nx-brand/20'
@@ -31,9 +32,9 @@ function stepClasses(status) {
     return 'border-red-200 bg-red-50 text-red-800'
   }
   if (status === 'skipped') {
-    return 'border-slate-200 bg-slate-50 text-slate-500 line-through'
+    return 'border-nx-border bg-nx-card-muted text-nx-muted line-through'
   }
-  return 'border-[#e5e7eb] bg-white text-[#9ca3af]'
+  return 'border-nx-border bg-white text-nx-subtle'
 }
 
 function stepSubtitle(step) {
@@ -72,7 +73,7 @@ export function SequenceProgressTimeline({ steps = [] }) {
               </div>
             </div>
             {index < steps.length - 1 ? (
-              <div className="flex justify-center py-0.5 text-[#cbd5e1]">↓</div>
+              <div className="flex justify-center py-0.5 text-nx-border-strong">↓</div>
             ) : null}
           </div>
         )

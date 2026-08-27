@@ -13,8 +13,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.campaign import Campaign
+from app.models.enums import ProspectStatus
 from app.models.outreach import OutreachMessage
 from app.models.prospect import Prospect
+from app.models.user import User
 from app.services import conversation_intelligence as ci
 from app.services import followup_engine
 from app.services import multichannel_sequence as mseq
@@ -22,6 +24,10 @@ from app.services import pipeline_sync
 from app.services.ai_instruction_context import campaign_education_blob
 from app.services.gmail_automation_flags import gmail_automation_enabled, log_gmail_automation_skipped
 from app.services.gmail_drafts import get_valid_gmail_connection
+from app.services.sequence_gmail_draft_sent import (
+    reconcile_campaign_gmail_draft_sents,
+    reconcile_prospect_gmail_draft_sents,
+)
 from app.services.gmail_threads import (
     fetch_message_full,
     fetch_thread_full,
@@ -150,6 +156,22 @@ def _thread_involves_parties(messages: list[dict], *, user_email: str, prospect_
             return True
         if from_em == ue and pe in _norm_email(to_raw):
             return True
+    return False
+
+
+def _is_gmail_delivery_bounce(*, subject: str, body: str, from_header: str = "") -> bool:
+    """Ignora rebotes / DSN de Gmail — no son respuestas del prospecto."""
+    from_em = parse_address_email(from_header or "")
+    if from_em and ("mailer-daemon" in from_em or "postmaster" in from_em):
+        return True
+    subj = (subject or "").lower()
+    if "delivery status notification" in subj or "mail delivery failed" in subj:
+        return True
+    low = (body or "").lower()
+    if "address not found" in low and "wasn't delivered" in low:
+        return True
+    if "delivery status notification (failure)" in low:
+        return True
     return False
 
 
@@ -330,6 +352,18 @@ def process_gmail_inbound_for_prospect(
             prospect.id,
             gmail_message_id,
         )
+        try:
+            from app.services.crm import sync as crm_sync
+
+            crm_sync.sync_inbound_reply(
+                db,
+                prospect=prospect,
+                channel="email",
+                message_id=gmail_message_id,
+                message_body=body,
+            )
+        except Exception:
+            logger.exception("crm inbound sync failed prospect_id=%s", prospect.id)
         return True
 
     timing_soft = ci.timing_deferral_should_apply(sig, inbound_text=body)
@@ -374,6 +408,18 @@ def process_gmail_inbound_for_prospect(
         prospect.status,
         gmail_message_id,
     )
+    try:
+        from app.services.crm import sync as crm_sync
+
+        crm_sync.sync_inbound_reply(
+            db,
+            prospect=prospect,
+            channel="email",
+            message_id=gmail_message_id,
+            message_body=body,
+        )
+    except Exception:
+        logger.exception("crm inbound sync failed prospect_id=%s", prospect.id)
     return True
 
 
@@ -395,6 +441,9 @@ def _handle_inbound_message(
     reply_outcome = "skipped"
     prior_status = (prospect.status or "").strip()
     mid = (gmail_message_id or "").strip()
+    if _is_gmail_delivery_bounce(subject=subject, body=inbound_plain):
+        trace.append(f"bounce_skipped prospect={prospect.id} mid={mid}")
+        return 0, "skipped"
     try:
         if process_gmail_inbound_for_prospect(
             db,
@@ -429,29 +478,10 @@ def _handle_inbound_message(
         return imported_flag, overdue_out
 
     if already_auto_replied(db, prospect.id, mid):
-        task = get_pending_send_task(db, prospect.id, mid)
-        due_hint = ""
-        if task and task.due_at:
-            due_hint = f" vence {task.due_at.astimezone(UTC).strftime('%H:%M')} UTC"
-        log_auto_reply_outcome_to_activity(
-            campaign,
-            prospect,
-            mid,
-            "skipped_already",
-            detail=f"en cola{due_hint}",
-            task_id=int(task.id) if task else None,
-        )
         trace.append(f"auto_reply_skip_already prospect={prospect.id} mid={mid}")
         return imported_flag, "skipped_already"
 
     if imported_flag == 0 and not inbound_needs_auto_reply_retry(db, prospect.id, mid):
-        log_auto_reply_outcome_to_activity(
-            campaign,
-            prospect,
-            mid,
-            "skipped_existing_inbound",
-            detail="sin reintento pendiente",
-        )
         trace.append(f"auto_reply_skip_existing prospect={prospect.id} mid={mid}")
         return imported_flag, "skipped_existing_inbound"
 
@@ -465,8 +495,6 @@ def _handle_inbound_message(
             prior_prospect_status=prior_status,
         )
         trace.append(f"auto_reply prospect={prospect.id} mid={mid} outcome={reply_outcome}")
-        if reply_outcome not in ("scheduled", "sent", "draft"):
-            log_auto_reply_outcome_to_activity(campaign, prospect, mid, reply_outcome)
     except Exception as exc:  # noqa: BLE001
         trace.append(f"auto_reply_error prospect={prospect.id}: {exc}")
         logger.exception("inbound auto-reply failed prospect_id=%s", prospect.id)
@@ -496,7 +524,17 @@ def _sync_prospect_via_gmail_search(
     if not pe:
         return 0, 0, 0, "skipped"
 
-    if not prospect_has_outbound_touch(db, prospect.id) and not (prospect.gmail_thread_id or "").strip():
+    contacted_statuses = {
+        ProspectStatus.contacted.value,
+        ProspectStatus.replied.value,
+        ProspectStatus.interested.value,
+        ProspectStatus.meeting_booked.value,
+    }
+    status = (prospect.status or "").strip()
+    has_touch = prospect_has_outbound_touch(db, prospect.id) or bool(
+        (prospect.gmail_thread_id or "").strip()
+    )
+    if not has_touch and status not in contacted_statuses:
         trace.append(f"search_skip prospect={prospect.id}: sin outbound previo")
         return 0, 0, 0, "skipped"
 
@@ -534,6 +572,13 @@ def _sync_prospect_via_gmail_search(
                 db.flush()
             subj = headers.get("subject", "")
             plain = plain_body_from_gmail_message(full)
+            if _is_gmail_delivery_bounce(
+                subject=subj,
+                body=plain,
+                from_header=headers.get("from", ""),
+            ):
+                trace.append(f"bounce_skipped prospect={prospect.id} mid={mid}")
+                continue
             imp, auto_out = _handle_inbound_message(
                 db,
                 campaign=campaign,
@@ -635,6 +680,13 @@ def _sync_prospect_via_thread(
         headers = _header_map(gm.get("payload") or {})
         subj = headers.get("subject", "")
         plain = plain_body_from_gmail_message(gm)
+        if _is_gmail_delivery_bounce(
+            subject=subj,
+            body=plain,
+            from_header=headers.get("from", ""),
+        ):
+            trace.append(f"bounce_skipped prospect={prospect.id} mid={mid}")
+            continue
         imp, auto_out = _handle_inbound_message(
             db,
             campaign=campaign,
@@ -656,12 +708,21 @@ def sync_campaign_gmail_inbound(
     company_id: int,
     user_id: int,
     campaign_id: int,
+    allow_manual: bool = False,
+    allow_company_gmail_operator: bool = False,
 ) -> dict[str, Any]:
     """
-    Lee hilos Gmail del buzón del vendedor y registra respuestas de prospectos de la campaña.
+    Lee hilos Gmail del buzón del vendedor (o del operador Gmail de la empresa) y
+    registra respuestas de prospectos de la campaña.
     Estrategia dual: hilo guardado + búsqueda `from:prospect` (más fiable tras enviar borradores).
+
+    `allow_manual=True` permite sincronización explícita desde la UI aunque
+    ENABLE_GMAIL_AUTOMATION=0 (el flag sigue controlando ticks del scheduler).
+
+    `allow_company_gmail_operator=True` permite `user_id` distinto del seller cuando
+    el outbound usó otra cuenta Gmail de la misma empresa.
     """
-    if not gmail_automation_enabled():
+    if not allow_manual and not gmail_automation_enabled():
         log_gmail_automation_skipped(f"sync_campaign_gmail_inbound campaign_id={campaign_id}")
         return {"skipped": True, "reason": "gmail_automation_disabled"}
 
@@ -680,7 +741,15 @@ def sync_campaign_gmail_inbound(
     if campaign is None:
         raise ValueError("Campaña no encontrada")
     if int(campaign.seller_id) != int(user_id):
-        raise ValueError("Solo el vendedor asignado puede sincronizar el inbox de su Gmail.")
+        if not allow_company_gmail_operator:
+            raise ValueError("Solo el vendedor asignado puede sincronizar el inbox de su Gmail.")
+        try:
+            get_valid_gmail_connection(db, company_id=company_id, user_id=user_id)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(
+                "Solo el vendedor asignado o un operador con Gmail de la empresa "
+                "puede sincronizar el inbox."
+            ) from exc
 
     reconciled = mseq.reconcile_meeting_vs_postergado_for_campaign(db, campaign)
     if reconciled:
@@ -694,6 +763,10 @@ def sync_campaign_gmail_inbound(
     user_email = _norm_email(row.external_email)
     if not user_email:
         raise ValueError("No hay email de la cuenta Gmail conectada; reconectá Google.")
+
+    seller = db.get(User, int(user_id))
+    if seller is None:
+        raise ValueError("Vendedor no encontrado")
 
     prospects = db.scalars(
         select(Prospect).where(
@@ -711,6 +784,7 @@ def sync_campaign_gmail_inbound(
     prospects_matched = 0
     auto_drafts = 0
     auto_sent = 0
+    gmail_draft_sents = 0
     trace: list[str] = []
 
     def _tally_auto(outcome: str) -> bool:
@@ -793,6 +867,20 @@ def sync_campaign_gmail_inbound(
             if prospect_touched or t_replies > 0:
                 prospects_matched += 1
 
+        draft_stats = reconcile_campaign_gmail_draft_sents(
+            db,
+            user=seller,
+            campaign=campaign,
+            prospects=prospects,
+            user_email=user_email,
+            client=client,
+            access=access,
+        )
+        gmail_draft_sents = int(draft_stats.get("gmail_draft_sents_detected") or 0)
+        if gmail_draft_sents:
+            trace.append(f"gmail_draft_sents={gmail_draft_sents}")
+            db.commit()
+
     worker_meta: dict[str, Any] = {}
     if inbound_auto_reply_enabled():
         worker_meta = process_due_inbound_auto_reply_tasks(db)
@@ -814,6 +902,7 @@ def sync_campaign_gmail_inbound(
         "prospects_matched": prospects_matched,
         "auto_drafts": auto_drafts,
         "auto_sent": auto_sent,
+        "gmail_draft_sents_detected": gmail_draft_sents,
         "prospects_scanned": len([p for p in prospects if _norm_email(p.email)]),
         "errors": errors[:12],
         "trace": trace[:40],
@@ -832,3 +921,239 @@ def sync_campaign_gmail_inbound(
         skipped,
     )
     return result
+
+
+def extract_prospect_inbound_plain(stored: str | None) -> str:
+    """Texto del prospecto sin envoltorio Nexus/Gmail ni citas del hilo."""
+    from app.services.meeting_slot_parser import strip_email_reply_quotes
+
+    t = (stored or "").strip()
+    if not t:
+        return ""
+    low = t.lower()
+    if low.startswith("[gmail · respuesta real]") or low.startswith("[gmail ·"):
+        parts = t.split("\n\n", 1)
+        if len(parts) >= 2:
+            t = parts[1].strip()
+    return ci.normalize_inbound_text_for_classification(strip_email_reply_quotes(t))
+
+
+def sync_prospect_gmail_inbound(
+    db: Session,
+    *,
+    company_id: int,
+    user_id: int,
+    campaign_id: int,
+    prospect_id: int,
+    allow_manual: bool = True,
+    allow_company_gmail_operator: bool = False,
+) -> dict[str, Any]:
+    """Sincroniza Gmail solo para un prospecto (antes de enviar/responder manual)."""
+    if not allow_manual and not gmail_automation_enabled():
+        return {"skipped": True, "reason": "gmail_automation_disabled"}
+
+    campaign = db.scalars(
+        select(Campaign)
+        .where(Campaign.id == campaign_id, Campaign.company_id == company_id)
+        .options(selectinload(Campaign.product))
+    ).first()
+    if campaign is None:
+        raise ValueError("Campaña no encontrada")
+    if int(campaign.seller_id) != int(user_id):
+        if not allow_company_gmail_operator:
+            raise ValueError("Solo el vendedor asignado puede sincronizar su Gmail.")
+        try:
+            get_valid_gmail_connection(db, company_id=company_id, user_id=user_id)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(
+                "Solo el vendedor asignado o un operador con Gmail de la empresa "
+                "puede sincronizar el inbox."
+            ) from exc
+
+    prospect = db.get(Prospect, prospect_id)
+    if prospect is None or int(prospect.company_id) != int(company_id):
+        raise ValueError("Prospecto no encontrado")
+    if int(prospect.campaign_id) != int(campaign_id):
+        raise ValueError("El prospecto no pertenece a esta campaña")
+
+    access, row = get_valid_gmail_connection(db, company_id=company_id, user_id=user_id)
+    user_email = _norm_email(row.external_email)
+    if not user_email:
+        raise ValueError("No hay email de la cuenta Gmail conectada.")
+
+    seller = db.get(User, int(user_id))
+    if seller is None:
+        raise ValueError("Vendedor no encontrado")
+
+    trace: list[str] = []
+    imported = examined = msgs = replies = 0
+    auto_out = "skipped"
+    gmail_draft_sents = 0
+
+    with httpx.Client(timeout=60.0) as client:
+        t_imp, t_threads, t_msgs, t_replies, t_auto = _sync_prospect_via_thread(
+            db,
+            client,
+            access,
+            prospect=prospect,
+            campaign=campaign,
+            user_email=user_email,
+            trace=trace,
+        )
+        imported += t_imp
+        examined += t_threads
+        msgs += t_msgs
+        replies += t_replies
+        auto_out = t_auto
+
+        if t_imp == 0 and t_replies == 0:
+            alt_tid = resolve_thread_id_for_prospect(
+                client, access, user_email=user_email, prospect_email=_norm_email(prospect.email)
+            )
+            stored = (prospect.gmail_thread_id or "").strip()
+            if alt_tid and alt_tid != stored:
+                prospect.gmail_thread_id = alt_tid
+                db.flush()
+                t_imp2, t_threads2, t_msgs2, t_replies2, t_auto2 = _sync_prospect_via_thread(
+                    db,
+                    client,
+                    access,
+                    prospect=prospect,
+                    campaign=campaign,
+                    user_email=user_email,
+                    trace=trace,
+                )
+                imported += t_imp2
+                examined += t_threads2
+                msgs += t_msgs2
+                replies += t_replies2
+                auto_out = t_auto2
+
+        if imported == 0 and replies == 0:
+            s_imp, s_fetched, s_replies, s_auto = _sync_prospect_via_gmail_search(
+                db,
+                client,
+                access,
+                prospect=prospect,
+                campaign=campaign,
+                user_email=user_email,
+                trace=trace,
+            )
+            imported += s_imp
+            msgs += s_fetched
+            replies += s_replies
+            auto_out = s_auto
+
+        marked_days = reconcile_prospect_gmail_draft_sents(
+            db,
+            user=seller,
+            campaign=campaign,
+            prospect=prospect,
+            user_email=user_email,
+            client=client,
+            access=access,
+        )
+        if marked_days:
+            gmail_draft_sents = len(marked_days)
+            trace.append(f"gmail_draft_sents={marked_days}")
+            db.commit()
+
+    db.flush()
+    return {
+        "prospect_id": prospect_id,
+        "imported": imported,
+        "threads_examined": examined,
+        "messages_fetched": msgs,
+        "replies_detected": replies,
+        "auto_outcome": auto_out,
+        "gmail_draft_sents_detected": gmail_draft_sents,
+        "trace": trace[:20],
+    }
+
+
+def latest_prospect_inbound_plain_from_gmail(
+    db: Session,
+    *,
+    company_id: int,
+    user_id: int,
+    prospect: Prospect,
+    campaign: Campaign,
+) -> str | None:
+    """
+    Lee el hilo Gmail y devuelve el cuerpo del último mensaje del prospecto.
+    Importa a BD si aún no estaba (idempotente).
+    """
+    pe = _norm_email(prospect.email)
+    if not pe:
+        return None
+
+    access, row = get_valid_gmail_connection(db, company_id=company_id, user_id=user_id)
+    user_email = _norm_email(row.external_email)
+    if not user_email:
+        return None
+
+    with httpx.Client(timeout=60.0) as client:
+        tid = (prospect.gmail_thread_id or "").strip()
+        if not tid:
+            tid = resolve_thread_id_for_prospect(
+                client, access, user_email=user_email, prospect_email=pe
+            )
+            if tid:
+                prospect.gmail_thread_id = tid
+                db.flush()
+
+        if not tid:
+            return None
+
+        thread = fetch_thread_full(client, access, tid)
+        if thread is None:
+            return None
+
+        messages = list(thread.get("messages") or [])
+        if not messages:
+            return None
+
+        best_plain: str | None = None
+        best_internal = -1
+        best_mid: str | None = None
+        best_subj = ""
+
+        for gm in messages:
+            mid = gm.get("id")
+            if not mid:
+                continue
+            headers = _header_map(gm.get("payload") or {})
+            if not _is_prospect_reply_message(
+                headers,
+                prospect_email=pe,
+                user_email=user_email,
+                thread_messages=messages,
+            ):
+                continue
+            internal = int(gm.get("internalDate") or 0)
+            plain = plain_body_from_gmail_message(gm).strip()
+            if not plain:
+                continue
+            if internal <= best_internal:
+                continue
+            best_internal = internal
+            best_plain = plain
+            best_mid = str(mid)
+            best_subj = headers.get("subject", "")
+
+        if not best_plain or not best_mid:
+            return None
+
+        _handle_inbound_message(
+            db,
+            campaign=campaign,
+            prospect=prospect,
+            gmail_message_id=best_mid,
+            inbound_plain=best_plain,
+            subject=best_subj,
+            trace=[],
+        )
+        db.flush()
+        from app.services.meeting_slot_parser import strip_email_reply_quotes
+
+        return strip_email_reply_quotes(best_plain) or best_plain

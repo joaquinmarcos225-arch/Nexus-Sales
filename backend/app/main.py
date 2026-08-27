@@ -14,17 +14,17 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.database.seed import seed_demo_if_empty
+from app.database.seed import prepare_production_workspace, seed_demo_if_empty
 from app.database.session import SessionLocal, init_db
 from app.services import outreach_metrics as om
 from app.routes.analytics import analytics_dashboard_router, router as analytics_router
 from app.routes.companies import router as companies_router
 from app.routes.credits import router as credits_router
-from app.routes.assistant import router as assistant_router
-from app.routes.ai_instructions import router as ai_instructions_router
-from app.routes.ai_behavior_policy import router as ai_behavior_policy_router
+from app.routes.billing_ops import router as billing_ops_router
 from app.routes.operations import router as operations_router
 from app.routes.campaigns import router as campaigns_router
+from app.routes.sequence_templates import router as sequence_templates_router
+from app.routes.go_live import router as go_live_router
 from app.routes.health import router as health_router
 from app.routes.outreach import router as outreach_router
 from app.routes.outreach_tasks import router as outreach_tasks_router
@@ -41,7 +41,14 @@ from app.routes.connections import router as connections_router
 from app.routes.auth_google import router as auth_google_router
 from app.routes.gmail import router as gmail_router
 from app.routes.google_calendar import router as google_calendar_router
+from app.routes.onboarding import router as onboarding_router
 from app.routes.dev_testing import router as dev_testing_router
+from app.routes.auth_crm import router as auth_crm_router
+from app.routes.crm import router as crm_router
+from app.routes.whatsapp_webhooks import router as whatsapp_webhooks_router
+from app.routes.extension import router as extension_router
+from app.routes.support import router as support_router
+from app.routes.notifications import router as notifications_router
 from app.services.gmail_automation_flags import log_startup_gmail_automation_flag
 from app.middleware.dashboard_http import dashboard_http_guard
 from app.services.nexus_scheduler import shutdown_automation_scheduler, start_automation_scheduler
@@ -66,14 +73,17 @@ if legacy_google_search_env_present() and _web_backend is None:
         "Company sourcing usa Brave/SerpAPI — agregá BRAVE_SEARCH_API_KEY en backend/.env"
     )
 _logger.info(
-    "[lead-sourcing] dotenv loaded=%s | web_search=%s (%s) phantom=%s key_len=%s agent_id=%s prospeo=%s",
+    "[lead-sourcing] dotenv loaded=%s | web_search=%s (%s) prospeo=%s",
     _DOTENV_LOADED,
     _web_backend is not None,
     _web_backend.label if _web_backend else "none",
-    bool(getenv("PHANTOMBUSTER_API_KEY")),
-    len(getenv("PHANTOMBUSTER_API_KEY")),
-    getenv("PHANTOMBUSTER_LINKEDIN_AGENT_ID") or "missing",
     bool((os.getenv("PROSPEO_API_KEY") or "").strip()),
+)
+_logger.info(
+    "[oauth] env_file=%s | client_id_set=%s | client_secret_set=%s",
+    _ENV_FILE,
+    bool((os.getenv("GOOGLE_CLIENT_ID") or "").strip()),
+    bool((os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()),
 )
 
 
@@ -86,6 +96,8 @@ async def lifespan(_app: FastAPI):
             skip = True
         if not skip:
             seed_demo_if_empty(db)
+        else:
+            prepare_production_workspace(db)
         db.commit()
     log_startup_gmail_automation_flag()
     start_automation_scheduler()
@@ -144,13 +156,27 @@ async def lead_sourcing_http_diag(request: Request, call_next):
         raise
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+def _cors_origins() -> list[str]:
+    raw = (os.getenv("NEXUS_CORS_ORIGINS") or "").strip()
+    defaults = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://[::1]:5173",
-    ],
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://[::1]:5174",
+    ]
+    if not raw:
+        frontend = (os.getenv("NEXUS_FRONTEND_URL") or "").strip().rstrip("/")
+        if frontend and frontend not in defaults:
+            defaults.append(frontend)
+        return defaults
+    return [part.strip().rstrip("/") for part in raw.split(",") if part.strip()]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
     allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
@@ -158,7 +184,9 @@ app.add_middleware(
 )
 
 app.include_router(health_router, prefix="/health", tags=["health"])
+app.include_router(go_live_router)
 app.include_router(auth_router)
+app.include_router(onboarding_router)
 app.include_router(companies_router)
 app.include_router(analytics_dashboard_router)
 app.include_router(analytics_router)
@@ -172,14 +200,19 @@ app.include_router(google_calendar_router)
 app.include_router(connections_router)
 app.include_router(products_router)
 app.include_router(credits_router)
+app.include_router(billing_ops_router)
 app.include_router(campaigns_router)
+app.include_router(sequence_templates_router)
 app.include_router(prospects_router)
 app.include_router(lead_sourcing_router)
 app.include_router(outreach_router)
 app.include_router(outreach_tasks_router)
 app.include_router(meetings_router)
-app.include_router(ai_instructions_router)
-app.include_router(ai_behavior_policy_router)
 app.include_router(operations_router)
-app.include_router(assistant_router)
+app.include_router(auth_crm_router)
+app.include_router(crm_router)
+app.include_router(whatsapp_webhooks_router)
+app.include_router(extension_router)
+app.include_router(support_router)
+app.include_router(notifications_router)
 app.include_router(dev_testing_router)

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.deps import get_current_user
 from app.database.session import get_db
 from app.models.campaign import Campaign
 from app.models.company import Company
@@ -21,7 +22,12 @@ router = APIRouter(tags=["google-calendar"])
 def post_google_calendar_sync(
     payload: GoogleCalendarSyncCreate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> GoogleCalendarSyncRead:
+    if int(current_user.company_id) != int(payload.company_id) or int(current_user.id) != int(
+        payload.user_id
+    ):
+        raise HTTPException(status_code=403, detail="No tenés acceso a este calendario")
     company = db.get(Company, payload.company_id)
     if company is None:
         raise HTTPException(status_code=404, detail="Empresa no encontrada")

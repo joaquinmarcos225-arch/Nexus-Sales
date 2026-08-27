@@ -15,9 +15,9 @@ const LABELS = {
 
 function Metric({ label, value }) {
   return (
-    <div className="rounded-lg border border-[#e5e7eb] bg-[#f8fafc] px-3 py-2">
-      <p className="text-[11px] uppercase tracking-wide text-[#6b7280]">{label}</p>
-      <p className="text-lg font-semibold text-[#111827] tabular-nums">{value ?? 0}</p>
+    <div className="rounded-lg border border-nx-border bg-nx-card-muted px-3 py-2">
+      <p className="text-[11px] uppercase tracking-wide text-nx-muted">{label}</p>
+      <p className="text-lg font-semibold text-nx-ink tabular-nums">{value ?? 0}</p>
     </div>
   )
 }
@@ -73,11 +73,11 @@ export function CampaignAutopilotSection({ campaign, freeze = false, onChanged }
   }
 
   return (
-    <section className="rounded-xl border border-[#e5e7eb] bg-white p-4 shadow-sm shadow-[#111827]/5 space-y-4">
+    <section className="rounded-xl border border-nx-border bg-white p-4 shadow-sm shadow-nx-ink/5 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-[#111827]">Autopilot Nexus</h2>
-          <p className="mt-1 text-xs text-[#6b7280]">
+          <h2 className="text-sm font-semibold text-nx-ink">Autopilot Nexus</h2>
+          <p className="mt-1 text-xs text-nx-muted">
             Flujo autónomo: contacta, simula respuestas, analiza, actualiza pipeline, crea follow-ups, tareas y reuniones.
           </p>
         </div>
@@ -86,7 +86,7 @@ export function CampaignAutopilotSection({ campaign, freeze = false, onChanged }
             type="button"
             onClick={() => void handleActivate()}
             disabled={freeze || busy !== '' || !campaign}
-            className="rounded-lg bg-nx-brand px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-nx-brand-hover disabled:opacity-40"
+            className="nx-btn nx-btn-primary px-3 py-2 text-xs"
           >
             {busy === 'activate' ? 'Activando…' : 'Activar Autopilot'}
           </button>
@@ -94,7 +94,7 @@ export function CampaignAutopilotSection({ campaign, freeze = false, onChanged }
             type="button"
             onClick={() => void handlePause()}
             disabled={freeze || busy !== '' || !campaign}
-            className="rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc] disabled:opacity-40"
+            className="rounded-lg border border-nx-border bg-white px-3 py-2 text-xs font-semibold text-nx-ink hover:bg-nx-card-muted disabled:opacity-40"
           >
             {busy === 'pause' ? 'Pausando…' : 'Pausar Autopilot'}
           </button>
@@ -102,7 +102,7 @@ export function CampaignAutopilotSection({ campaign, freeze = false, onChanged }
             type="button"
             onClick={() => void handleRunCycle()}
             disabled={freeze || busy !== '' || !campaign}
-            className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900 hover:bg-emerald-100 disabled:opacity-40"
+            className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-900 hover:bg-red-100 disabled:opacity-40"
           >
             {busy === 'cycle' ? 'Ejecutando…' : 'Ejecutar siguiente ciclo ahora'}
           </button>
@@ -111,8 +111,8 @@ export function CampaignAutopilotSection({ campaign, freeze = false, onChanged }
 
       <AlertBanner message={error} onDismiss={() => setError(null)} />
 
-      <div className="text-xs text-[#6b7280]">
-        Estado: <span className="font-semibold text-[#111827]">{LABELS[status] ?? status}</span> · Último ciclo:{' '}
+      <div className="text-xs text-nx-muted">
+        Estado: <span className="font-semibold text-nx-ink">{LABELS[status] ?? status}</span> · Último ciclo:{' '}
         {campaign?.autopilot_last_cycle_at
           ? new Date(campaign.autopilot_last_cycle_at).toLocaleString('es-AR')
           : '—'}
@@ -127,16 +127,16 @@ export function CampaignAutopilotSection({ campaign, freeze = false, onChanged }
         <Metric label="Reuniones creadas" value={stats.meetings_created} />
       </div>
 
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Log del ciclo</p>
+      <div className="rounded-lg border border-nx-border bg-nx-card-muted p-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-nx-muted">Log del ciclo</p>
         {log.length ? (
-          <ul className="mt-2 space-y-1 text-xs text-slate-700">
+          <ul className="mt-2 space-y-1 text-xs text-nx-ink">
             {log.slice(0, 6).map((item, i) => (
               <li key={`${item}-${i}`}>• {item}</li>
             ))}
           </ul>
         ) : (
-          <p className="mt-2 text-xs text-slate-500">Sin actividad registrada todavía.</p>
+          <p className="mt-2 text-xs text-nx-muted">Sin actividad registrada todavía.</p>
         )}
       </div>
     </section>

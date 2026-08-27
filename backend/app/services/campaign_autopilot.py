@@ -50,11 +50,13 @@ def _campaign_payload(campaign: Campaign) -> dict[str, str]:
     return {
         "name": campaign.name,
         "tone": campaign.tone,
+        "outreach_mode": (getattr(campaign, "outreach_mode", None) or "b2b"),
         "target_company_size": campaign.target_company_size or "",
         "target_role": campaign.target_role or "",
         "target_industry": campaign.target_industry or "",
         "target_country": campaign.target_country or "",
         "target_language": campaign.target_language or "",
+        "target_interests": getattr(campaign, "target_interests", None) or "",
         "preferred_channel_hint": " → ".join(ch),
         "allowed_channels_csv": ",".join(ch),
         "calendar_link": campaign.calendar_link or "",
@@ -67,7 +69,7 @@ def _campaign_payload(campaign: Campaign) -> dict[str, str]:
 def _product_payload(campaign: Campaign) -> dict[str, str]:
     p = campaign.product
     return {
-        "name": p.name if p else "Nexus Sales",
+        "name": (p.name if p else "") or "",
         "value_proposition": p.value_proposition if p and p.value_proposition else "",
         "description": p.description if p and p.description else "",
     }

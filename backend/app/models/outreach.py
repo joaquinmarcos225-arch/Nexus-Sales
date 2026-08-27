@@ -24,6 +24,8 @@ class OutreachMessage(Base):
     channel: Mapped[str] = mapped_column(String(16), nullable=False)
     direction: Mapped[str] = mapped_column(String(16), nullable=False)
     gmail_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    linkedin_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    whatsapp_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     is_testing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

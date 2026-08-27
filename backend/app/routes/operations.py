@@ -5,11 +5,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database.session import get_db
-from app.deps import get_campaign, get_company, get_prospect
+from app.auth.deps import require_permission
+from app.core.permissions import Permission
 from app.models.campaign import Campaign
 from app.models.company import Company
 from app.models.outreach_task import OutreachTask
 from app.models.prospect import Prospect
+from app.deps import get_campaign, get_company, get_prospect
 from app.schemas.operations import (
     AiDecisionEventRead,
     AutomationModeUpdate,
@@ -27,12 +29,16 @@ from app.services.operations_service import (
 
 router = APIRouter(prefix="/companies", tags=["operations"])
 
+RequireMetricsTeam = Depends(require_permission(Permission.METRICS_TEAM))
+RequireOperationsControl = Depends(require_permission(Permission.OPERATIONS_CONTROL))
+
 
 @router.get("/{company_id}/operations/overview", response_model=OperationsOverviewRead)
 def get_operations_overview(
     company_id: int,
     db: Session = Depends(get_db),
     _company=Depends(get_company),
+    _user=RequireMetricsTeam,
 ) -> OperationsOverviewRead:
     data = build_operations_overview(db, company_id)
     return OperationsOverviewRead.model_validate(data)
@@ -44,6 +50,7 @@ def get_operations_activity_feed(
     limit: int = 50,
     db: Session = Depends(get_db),
     _company=Depends(get_company),
+    _user=RequireMetricsTeam,
 ) -> list[AiDecisionEventRead]:
     lim = max(1, min(limit, 150))
     raw = build_activity_feed(db, company_id, limit=lim)
@@ -97,6 +104,7 @@ def post_emergency_stop(
     payload: EmergencyStopUpdate,
     db: Session = Depends(get_db),
     company: Company = Depends(get_company),
+    _user=RequireOperationsControl,
 ) -> dict:
     company.global_automation_stop = bool(payload.stop)
     camps = db.scalars(select(Campaign).where(Campaign.company_id == company_id)).all()
@@ -134,6 +142,7 @@ def patch_campaign_automation_mode(
     db: Session = Depends(get_db),
     campaign: Campaign = Depends(get_campaign),
     _company=Depends(get_company),
+    _user=RequireOperationsControl,
 ) -> dict:
     if campaign.company_id != company_id:
         raise HTTPException(status_code=404, detail="Campaña no encontrada")

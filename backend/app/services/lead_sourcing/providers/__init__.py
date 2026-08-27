@@ -8,7 +8,6 @@ from app.services.lead_sourcing.providers.base import (
     CompanySearchProvider,
     ContactEnrichmentProvider,
     LeadSourcingProvider,
-    PeopleExtractionProvider,
     ProviderStatus,
 )
 
@@ -16,6 +15,5 @@ __all__ = [
     "CompanySearchProvider",
     "ContactEnrichmentProvider",
     "LeadSourcingProvider",
-    "PeopleExtractionProvider",
     "ProviderStatus",
 ]

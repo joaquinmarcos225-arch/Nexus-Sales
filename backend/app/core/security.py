@@ -11,7 +11,7 @@ from jose import JWTError, jwt
 
 JWT_SECRET = os.getenv("NEXUS_JWT_SECRET", "nexus-dev-jwt-secret-change-in-production")
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_HOURS = int(os.getenv("NEXUS_JWT_EXPIRE_HOURS", "168"))
+JWT_EXPIRE_HOURS = int(os.getenv("NEXUS_JWT_EXPIRE_HOURS", "2160"))
 
 
 def hash_password(plain: str) -> str:

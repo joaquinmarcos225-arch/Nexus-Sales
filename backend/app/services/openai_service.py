@@ -80,6 +80,31 @@ EVITA además:
 - clichés "optimizar", "gestión", "equipo comercial" de forma repetida.
 - repetir el mismo CTA de reunión texto por texto que en mensajes anteriores.
 - follow-ups tipo "solo quería hacer seguimiento", "retomo", "circling back".
+- mencionar dominios técnicos, emails internos, errores de entrega, mail.nexus-sales.local,
+  infraestructura de prueba o que el correo del prospecto "no funciona".
+"""
+
+VOICE_GLOBAL_B2C = """
+Sos vendedor/a consultivo por mensaje (B2C / consumidor final, español): natural, cercano, breve.
+
+OBJETIVO #1: cuando hay interés, coordinar una llamada corta o el siguiente paso concreto (demo, prueba, compra guiada).
+NO escribir como si hablaras con una empresa (evitar "su equipo", "en su organización", "ROI para la compañía").
+
+OBLIGATORIO:
+- Texto plano. Sin markdown ni listas.
+- Mensajes CORTOS: cold 3–4 líneas; follow-ups 1–2; respuestas 1–3 salvo una aclaración mínima.
+- Hablarle a la persona: beneficios personales, tiempo, dinero, comodidad, bienestar o gusto según el producto.
+- Una sola pregunta clara. No digas que sos IA.
+
+PROHIBIDO:
+- pitch B2B ("escalar ventas", "pipeline", "equipo comercial")
+- "te mando un brochure / material / PDF" como única respuesta
+- bloques de marketing largos
+
+Preferí:
+- Gancho con interés real de la persona (hobby, necesidad, ubicación) si está en contexto.
+- Si hay interés: una frase útil + proponé 10–15 min o el CTA del producto.
+- Léxico humano y cercano; sin jerga corporativa.
 """
 
 # Respuestas a inbound (hilo con preguntas del prospecto): consultivo, no "calendar pusher".
@@ -103,12 +128,19 @@ PROHIBIDO:
 - "Te paso material después" o "te mando un PDF" como sustituto de una respuesta útil.
 - CTA agresivo o repetir "agendemos" en cada mensaje.
 - Sonar a bot, script o SDR robótico.
+- Mencionar dominios internos, mail.nexus-sales.local, errores de entrega o infraestructura de prueba.
 
 ESTILO:
 - Texto plano; sin markdown ni listas numeradas largas.
 - Si hay preguntas sustantivas: 5–8 líneas cortas con valor real; si es un mensaje liviano: 3–5 líneas.
 - Cierre opcional y suave hacia siguiente paso (demo/reunión) solo después de aportar valor.
 """
+
+VOICE_INBOUND_CONSULTATIVE_B2C = VOICE_INBOUND_CONSULTATIVE.replace(
+    "vendedor consultivo B2B",
+    "vendedor consultivo B2C (consumidor final)",
+    1,
+)
 
 # Etapa AGENDAR: el prospecto ya quiere hablar — objetivo = fecha/hora, no re-pitch.
 VOICE_INBOUND_SCHEDULE = """
@@ -134,6 +166,53 @@ Si preguntó "cómo funciona" o "entender mejor" JUNTO con pedir llamada:
 - NO escribas 5+ líneas explicando el producto.
 
 Texto plano; sin markdown.
+"""
+
+VOICE_INBOUND_SCHEDULE_B2C = VOICE_INBOUND_SCHEDULE.replace(
+    "SDR experimentado B2B",
+    "vendedor experimentado B2C",
+    1,
+)
+
+
+def _campaign_is_b2c(campaign: dict | None) -> bool:
+    if not campaign:
+        return False
+    return str(campaign.get("outreach_mode") or "").strip().lower() == "b2c"
+
+
+def resolve_voice_global(campaign: dict | None = None) -> str:
+    return VOICE_GLOBAL_B2C if _campaign_is_b2c(campaign) else VOICE_GLOBAL
+
+
+def resolve_voice_inbound_consultative(campaign: dict | None = None) -> str:
+    return VOICE_INBOUND_CONSULTATIVE_B2C if _campaign_is_b2c(campaign) else VOICE_INBOUND_CONSULTATIVE
+
+
+def resolve_voice_inbound_schedule(campaign: dict | None = None) -> str:
+    return VOICE_INBOUND_SCHEDULE_B2C if _campaign_is_b2c(campaign) else VOICE_INBOUND_SCHEDULE
+
+
+VOICE_LINKEDIN_INBOUND_DM = """
+Sos SDR en un DM de LinkedIn (español rioplatense): humano, directo, conversacional.
+
+CONTEXTO CRÍTICO: el prospecto YA respondió. Esto NO es cold open ni primer contacto.
+
+OBJETIVO: réplica corta al mensaje concreto. Sin plantillas genéricas.
+
+REGLAS ESTRICTAS:
+- Máximo 45 palabras (~2-3 líneas). LinkedIn exige brevedad.
+- NO expliques el producto, beneficios, %, automatización ni value prop, SALVO que el prospecto
+  pregunte explícitamente qué hace / cómo funciona / precio / diferencia / integración.
+- Si solo muestra interés, dice ok, genial, dale, o pide seguir: respondé simple tipo
+  "Genial, ¿te parece agendar una reunión breve de 15 min?"
+- El pitch de producto es SOLO para mensajes outbound iniciales, nunca para réplicas.
+- Prohibido presentarte de nuevo ("mi nombre es", "te hablo desde").
+- Cierre opcional: CTA suave a reunión solo si encaja — una frase.
+- Texto plano; sin subject; sin markdown; sin firma (la agrega Nexus).
+- SALUDO: solo en la primera réplica del hilo podés usar "Hola [nombre],".
+  En mensajes siguientes del mismo hilo: PROHIBIDO Hola / Buen día / Hey.
+  Arrancá directo (Perfecto, Listo, Genial, Tenés razón, Dale…).
 """
 
 _INBOUND_EVASIVE_REPLY = re.compile(
@@ -211,7 +290,9 @@ def _client():
             detail="OPENAI_API_KEY no configurada. Definila para habilitar mensajes IA.",
         )
     OpenAI, _, _, _ = _load_openai()
-    return OpenAI(api_key=key)
+    # Timeout holgado: mensajes SDR necesitan espacio para razonar + JSON completo.
+    timeout_sec = float(os.getenv("OPENAI_TIMEOUT_SEC", "90") or "90")
+    return OpenAI(api_key=key, timeout=timeout_sec)
 
 
 @dataclass
@@ -362,6 +443,16 @@ def _single_openai_chat(
         )
         usage = getattr(res, "usage", None)
         od.record_request(endpoint=OPENAI_ENDPOINT, model=MODEL, success=True)
+        try:
+            from app.services.lead_sourcing.cogs_runtime_metrics import record_openai
+
+            record_openai(
+                input_tokens=getattr(usage, "input_tokens", None) if usage else None,
+                output_tokens=getattr(usage, "output_tokens", None) if usage else None,
+                total_tokens=getattr(usage, "total_tokens", None) if usage else None,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return RawChatResult(
             text=(res.output_text or "").strip(),
             model=MODEL,
@@ -593,7 +684,7 @@ def classify_inbound_json_raw(
 ) -> str:
     """Devuelve texto JSON (sin envoltorio)."""
     system = (
-        VOICE_GLOBAL
+        resolve_voice_global()
         + _education_block(education)
         + "\n\nRol: clasificador. Respondé SOLO JSON válido, sin markdown, sin comentarios."
         + "\n\nSi el prospecto pide volver en un mes/trimestre/fecha relativa, estimá defer_resume_at "
@@ -628,12 +719,15 @@ def classify_inbound_json_raw(
 
 
 def _education_block(blob: str) -> str:
-    if not blob or not blob.strip():
-        return ""
-    return (
-        "\n\nINSTRUCCIONES CONFIGURABLES DEL CLIENTE (prioridad alta si discrepan con el tono por defecto):\n"
-        f"{blob.strip()}"
-    )
+    from app.services.nexus_sales_playbook import sales_playbook_prompt_section
+
+    parts = [sales_playbook_prompt_section()]
+    if blob and blob.strip():
+        parts.append(
+            "INSTRUCCIONES CONFIGURABLES DEL CLIENTE (prioridad alta si discrepan con el tono por defecto):\n"
+            f"{blob.strip()}"
+        )
+    return "\n\n" + "\n\n".join(parts)
 
 
 def _conversation_digest(history: Sequence[dict[str, str]]) -> str:
@@ -680,7 +774,7 @@ def generate_outreach_message(
     tone: str,
     education: str,
 ) -> str:
-    system = VOICE_GLOBAL + _education_block(education)
+    system = resolve_voice_global(campaign) + _education_block(education)
     tone_use = (tone or campaign.get("tone") or "").strip()
     pname = prospect.get("name") or "(nombre)"
     pco = prospect.get("company_name") or ""
@@ -876,6 +970,7 @@ def generate_gmail_draft_email(
     explicit_meeting_commitment: bool = False,
     reply_objective: str | None = None,
     response_class: str | None = None,
+    meeting_already_booked: bool = False,
 ) -> tuple[str, str]:
     """
     Genera asunto + cuerpo para un borrador Gmail (no enviado).
@@ -904,8 +999,19 @@ def generate_gmail_draft_email(
     behavior_block = behavior_prompt_section(policy)
     tone_use = (tone or campaign.get("tone") or "").strip()
     hist = _conversation_digest(conversation_history)
+    hist_has_content = any(
+        (h.get("message") or "").strip()
+        for h in conversation_history
+        if isinstance(h, dict)
+    )
     inbound_raw = (last_prospect_inbound or "").strip()
     substantive = prospect_substantive_questions or inbound_text_needs_substantive_answer(inbound_raw)
+    is_cold_first = (
+        not inbound_raw
+        and not hist_has_content
+        and not prospect_timing_soft
+        and not prospect_booking_priority
+    )
     inbound_block = ""
     if inbound_raw:
         answer_rule = (
@@ -921,9 +1027,43 @@ def generate_gmail_draft_email(
             f"{answer_rule}"
         )
 
-    if prospect_timing_soft:
+    if is_cold_first:
         system = (
-            VOICE_GLOBAL
+            resolve_voice_global(campaign)
+            + behavior_block
+            + _education_block(education)
+            + "\n\nRol: PRIMER correo frío B2B en español (sin hilo previo). "
+            "Filosofía Solución + Intriga:\n"
+            "- Línea 1: gancho con empresa/rol del prospecto.\n"
+            "- Líneas 2-3: qué logra tu solución (superpoder, no features) para empresas como la suya.\n"
+            "- Cierre: UNA pregunta de interés ('¿Te interesaría ver cómo lo implementamos para ustedes?').\n\n"
+            "PROHIBIDO: brochure, 'consolidar prospectos/campañas/reportes', link de calendario, "
+            "preguntar cómo llevan X hoy, párrafos largos.\n\n"
+            "Respondé SOLO con JSON válido (sin markdown):\n"
+            '{"subject":"...","body":"..."}\n'
+            "- subject: 2–4 palabras (valor/problema), sin nombre del prospecto.\n"
+            "- body: máximo 4 líneas cortas + pregunta final.\n"
+        )
+        max_tokens = 380
+        temp = 0.58
+    elif meeting_already_booked and not prospect_booking_priority:
+        system = (
+            resolve_voice_global(campaign)
+            + behavior_block
+            + _education_block(education)
+            + "\n\nRol: el prospecto YA tiene reunión agendada. Modo silencio comercial.\n"
+            "Solo: confirmar logística, recordatorio breve o responder una duda puntual en 1-2 líneas.\n\n"
+            "PROHIBIDO ABSOLUTO: explicar producto, listar features, propuesta de valor, "
+            "link genérico de calendario, CTA de venta, 'Plataforma Nexus integra…'.\n\n"
+            "Respondé SOLO con JSON válido:\n"
+            '{"subject":"...","body":"..."}\n'
+            "- body: máximo 3 líneas.\n"
+        )
+        max_tokens = 280
+        temp = 0.45
+    elif prospect_timing_soft:
+        system = (
+            resolve_voice_global(campaign)
             + behavior_block
             + _education_block(education)
             + "\n\nRol: redactás UN correo en español (B2B) como respuesta en un hilo existente. "
@@ -945,37 +1085,26 @@ def generate_gmail_draft_email(
     elif prospect_booking_priority:
         booking_body_rules = (
             "- body: saludo con primer nombre; tono humano.\n"
+            "  Máximo 3 líneas: celebrá el avance hacia reunión + link de agenda O pregunta día/hora.\n"
+            "  PROHIBIDO explicar producto, features o propuesta de valor.\n"
         )
-        if substantive:
-            booking_body_rules += (
-                "  PRIMERO: 4–6 líneas respondiendo preguntas o temas del último inbound con valor concreto "
-                "(producto/contexto). DESPUÉS: celebrá el avance hacia reunión e incluí el link de agenda "
-                "en UNA línea clara (reservá / elegí horario). Sin listas ni markdown.\n"
-            )
-        else:
-            booking_body_rules += (
-                "  3–5 líneas cortas; celebrá el avance; incluí el link de agenda en UNA línea clara. "
-                "Sin listas ni markdown.\n"
-            )
         system = (
-            VOICE_INBOUND_CONSULTATIVE
+            resolve_voice_inbound_schedule(campaign)
             + behavior_block
             + _education_block(education)
-            + "\n\nRol: redactás UN correo en español (B2B) como respuesta en un hilo existente. "
-            "El prospecto quiere coordinar reunión/llamada (alta intención). "
-            "Si también hizo preguntas sobre el producto: respondelas ANTES del link de agenda. "
-            "PROHIBIDO postergar sin ofrecer agenda concreta cuando ya pidió agendar.\n\n"
+            + "\n\nRol: el prospecto quiere coordinar reunión. ETAPA AGENDAR.\n"
+            "OBJETIVO ÚNICO: día/hora o link de agenda. Cero pitch.\n\n"
             "Respondé SOLO con JSON válido (sin markdown) con claves exactas:\n"
             '{"subject":"...","body":"..."}\n'
-            "- subject: 2–4 palabras en español (valor/producto); sin nombre del prospecto.\n"
+            "- subject: 2–4 palabras (reunión/agenda); sin nombre del prospecto.\n"
             f"{booking_body_rules}"
         )
-        max_tokens = 560 if substantive else 420
-        temp = 0.55
+        max_tokens = 320
+        temp = 0.5
     else:
         body_lines = _inbound_body_line_hint(policy, substantive=substantive)
         system = (
-            VOICE_INBOUND_CONSULTATIVE
+            resolve_voice_inbound_consultative(campaign)
             + behavior_block
             + _education_block(education)
             + "\n\nRol: redactás UN correo en español (B2B) como respuesta en un hilo existente (borrador Gmail). "
@@ -992,13 +1121,23 @@ def generate_gmail_draft_email(
         max_tokens = 580 if substantive else 460
         temp = 0.62
 
-    icp_block = (
-        f"ICP campaña — tamaño empresa: {campaign.get('target_company_size') or '—'}\n"
-        f"ICP campaña — industria: {campaign.get('target_industry') or '—'}\n"
-        f"ICP campaña — país: {campaign.get('target_country') or '—'}\n"
-        f"ICP campaña — idioma: {campaign.get('target_language') or '—'}\n"
-        f"ICP campaña — rol objetivo: {campaign.get('target_role') or '—'}\n"
-    )
+    if _campaign_is_b2c(campaign):
+        icp_block = (
+            f"Modo: B2C\n"
+            f"ICP campaña — región: {campaign.get('target_country') or '—'}\n"
+            f"ICP campaña — idioma: {campaign.get('target_language') or '—'}\n"
+            f"ICP campaña — perfil: {campaign.get('target_role') or '—'}\n"
+            f"ICP campaña — intereses: {campaign.get('target_interests') or '—'}\n"
+        )
+    else:
+        icp_block = (
+            f"Modo: B2B\n"
+            f"ICP campaña — tamaño empresa: {campaign.get('target_company_size') or '—'}\n"
+            f"ICP campaña — industria: {campaign.get('target_industry') or '—'}\n"
+            f"ICP campaña — país: {campaign.get('target_country') or '—'}\n"
+            f"ICP campaña — idioma: {campaign.get('target_language') or '—'}\n"
+            f"ICP campaña — rol objetivo: {campaign.get('target_role') or '—'}\n"
+        )
     icp_ai = (campaign.get("icp_ai_digest") or "").strip()
     if icp_ai:
         icp_block += f"Resumen / notas ICP (IA, truncado):\n{icp_ai[:1800]}\n"
@@ -1093,7 +1232,7 @@ def generate_simulated_inbound_turn(
     education: str,
 ) -> str:
     """Mensaje inbound simulado (prospecto ficticio) coherente con el estado elegido por el randomizador."""
-    system = VOICE_GLOBAL + _education_block(education)
+    system = resolve_voice_global(campaign) + _education_block(education)
     user_prompt = (
         "Escribí un único mensaje INBOUND breve, como si lo mandara el prospecto real "
         f"por un chat tipo {campaign.get('preferred_channel_hint','')}.\n\n"
@@ -1118,25 +1257,63 @@ def generate_followup_message(
     interest_level: str | None = None,
     outbound_seq_index: int = 0,
     allow_soft_meeting_hint: bool = False,
+    is_final_goodbye: bool = False,
 ) -> str:
-    system = VOICE_GLOBAL + _education_block(education)
+    system = resolve_voice_global(campaign) + _education_block(education)
     obj = objection_type or "none"
     intr = (interest_level or "low").lower()
     cal = (campaign.get("calendar_link") or "").strip()
     meeting_line = ""
-    if allow_soft_meeting_hint and cal and intr == "high":
+    if allow_soft_meeting_hint and cal and intr == "high" and not is_final_goodbye:
         meeting_line = (
             f"Si encaja, cerrá invitando a una llamada corta; si hace falta el link de agenda en una sola frase: {cal}. "
             "No ofrezcas mandar material/resumen por chat como alternativa a la llamada."
+        )
+    if is_final_goodbye:
+        goodbye_prompt = (
+            "ÚLTIMO FOLLOW-UP OPCIONAL (post-secuencia) — último intento con aire de despedida sutil.\n"
+            "FORMATO: 3–6 líneas cortas. Español neutro-argentino. Sin markdown.\n\n"
+            "TONO OBLIGATORIO:\n"
+            "- Se tiene que sentir como cierre / último intento, no como otro chase más.\n"
+            "- Está BIEN decir algo sutil tipo: «si no es buen momento, dejo de insistir», "
+            "«cierro por acá para no molestar», «si más adelante querés retomar, avisame».\n"
+            "- Puerta abierta cálida, sin culpa y sin presión de venta.\n"
+            "- CTA suave opcional (una frase): si quiere charlar 5–10 min, que avise; si no, cerrás.\n"
+            "- PROHIBIDO: ¿pudiste leer/revisar mi mensaje?, re-pitch de producto, features, cerrar venta.\n\n"
+            f"Empresa que representás (firma): {campaign.get('brand_name') or campaign.get('company_name') or '—'}\n"
+            f"Remitente: {campaign.get('sender_name') or '—'}\n"
+            f"Prospecto: {prospect.get('name')} | empresa: {prospect.get('company_name')} "
+            f"| rol: {prospect.get('role')}\n"
+            f"Producto (solo contexto, no lo re-expliques): {product.get('name')}\n"
+            f"Objeción previa: {obj} | Interés: {intr} | Outbounds previos ~{outbound_seq_index}\n\n"
+            "Historial (coherencia; no repetir pitch):\n"
+            f"{_conversation_digest(previous_messages)}\n\n"
+            "Devolvé UN solo mensaje final de despedida sutil / último intento."
+        )
+        return _chat(
+            system,
+            goodbye_prompt,
+            temperature=random.uniform(0.7, 0.9),
+            max_output_tokens=160,
+            scrub_followup_cliche=True,
         )
     user_prompt = (
         "Seguimiento (2°+ touch outbound) — el prospecto ya recibió mensajes tuyos. "
         "FORMATO OBLIGATORIO: como máximo 1-2 líneas totales (muy cortas). "
         "Objetivo: retomar el hilo o empujar hacia llamada breve, NUNCA 'te mando info' ni re-explicar producto.\n"
+        f"Empresa que representás (firma): {campaign.get('brand_name') or campaign.get('company_name') or '—'}\n"
+        f"Remitente: {campaign.get('sender_name') or '—'}\n"
         f"Canal típico: {campaign.get('preferred_channel_hint','')}.\n\n"
         f"Prospecto: {prospect.get('name')} | empresa: {prospect.get('company_name')} "
         f"| rol: {prospect.get('role')} | industria: {prospect.get('industry')}\n"
-        f"Tono campaña: {campaign.get('tone')} | campaña: {campaign.get('name')}\n"
+        f"Tono campaña: {campaign.get('tone')} | campaña interna: {campaign.get('name')}\n"
+        f"ICP — industria: {campaign.get('target_industry') or '—'} | país: {campaign.get('target_country') or '—'} "
+        f"| rol objetivo: {campaign.get('target_role') or '—'}\n"
+    )
+    icp_ai = (campaign.get("icp_ai_digest") or "").strip()
+    if icp_ai:
+        user_prompt += f"Notas ICP (IA, truncado): {icp_ai[:900]}\n"
+    user_prompt += (
         f"Objeción previa conocida (si no es none, respetala): {obj}\n"
         f"Interés previo modelado (guideline, no lo cites): {intr}\n"
         f"Número aproximado de outbound ya enviados: {outbound_seq_index}\n"
@@ -1158,11 +1335,9 @@ def generate_followup_message(
         "(ej.: optimizar, gestión, ayudar, alinear, potenciar) — buscá un registro distinto.\n"
         "- Variá formato: muchas veces 1–3 líneas; a veces MUY corto (una sola línea + pregunta); "
         "a veces un toque más largo pero sin datasheet.\n"
-        "- Referencias naturales permitidas al hilo previo (ej.: \"retomar lo anterior\", "
-        "\"no sé si viste el mensaje\", \"me parecía que encajaba con lo que comentabas\"). "
-        "Sin frases hechas de marketing tipo 'solo te escribía para...'.\n"
-        "- PROHIBIDO: 'solo quería hacer seguimiento', 'retomo', 'circling back', "
-        "'siguiendo mi mensaje'.\n"
+        "- Referencias naturales al hilo previo (puente corto). "
+        "PROHIBIDO: ¿pudiste leer/revisar mi mensaje?, 'no sé si viste el mensaje', "
+        "'solo quería hacer seguimiento', 'circling back', 'siguiendo mi mensaje'.\n"
         "- No inventes datos del prospecto. Si falta dato, quedate general sin inventar.\n"
         f"{meeting_line}\n\n"
         "Nombre del producto (referencia mínima si hace falta cerrar una idea nueva, NO repetir lo ya dicho):\n"
@@ -1229,9 +1404,9 @@ def generate_inbound_response(
     )
 
     if scheduling_stage:
-        system = VOICE_INBOUND_SCHEDULE + behavior_prompt_section(policy) + _education_block(education)
+        system = resolve_voice_inbound_schedule(campaign) + behavior_prompt_section(policy) + _education_block(education)
     else:
-        system = VOICE_INBOUND_CONSULTATIVE + behavior_prompt_section(policy) + _education_block(education)
+        system = resolve_voice_inbound_consultative(campaign) + behavior_prompt_section(policy) + _education_block(education)
 
     vp = product.get("value_proposition") or ""
     vp_full = (vp[:520] + ("…" if len(vp or "") > 520 else "")) if vp else ""
@@ -1344,24 +1519,91 @@ def generate_inbound_response(
     return out
 
 
-def assistant_reply(
+def generate_linkedin_inbound_reply(
     *,
-    company_snapshot: str,
+    prospect: dict,
+    inbound_message: str,
+    conversation_history: Sequence[dict[str, str]],
+    campaign: dict,
+    product: dict,
     education: str,
-    chat_turns: list[dict[str, str]],
+    interest_level: str | None = None,
+    allow_soft_meeting_close: bool = True,
+    allow_opening_greeting: bool = True,
 ) -> str:
-    system = (
-        VOICE_GLOBAL
-        + _education_block(education)
-        + "\n\nRol nuevo: SOS el asistente interno llamado Nexus. "
-        "Ayudás a interpretar estadísticas YA provistas en texto; no inventes números. "
-        "Si hay imprecisiones porque faltó dato crudo, marcá la limitante. Respondé español neutro-argentino fresco."
+    """
+    Réplica LinkedIn inbound: personalizada, breve (~55 palabras), mismo espíritu que toques de secuencia.
+    """
+    inbound_raw = (inbound_message or "").strip()
+    if not inbound_raw:
+        raise ValueError("Mensaje inbound vacío")
+
+    substantive = inbound_text_needs_substantive_answer(inbound_raw)
+    vp = (product.get("value_proposition") or product.get("description") or "")[:280]
+    cal = (campaign.get("calendar_link") or "").strip()
+    meeting_hint = ""
+    if allow_soft_meeting_close and cal:
+        meeting_hint = f" Podés cerrar con invitación suave a charla breve; link disponible: {cal}"
+    elif allow_soft_meeting_close:
+        meeting_hint = " Podés cerrar con invitación suave a charla breve de 15 min (sin presión)."
+
+    product_rule = (
+        "El prospecto PREGUNTÓ por el producto: respondé en 1-2 frases concretas "
+        f"(referencia breve, no marketing): {vp}"
+        if substantive
+        else (
+            "El prospecto NO pidió explicación del producto. "
+            "PROHIBIDO pitch/beneficios/%. Solo acknowledge + CTA suave a reunión."
+        )
     )
-    lines = [f"{t['role'].upper()}: {t['content'].strip()}" for t in chat_turns[-18:]]
-    user_prompt = "CONTEXTO SISTEMA (posible truncado):\n" + company_snapshot + "\n\nConversación según turnos:\n"
-    user_prompt += "\n".join(lines)
-    user_prompt += "\n\nContestá sólo lo necesario útil sobre el último USER."
-    return _chat(system, user_prompt, temperature=0.45, max_output_tokens=460)
+    greeting_rule = (
+        "SALUDO: podés abrir con 'Hola [primer nombre],' (una sola vez)."
+        if allow_opening_greeting
+        else (
+            "SALUDO: PROHIBIDO 'Hola' / 'Buen día' / 'Hey'. "
+            "Este hilo ya tuvo saludo. Arrancá directo (Perfecto, Listo, Genial…)."
+        )
+    )
+
+    system = VOICE_LINKEDIN_INBOUND_DM + _education_block(education)
+    user_prompt = (
+        "Escribí UN solo DM de LinkedIn como réplica al prospecto.\n\n"
+        f"Prospecto: {prospect.get('name')} | {prospect.get('company_name')} | {prospect.get('role')}\n"
+        f"Campaña: {campaign.get('name')} | Tono: {campaign.get('tone')}\n"
+        f"Producto (contexto, no lo pitches salvo que pregunten): {product.get('name')}\n"
+        f"{product_rule}\n"
+        f"{greeting_rule}\n"
+        f"Interés estimado: {(interest_level or 'medium').lower()}\n"
+        f"{meeting_hint}\n\n"
+        f"Historial reciente:\n{_conversation_digest(conversation_history)}\n\n"
+        f"MENSAJE DEL PROSPECTO (respondé esto):\n{inbound_raw}\n\n"
+        "Máximo 45 palabras. Sin firma. Sin plantillas genéricas."
+    )
+    out = _chat(
+        system,
+        user_prompt,
+        temperature=random.uniform(0.62, 0.76),
+        max_output_tokens=95 if substantive else 70,
+    )
+    if substantive and inbound_raw:
+        out = _maybe_scrub_inbound_evasive(out, system, inbound_snippet=inbound_raw)
+    from app.services.outbound_text_normalize import apply_opening_greeting_policy
+
+    return apply_opening_greeting_policy(
+        _trim_words(out, 48),
+        allow_greeting=allow_opening_greeting,
+    )
+
+
+def _trim_words(text: str, max_words: int) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return cleaned
+    words = cleaned.split()
+    if len(words) <= max_words:
+        return cleaned
+    trimmed = " ".join(words[:max_words]).rstrip(".,;:")
+    return trimmed + "…"
 
 
 _SEQUENCE_DAY_HINTS: dict[int, str] = {
@@ -1388,7 +1630,7 @@ def generate_sequence_touch_message(
     """Un solo mensaje para el hito `day` del embudo 21d (simulación multicanal)."""
     hint = _SEQUENCE_DAY_HINTS.get(day, "Seguimiento de secuencia multicanal Nexus.")
     system = (
-        VOICE_GLOBAL
+        resolve_voice_global(campaign)
         + _education_block(education_blob)
         + "\n\nSos el motor comercial Nexus. Escribí UN solo mensaje outbound listo para enviar.\n"
         f"Tono campaña: {tone}. Canal previsto: {channel}. {hint}\n"
@@ -1411,18 +1653,24 @@ def generate_reactivation_ping(
     tone: str,
     education_blob: str,
 ) -> str:
-    """Día 42: último intento suave tras silencio (wording variable)."""
+    """Día 42 / follow-up opcional: último intento con aire de despedida sutil."""
     system = (
-        VOICE_GLOBAL
+        resolve_voice_global(campaign)
         + _education_block(education_blob)
-        + "\n\nReactivación tardía (día ~42): un solo mensaje corto recordando el contacto previo sobre "
-        "automatización / eficiencia comercial, sin presión. Español neutro-argentino. Máximo 90 palabras. "
+        + "\n\nÚLTIMO INTENTO OPCIONAL (reactivación tardía): mensaje corto de cierre sutil. "
+        "Tiene que sentirse como despedida / último intento, no como otro chase. "
+        "Está BIEN decir algo tipo «si no es buen momento, dejo de insistir» o "
+        "«cierro por acá para no molestar; si más adelante querés retomar, avisame». "
+        "Puerta abierta cálida. Sin presión de venta. Sin ¿pudiste leer mi mensaje?. "
+        "Sin re-pitch. Español neutro-argentino. Máximo 90 palabras. "
         f"Tono: {tone}."
     )
     user = (
         f"Prospecto: {prospect.get('name')} en {prospect.get('company_name')}.\n"
-        f"Producto referencia: {product.get('name')}.\n"
+        f"Producto referencia (no lo re-expliques): {product.get('name')}.\n"
         f"Campaña: {campaign.get('name')}.\n"
+        f"Remitente: {campaign.get('sender_name') or '—'}.\n"
+        "Escribí el mensaje final de despedida sutil / último intento."
     )
     return _chat(system, user, temperature=0.62, max_output_tokens=380)
 
@@ -1502,23 +1750,41 @@ def analyze_campaign_icp(
     tone: str,
     allowed_channels: list[str],
     prospect_count: int,
+    target_interests: str | None = None,
+    outreach_mode: str | None = None,
 ) -> dict[str, str | int | list[str]]:
+    mode = (outreach_mode or "b2b").strip().lower()
+    is_b2c = mode == "b2c"
+    strategist = "estratega GTM B2C (consumidor final)" if is_b2c else "estratega GTM B2B"
     system = (
-        "Sos estratega GTM B2B. Respondé sólo JSON (sin markdown) con claves: "
+        f"Sos {strategist}. Respondé sólo JSON (sin markdown) con claves: "
         "icp_quality (breve), icp_scope (muy amplio|amplio|ajustado|estrecho), recommendations (texto multilinea corto), "
         "suggested_channels (array de strings: linkedin, email, whatsapp), message_style (breve), "
         "low_response_risk (bajo|medio|alto), suggested_initial_prospect_count (entero entre 20 y 500), "
         "notes (opcional, breve)."
     )
+    if is_b2c:
+        icp_lines = (
+            f"Modo campaña: B2C (personas, no empresas)\n"
+            f"ICP — país/región: {target_country or '—'}\n"
+            f"ICP — idioma: {target_language or '—'}\n"
+            f"ICP — perfil / rol: {target_role or '—'}\n"
+            f"ICP — intereses / keywords: {target_interests or '—'}\n"
+        )
+    else:
+        icp_lines = (
+            f"Modo campaña: B2B\n"
+            f"ICP — tamaño empresa: {target_company_size or '—'}\n"
+            f"ICP — industria: {target_industry or '—'}\n"
+            f"ICP — país: {target_country or '—'}\n"
+            f"ICP — idioma: {target_language or '—'}\n"
+            f"ICP — rol: {target_role or '—'}\n"
+        )
     user = (
         f"Campaña: {campaign_name}\n"
         f"Producto: {product_name}\n"
         f"Descripción producto (truncada): {(product_description or '')[:1200]}\n"
-        f"ICP — tamaño empresa: {target_company_size or '—'}\n"
-        f"ICP — industria: {target_industry or '—'}\n"
-        f"ICP — país: {target_country or '—'}\n"
-        f"ICP — idioma: {target_language or '—'}\n"
-        f"ICP — rol: {target_role or '—'}\n"
+        f"{icp_lines}"
         f"Tono campaña: {tone}\n"
         f"Canales permitidos (orden): {', '.join(allowed_channels)}\n"
         f"Cantidad objetivo prospectos: {prospect_count}\n"
@@ -1598,27 +1864,31 @@ def generate_linkedin_sdr_draft(
     last_prospect_message: str,
 ) -> str:
     """Borrador corto para que el SDR copie y pegue en LinkedIn (no envía)."""
-    system = VOICE_GLOBAL + _education_block(education)
     if is_reply and (last_prospect_message or "").strip():
+        system = resolve_voice_inbound_consultative(campaign) + _education_block(education)
         user = (
-            "Generá UN mensaje outbound MUY corto (LinkedIn, texto plano) como réplica del SDR "
-            "al último mensaje del prospecto. Sin markdown. Máximo 2-3 líneas cortas.\n\n"
+            "Generá UN mensaje outbound para LinkedIn (texto plano) como réplica del SDR.\n"
+            "PRIORIDAD #1: respondé concretamente lo que preguntó el prospecto.\n"
+            "PRIORIDAD #2: cierre suave con llamada de 15 min si encaja.\n"
+            "Sin markdown. Máximo 5-6 líneas cortas. No uses nombres de empresa de prueba.\n\n"
             f"Prospecto: {prospect.get('name')} | {prospect.get('company_name')} | rol {prospect.get('role')}\n"
             f"Campaña: {campaign.get('name')} | tono {campaign.get('tone')}\n"
-            f"Producto (referencia mínima): {product.get('name')} — {product.get('value_proposition', '')[:200]}\n\n"
+            f"Producto: {product.get('name')} — {product.get('value_proposition', '')[:200]}\n\n"
             f"Último mensaje del prospecto:\n{last_prospect_message[:1200]}\n"
         )
-    else:
-        user = (
-            "Generá UN primer mensaje outbound para LinkedIn (texto plano), "
-            "como si lo fuera a pegar un SDR humano. Sin markdown. Máximo 3-4 líneas cortas.\n"
-            "PROHIBIDO mensaje genérico: mencioná algo concreto de la empresa o el rol según el contexto.\n\n"
-            f"Prospecto: {prospect.get('name')} | {prospect.get('company_name')} | rol {prospect.get('role')}\n"
-            f"Campaña: {campaign.get('name')} | tono {campaign.get('tone')}\n"
-            f"Producto: {product.get('name')}\n"
-            f"Propuesta de valor (no copiar literal): {(product.get('value_proposition') or '')[:320]}\n\n"
-            f"{_mvp_prospect_context_block(prospect)}"
-        )
+        return _chat(system, user, temperature=random.uniform(0.62, 0.78), max_output_tokens=220)
+
+    system = resolve_voice_global(campaign) + _education_block(education)
+    user = (
+        "Generá UN primer mensaje outbound para LinkedIn (texto plano), "
+        "como si lo fuera a pegar un SDR humano. Sin markdown. Máximo 3-4 líneas cortas.\n"
+        "PROHIBIDO mensaje genérico: mencioná algo concreto de la empresa o el rol según el contexto.\n\n"
+        f"Prospecto: {prospect.get('name')} | {prospect.get('company_name')} | rol {prospect.get('role')}\n"
+        f"Campaña: {campaign.get('name')} | tono {campaign.get('tone')}\n"
+        f"Producto: {product.get('name')}\n"
+        f"Propuesta de valor (no copiar literal): {(product.get('value_proposition') or '')[:320]}\n\n"
+        f"{_mvp_prospect_context_block(prospect)}"
+    )
     return _chat(system, user, temperature=random.uniform(0.72, 0.88), max_output_tokens=140)
 
 
@@ -1630,7 +1900,7 @@ def generate_whatsapp_sdr_draft(
     education: str,
 ) -> str:
     """Borrador inicial WhatsApp — personalizado, no plantilla del email."""
-    system = VOICE_GLOBAL + _education_block(education)
+    system = resolve_voice_global(campaign) + _education_block(education)
     pname = (prospect.get("name") or "").split()[0] or "Hola"
     user = (
         "Generá UN primer mensaje outbound para WhatsApp (texto plano), tono conversacional B2B. "

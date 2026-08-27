@@ -1,8 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+
+def _as_utc_datetime(value: datetime) -> datetime:
+    """SQLite guarda UTC sin tz; la API siempre devuelve aware en UTC."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 class MeetingCreate(BaseModel):
@@ -31,6 +38,10 @@ class MeetingRead(BaseModel):
     company_id: int
     campaign_id: int
     prospect_id: int
+    prospect_name: str | None = None
+    prospect_company_name: str | None = None
+    prospect_commercial_state: str | None = None
+    campaign_name: str | None = None
     title: str
     description: str | None
     scheduled_for: datetime
@@ -44,6 +55,10 @@ class MeetingRead(BaseModel):
     created_by_user_id: int | None = None
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("scheduled_for", "created_at", "updated_at")
+    def _serialize_utc_datetimes(self, value: datetime) -> datetime:
+        return _as_utc_datetime(value)
 
 
 class MeetingAcceptSuggestionRead(BaseModel):

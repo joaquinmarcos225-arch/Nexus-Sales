@@ -53,5 +53,6 @@ class GmailInboundSyncRead(BaseModel):
     prospects_scanned: int = 0
     auto_drafts: int = 0
     auto_sent: int = 0
+    gmail_draft_sents_detected: int = 0
     errors: list[str] = Field(default_factory=list)
     trace: list[str] = Field(default_factory=list)

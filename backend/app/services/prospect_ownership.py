@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.core.permissions import Permission, has_permission, normalize_role
+from app.core.permissions import Permission, has_permission, is_company_admin, normalize_role
 from app.models.enums import ProspectOwnershipStatus, UserRole
 from app.models.prospect import Prospect
 from app.models.prospect_ownership_event import ProspectOwnershipEvent
@@ -81,7 +81,7 @@ def can_view_prospect(_user: User, prospect: Prospect) -> bool:
 def prospects_visible_to_viewer(user: User, prospects: list[Prospect]) -> list[Prospect]:
     """Alcance de bandeja: SDR → propios + libres; Manager → equipo; Director → empresa."""
     role = normalize_role(user.role)
-    if role == UserRole.gerente:
+    if is_company_admin(role):
         return prospects
     if role == UserRole.manager:
         team_id = user.team_id
@@ -114,8 +114,11 @@ def can_act_on_prospect(user: User, prospect: Prospect) -> bool:
     if user.company_id != prospect.company_id:
         return False
     role = normalize_role(user.role)
-    if role == UserRole.gerente:
-        return False
+    if is_company_admin(role):
+        status = effective_ownership_status(prospect)
+        if status in (ProspectOwnershipStatus.libre.value, ProspectOwnershipStatus.liberado.value):
+            return True
+        return prospect.owner_user_id == user.id
     if role == UserRole.manager:
         return True
     if role == UserRole.sdr:
@@ -128,8 +131,6 @@ def can_act_on_prospect(user: User, prospect: Prospect) -> bool:
 
 def can_claim_prospect(user: User, prospect: Prospect) -> bool:
     role = normalize_role(user.role)
-    if role == UserRole.gerente:
-        return False
     if not has_permission(user.role, Permission.PROSPECT_CLAIM):
         return False
     if user.company_id != prospect.company_id:
@@ -146,7 +147,7 @@ def assert_company_access(user: User, company_id: int) -> None:
 
 
 def can_release_prospect(user: User, prospect: Prospect) -> bool:
-    if normalize_role(user.role) != UserRole.gerente:
+    if not is_company_admin(user.role):
         return False
     if user.company_id != prospect.company_id:
         return False
@@ -157,7 +158,7 @@ def can_release_prospect(user: User, prospect: Prospect) -> bool:
 
 
 def can_reassign_prospect(user: User, prospect: Prospect) -> bool:
-    if normalize_role(user.role) != UserRole.gerente:
+    if not is_company_admin(user.role):
         return False
     if user.company_id != prospect.company_id:
         return False
@@ -190,8 +191,6 @@ def release_at(prospect: Prospect) -> datetime | None:
 
 
 def claim_prospect(db: Session, *, user: User, prospect: Prospect) -> Prospect:
-    if normalize_role(user.role) == UserRole.gerente:
-        raise HTTPException(status_code=403, detail="Gerente no puede tomar prospectos")
     refresh_ownership_if_expired(prospect, db)
     if not can_claim_prospect(user, prospect):
         raise HTTPException(
@@ -220,8 +219,8 @@ def claim_prospect(db: Session, *, user: User, prospect: Prospect) -> Prospect:
 
 
 def release_prospect(db: Session, *, user: User, prospect: Prospect) -> Prospect:
-    if normalize_role(user.role) != UserRole.gerente:
-        raise HTTPException(status_code=403, detail="Solo Gerente puede liberar prospectos")
+    if not is_company_admin(user.role):
+        raise HTTPException(status_code=403, detail="Solo Director/Owner puede liberar prospectos")
     assert_company_access(user, prospect.company_id)
     if not can_release_prospect(user, prospect):
         raise HTTPException(status_code=403, detail="No podés liberar este prospecto")
@@ -253,8 +252,8 @@ def reassign_prospect(
     prospect: Prospect,
     to_user_id: int,
 ) -> Prospect:
-    if normalize_role(actor.role) != UserRole.gerente:
-        raise HTTPException(status_code=403, detail="Solo Gerente puede reasignar prospectos")
+    if not is_company_admin(actor.role):
+        raise HTTPException(status_code=403, detail="Solo Director/Owner puede reasignar prospectos")
     if not has_permission(actor.role, Permission.PROSPECT_REASSIGN):
         raise HTTPException(status_code=403, detail="No tenés permiso para reasignar prospectos")
     assert_company_access(actor, prospect.company_id)
@@ -285,10 +284,19 @@ def reassign_prospect(
 
 
 def mark_sequence_started(db: Session, *, user: User, prospect: Prospect) -> None:
-    if normalize_role(user.role) == UserRole.gerente:
-        raise HTTPException(status_code=403, detail="Gerente no puede iniciar secuencias")
-    if prospect.owner_user_id != user.id and normalize_role(user.role) == UserRole.sdr:
+    # Director/Owner puede iniciar (secuencia individual / demo). SDR solo en los suyos.
+    if (
+        prospect.owner_user_id is not None
+        and prospect.owner_user_id != user.id
+        and normalize_role(user.role) == UserRole.sdr
+    ):
         raise HTTPException(status_code=403, detail="No podés iniciar secuencia en prospecto de otro SDR")
+    if (
+        prospect.owner_user_id is not None
+        and prospect.owner_user_id != user.id
+        and not is_company_admin(user.role)
+    ):
+        raise HTTPException(status_code=403, detail="No podés iniciar secuencia en prospecto de otro usuario")
     prospect.ownership_status = ProspectOwnershipStatus.en_secuencia.value
     if prospect.claimed_at is None:
         prospect.claimed_at = _now()

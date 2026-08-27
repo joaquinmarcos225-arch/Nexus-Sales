@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -14,8 +14,17 @@ from app.deps import get_company
 from app.models.connected_account import ConnectedAccount
 from app.models.enums import IntegrationProvider, IntegrationStatus
 from app.models.user import User
-from app.schemas.connection import ConnectionCardRead, GoogleIntegrationVerifyRead
+from app.schemas.connection import ConnectionCardRead, GoogleIntegrationVerifyRead, WhatsAppIntegrationVerifyRead
+from app.schemas.linkedin_connect import LinkedInMockConnectBody
+from app.services import google_oauth
 from app.services.google_integration_verify import verify_google_integrations
+from app.services.oauth_tokens import decrypt_secret
+from app.services.whatsapp_cloud_service import verify_whatsapp_api
+
+_GOOGLE_PROVIDERS = (
+    IntegrationProvider.gmail,
+    IntegrationProvider.google_calendar,
+)
 
 router = APIRouter(tags=["connections"])
 
@@ -81,6 +90,14 @@ def _merge_cards(rows: list[ConnectedAccount]) -> list[ConnectionCardRead]:
                 st = IntegrationStatus(row.status)
             except ValueError:
                 st = IntegrationStatus.error
+            # Si hay tokens (aunque status=error), la card no debe verse como caída:
+            # el refresh rehabilita la conexión sin intervención del usuario.
+            if st == IntegrationStatus.error:
+                has_tokens = bool(row.access_token_encrypted) or bool(
+                    row.refresh_token_encrypted
+                )
+                if has_tokens:
+                    st = IntegrationStatus.connected
             out.append(
                 ConnectionCardRead(
                     provider=p,
@@ -138,6 +155,24 @@ def verify_google_integrations_by_query(
     return GoogleIntegrationVerifyRead.model_validate(data)
 
 
+@router.get(
+    "/users/{user_id}/integrations/whatsapp/verify",
+    response_model=WhatsAppIntegrationVerifyRead,
+)
+def verify_whatsapp_integrations_by_query(
+    user_id: int,
+    company_id: int = Query(..., ge=1, description="ID de empresa (multi-tenant)"),
+    deep: bool = Query(True, description="Verificar token contra Graph API"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _company=Depends(get_company),
+) -> WhatsAppIntegrationVerifyRead:
+    _ensure_own_integrations(current_user, user_id)
+    _user_in_company(db, company_id, user_id)
+    data = verify_whatsapp_api(deep=deep)
+    return WhatsAppIntegrationVerifyRead.model_validate(data)
+
+
 @router.get("/users/{user_id}/connections", response_model=list[ConnectionCardRead])
 def list_user_connections_by_query(
     user_id: int,
@@ -162,6 +197,7 @@ def mock_connect_provider(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _company=Depends(get_company),
+    body: LinkedInMockConnectBody | None = Body(default=None),
 ) -> list[ConnectionCardRead]:
     _ensure_own_integrations(current_user, user_id)
     user = _user_in_company(db, company_id, user_id)
@@ -184,19 +220,22 @@ def mock_connect_provider(
         db.add(row)
 
     if prov == IntegrationProvider.linkedin:
-        valid = {s.value for s in IntegrationStatus}
-        cur_raw = row.status if row.status in valid else IntegrationStatus.not_connected.value
-        cur = IntegrationStatus(cur_raw)
-        if cur in (IntegrationStatus.not_connected, IntegrationStatus.error):
-            row.status = IntegrationStatus.extension_not_installed.value
-        elif cur == IntegrationStatus.extension_not_installed:
-            row.status = IntegrationStatus.extension_connected.value
-            row.connected_at = now
-            row.external_email = user.email
+        profile = None
+        if body is not None and (body.linkedin_profile_url or "").strip():
+            profile = body.linkedin_profile_url.strip()[:512]
+        display = None
+        if body is not None and (body.display_name or "").strip():
+            display = body.display_name.strip()[:120]
+        row.status = IntegrationStatus.extension_connected.value
+        row.connected_at = now
+        if display and profile:
+            row.external_email = f"{display} · {profile}"
+        elif profile:
+            row.external_email = profile
+        elif display:
+            row.external_email = display
         else:
-            row.status = IntegrationStatus.extension_connected.value
-            row.connected_at = row.connected_at or now
-            row.external_email = row.external_email or user.email
+            row.external_email = user.email
     else:
         row.status = IntegrationStatus.connected.value
         row.connected_at = now
@@ -219,9 +258,37 @@ def mock_connect_provider_by_query(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     _company=Depends(get_company),
+    body: LinkedInMockConnectBody | None = Body(default=None),
 ) -> list[ConnectionCardRead]:
     """POST /users/{user_id}/connections/{provider}/mock-connect?company_id=…"""
-    return mock_connect_provider(company_id, user_id, provider, db, current_user, _company)
+    return mock_connect_provider(
+        company_id, user_id, provider, db, current_user, _company, body
+    )
+
+
+def _disconnect_google_pair(db: Session, *, company_id: int, user_id: int) -> None:
+    rows = [
+        row
+        for row in (
+            _get_row(db, company_id, user_id, IntegrationProvider.gmail),
+            _get_row(db, company_id, user_id, IntegrationProvider.google_calendar),
+        )
+        if row is not None
+    ]
+    token = None
+    for row in rows:
+        try:
+            token = decrypt_secret(row.refresh_token_encrypted) or decrypt_secret(
+                row.access_token_encrypted
+            )
+        except Exception:
+            token = None
+        if token:
+            break
+    for row in rows:
+        db.delete(row)
+    db.commit()
+    google_oauth.revoke_google_token(token)
 
 
 @router.post(
@@ -239,6 +306,9 @@ def disconnect_provider(
     _ensure_own_integrations(current_user, user_id)
     _user_in_company(db, company_id, user_id)
     prov = _parse_provider(provider)
+    if prov in _GOOGLE_PROVIDERS:
+        _disconnect_google_pair(db, company_id=company_id, user_id=user_id)
+        return _fetch_merged_cards(db, company_id, user_id)
     row = _get_row(db, company_id, user_id, prov)
     if row is not None:
         db.delete(row)

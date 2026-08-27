@@ -42,6 +42,7 @@ def test_resolution_metrics():
             name="A",
             result_kind="company",
             company_domain="a.com",
+            domain_trust="verified",
             icp_relevance_score=80,
         ),
         CompanyCandidateRead(

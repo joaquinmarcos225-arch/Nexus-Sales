@@ -10,6 +10,7 @@ from app.services.lead_sourcing.company_search_classifier import CompanyResultKi
 from app.services.lead_sourcing.icp_intelligence import CompanyIcpProfile
 
 MIN_COMPANY_RELEVANCE = 55
+MIN_COMPANY_RELEVANCE_STRICT = 70  # cuando hay industria ICP configurada
 MIN_DIRECTORY_RELEVANCE = 42
 
 _NOISE_NAME = re.compile(
@@ -31,6 +32,9 @@ def score_company_relevance(
 ) -> int:
     blob = f"{name} {title} {snippet} {url}".lower()
 
+    if company_is_noisy_for_sourcing(name, url):
+        return 0
+
     for neg in profile.all_negatives():
         if neg in blob:
             return 0
@@ -41,6 +45,7 @@ def score_company_relevance(
     score = 38
 
     industry = profile.industry.lower().strip()
+    industry_required = bool(getattr(profile, "industry_user_set", True))
     if industry:
         if industry in blob:
             score += 28
@@ -55,10 +60,24 @@ def score_company_relevance(
                     score += 12
                 elif hits == 1 and len(tokens) > 1:
                     score += 4
+                elif industry_required:
+                    # Sin evidencia de industria en el snippet: penalizar fuerte solo si el ICP la pidió.
+                    score -= 22
                 else:
-                    score -= 8
+                    # Industria soft/default: no castigar; bonus leve si huele a software.
+                    if any(s in blob for s in ("software", "saas", "platform", "b2b", "startup")):
+                        score += 8
 
+    geo_hit = False
     if profile.country and profile.country.lower() in blob:
+        geo_hit = True
+    if not geo_hit:
+        for name in getattr(profile, "region_country_names", None) or []:
+            n = (name or "").lower().strip()
+            if len(n) >= 4 and n in blob:
+                geo_hit = True
+                break
+    if geo_hit:
         score += 14
 
     if profile.company_stage and profile.company_stage.lower() in blob:
@@ -87,12 +106,18 @@ def _looks_like_wrong_saas_match(name: str, profile: CompanyIcpProfile) -> bool:
     ind = profile.industry.lower()
     if "saas" not in ind:
         return False
-    if re.search(r"saas\s+(group|berkeley|university|college|school|institute|recruit)", n):
+    if re.search(r"saas\s+(group|berkeley|university|college|school|institute|recruit|talent)", n):
         return True
-    if re.search(r"\b(agency|recruiter|staffing|consultant)\b", n):
+    if re.search(r"\b(agency|recruiter|staffing|consultant|careers|talent)\b", n):
         return True
     return False
 
+
+def company_is_noisy_for_sourcing(name: str, url: str = "") -> bool:
+    """Bloqueo duro de empresas talent/careers/recruiting antes de Prospeo."""
+    from app.services.lead_sourcing.icp_import_gate import is_noisy_company
+
+    return is_noisy_company(name, company_domain=url)
 
 def canonical_company_key(url: str, name: str) -> str:
     parsed = urlparse(url if "://" in url else f"https://{url}")
@@ -224,8 +249,13 @@ def _prefer_url(a: str | None, b: str | None) -> str | None:
     return a or b
 
 
-def passes_relevance_threshold(candidate: CompanyCandidateRead) -> bool:
+def passes_relevance_threshold(
+    candidate: CompanyCandidateRead,
+    *,
+    strict_industry: bool = False,
+) -> bool:
     rel = candidate.icp_relevance_score or 0
     if candidate.result_kind == CompanyResultKind.directory_source.value:
         return rel >= MIN_DIRECTORY_RELEVANCE
-    return rel >= MIN_COMPANY_RELEVANCE
+    floor = MIN_COMPANY_RELEVANCE_STRICT if strict_industry else MIN_COMPANY_RELEVANCE
+    return rel >= floor

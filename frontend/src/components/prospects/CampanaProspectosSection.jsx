@@ -19,6 +19,8 @@ import {
   patchProspect,
   simulateCampaignProspects,
 } from '../../utils/api.js'
+import { notifyMeetingsChanged } from '../../hooks/useMeetingsPending.js'
+import { clearProspectExtensionWatch } from '../../utils/clearProspectExtensionWatch.js'
 
 function channelLabel(ch) {
   const m = { linkedin: 'LinkedIn', email: 'Email', whatsapp: 'WhatsApp' }
@@ -40,7 +42,7 @@ const STATUS_OPTIONS = [
 function ScoreBadge({ value }) {
   const v = Math.round(Math.max(0, Math.min(100, Number(value) || 0)))
   return (
-    <span className="shrink-0 rounded-md border border-[#e5e7eb] bg-[#f8fafc] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[#374151]">
+    <span className="shrink-0 rounded-md border border-nx-border bg-nx-card-muted px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-nx-ink">
       {v}
     </span>
   )
@@ -50,15 +52,15 @@ function ScoreBar({ value, tone = 'neutral' }) {
   const v = Math.max(0, Math.min(100, Number(value) || 0))
   const fill =
     tone === 'interest'
-      ? 'bg-sky-600'
+      ? 'bg-zinc-600'
       : 'bg-nx-brand'
   return (
     <div className="flex items-center gap-2 min-w-[7.5rem]">
       <ScoreBadge value={v} />
-      <div className="h-2 flex-1 overflow-hidden rounded-full bg-[#e5e7eb]">
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-nx-border">
         <div className={`h-full rounded-full ${fill}`} style={{ width: `${v}%` }} />
       </div>
-      <span className="tabular-nums text-[10px] text-[#6b7280]">{v}%</span>
+      <span className="tabular-nums text-[10px] text-nx-muted">{v}%</span>
     </div>
   )
 }
@@ -212,6 +214,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
     setError(null)
     try {
       await deleteProspect(p.id)
+      clearProspectExtensionWatch(p.id)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -222,6 +225,9 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
     setError(null)
     try {
       await patchProspect(id, { status })
+      if (status === 'not_interested') {
+        clearProspectExtensionWatch(id)
+      }
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -392,6 +398,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
     try {
       await acceptProspectMeetingSuggestion(conversationRow.id)
       setConversationRow(null)
+      notifyMeetingsChanged({ accepted: true })
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -401,22 +408,19 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
   }
 
   const inputCls =
-    'mt-1 w-full rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 text-sm text-[#111827] shadow-sm placeholder:text-[#9ca3af] focus:border-[#9ca3af] focus:outline-none focus:ring-2 focus:ring-[#9ca3af]/25'
+    'mt-1 w-full rounded-lg border border-nx-border bg-white px-3 py-2 text-sm text-nx-ink shadow-sm placeholder:text-nx-subtle focus:border-nx-subtle focus:outline-none focus:ring-2 focus:ring-nx-subtle/25'
   const btnGhost =
-    'rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc] disabled:opacity-40'
-  const btnPrimary =
-    'rounded-lg bg-nx-brand px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-nx-brand-hover disabled:opacity-40'
+    'rounded-lg border border-nx-border bg-white px-3 py-2 text-xs font-semibold text-nx-ink hover:bg-nx-card-muted disabled:opacity-40'
+  const btnPrimary = 'nx-btn nx-btn-primary px-3 py-2 text-xs'
 
   return (
-    <section className="rounded-xl border border-[#e5e7eb] bg-white p-4 shadow-sm shadow-[#111827]/5 space-y-4">
+    <section className="rounded-xl border border-nx-border bg-white p-4 shadow-sm shadow-nx-ink/5 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-[#111827]">Prospectos</h2>
-          <p className="mt-1 text-xs text-[#6b7280] max-w-xl leading-relaxed">
-            Alta manual, importación tipo CSV (separador <strong>|</strong>) o simulación. El{' '}
-            <code className="rounded bg-[#f8fafc] px-1 text-[11px] text-[#374151]">POST …/bulk</code>{' '}
-            es el mismo contrato previsto para la extensión Chrome sobre LinkedIn; el scoring con IA
-            reemplazará la heurística actual sin cambiar la forma del recurso.
+          <h2 className="text-sm font-semibold text-nx-ink">Prospectos</h2>
+          <p className="mt-1 text-xs text-nx-muted max-w-xl leading-relaxed">
+            Alta manual o importación tipo CSV (separador <strong>|</strong>). Al iniciar la secuencia,
+            Nexus enriquece email, LinkedIn y teléfono según el plan de la campaña.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -436,45 +440,46 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
           >
             Importar varios
           </button>
-          <button
-            type="button"
-            disabled={freeze || simulateBusy || !campaignId || simDisabled}
-            className={btnPrimary}
-            title={
-              simDisabled
-                ? 'Desactivado: NEXUS_REAL_MODE o NEXUS_DISABLE_OUTREACH_SIMULATION en el API.'
-                : undefined
-            }
-            onClick={() => void handleSimulate()}
-          >
-            {simulateBusy ? 'Simulando…' : 'Simular prospectos'}
-          </button>
+          {import.meta.env.DEV && !simDisabled ? (
+            <button
+              type="button"
+              disabled={freeze || simulateBusy || !campaignId || simDisabled}
+              className={btnPrimary}
+              title={
+                simDisabled
+                  ? 'Desactivado: NEXUS_REAL_MODE o NEXUS_DISABLE_OUTREACH_SIMULATION en el API.'
+                  : undefined
+              }
+              onClick={() => void handleSimulate()}
+            >
+              {simulateBusy ? 'Simulando…' : 'Simular prospectos'}
+            </button>
+          ) : null}
         </div>
       </div>
 
       <AlertBanner message={freeze ? null : error} onDismiss={() => setError(null)} />
 
       {freeze ? (
-        <p className="text-xs text-amber-800">
+        <p className="text-xs text-zinc-800">
           Seleccioná la empresa correcta en el header para operar estos prospectos.
         </p>
       ) : null}
 
       {loading ? (
-        <p className="text-sm text-[#6b7280]">Cargando prospectos…</p>
+        <p className="text-sm text-nx-muted">Cargando prospectos…</p>
       ) : null}
 
       {!freeze && !loading && rows.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-[#e5e7eb] px-4 py-10 text-center text-sm text-[#6b7280]">
-          Todavía no hay prospectos. Agregá manualmente o importá un bloque pegado desde el portapapeles
-          {simDisabled ? '.' : ' o ejecutá una simulación de datos de demostración.'}
+        <div className="rounded-lg border border-dashed border-nx-border px-4 py-10 text-center text-sm text-nx-muted">
+          Todavía no hay prospectos. Agregá manualmente o importá un bloque pegado desde el portapapeles.
         </div>
       ) : null}
 
       {!freeze && rows.length ? (
-        <div className="overflow-x-auto rounded-xl border border-[#e5e7eb]">
-          <table className="min-w-[1680px] w-full divide-y divide-[#e5e7eb] text-sm">
-            <thead className="bg-[#f8fafc] text-left text-[11px] font-semibold uppercase tracking-wide text-[#6b7280]">
+        <div className="overflow-x-auto rounded-xl border border-nx-border">
+          <table className="min-w-[1680px] w-full divide-y divide-nx-border text-sm">
+            <thead className="bg-nx-card-muted text-left text-[11px] font-semibold uppercase tracking-wide text-nx-muted">
               <tr>
                 <th className="px-4 py-2">Nombre</th>
                 <th className="px-4 py-2">Empresa</th>
@@ -493,22 +498,22 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
                 <th className="px-4 py-2 text-right">Acciones</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#e5e7eb] text-[#374151]">
+            <tbody className="divide-y divide-nx-border text-nx-ink">
               {rows.map((p) => (
-                <tr key={p.id} className="align-top hover:bg-[#f8fafc]/80">
-                  <td className="px-4 py-2 font-medium whitespace-nowrap text-[#111827]">
+                <tr key={p.id} className="align-top hover:bg-nx-card-muted/80">
+                  <td className="px-4 py-2 font-medium whitespace-nowrap text-nx-ink">
                     {p.name}
                   </td>
-                  <td className="px-4 py-2 text-[#6b7280] max-w-[10rem] truncate">
+                  <td className="px-4 py-2 text-nx-muted max-w-[10rem] truncate">
                     {p.company_name}
                   </td>
                   <td className="px-4 py-2 text-xs">{p.role ?? '—'}</td>
                   <td className="px-4 py-2 text-xs">{p.country ?? '—'}</td>
-                  <td className="px-4 py-2 text-xs font-medium text-[#111827]">
+                  <td className="px-4 py-2 text-xs font-medium text-nx-ink">
                     {channelLabel(p.preferred_channel)}
                   </td>
                   <td
-                    className="px-4 py-2 text-[10px] text-[#6b7280] max-w-[12rem] leading-snug"
+                    className="px-4 py-2 text-[10px] text-nx-muted max-w-[12rem] leading-snug"
                     title={p.channel_reason ?? ''}
                   >
                     {p.channel_reason ? (
@@ -521,7 +526,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
                     <div className="space-y-1">
                       <ProspectStatusBadge status={p.status} />
                       <select
-                        className="mt-1 w-full max-w-[11rem] rounded border border-[#e5e7eb] bg-white px-2 py-1 text-[11px] text-[#374151]"
+                        className="mt-1 w-full max-w-[11rem] rounded border border-nx-border bg-white px-2 py-1 text-[11px] text-nx-ink"
                         value={p.status}
                         onChange={(e) => handleStatus(p.id, e.target.value)}
                       >
@@ -533,14 +538,14 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
                       </select>
                     </div>
                   </td>
-                  <td className="px-4 py-2 text-xs capitalize text-[#374151]">
+                  <td className="px-4 py-2 text-xs capitalize text-nx-ink">
                     {p.interest_level ?? '—'}
                   </td>
-                  <td className="px-4 py-2 text-xs tabular-nums text-[#6b7280]">
+                  <td className="px-4 py-2 text-xs tabular-nums text-nx-muted">
                     {p.outreach_touch_count ?? 0}
                   </td>
                   <td
-                    className="px-4 py-2 text-[10px] text-[#6b7280] max-w-[9rem] truncate"
+                    className="px-4 py-2 text-[10px] text-nx-muted max-w-[9rem] truncate"
                     title={p.objection_type ?? ''}
                   >
                     {p.objection_type ?? '—'}
@@ -551,28 +556,28 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
                   <td className="px-4 py-2">
                     <ScoreBar value={p.interest_probability} tone="interest" />
                   </td>
-                  <td className="px-4 py-2 text-[10px] font-mono text-[#6b7280] capitalize max-w-[6rem] truncate" title={p.pipeline_stage}>
+                  <td className="px-4 py-2 text-[10px] font-mono text-nx-muted capitalize max-w-[6rem] truncate" title={p.pipeline_stage}>
                     {p.pipeline_stage ?? '—'}
                   </td>
                   <td className="px-4 py-2">
-                    <p className="max-w-[16rem] truncate text-[11px] text-[#6b7280]" title={p.score_reason ?? ''}>
+                    <p className="max-w-[16rem] truncate text-[11px] text-nx-muted" title={p.score_reason ?? ''}>
                       {p.score_reason ?? '—'}
                     </p>
-                    <p className="max-w-[16rem] truncate text-[11px] text-[#111827]" title={p.next_best_action ?? ''}>
+                    <p className="max-w-[16rem] truncate text-[11px] text-nx-ink" title={p.next_best_action ?? ''}>
                       {p.next_best_action ?? '—'}
                     </p>
                   </td>
                   <td className="px-4 py-2 text-right whitespace-nowrap">
                     <button
                       type="button"
-                      className="mr-1 rounded border border-[#e5e7eb] px-2 py-1 text-[11px] font-semibold text-[#374151] hover:bg-[#f8fafc]"
+                      className="mr-1 rounded border border-nx-border px-2 py-1 text-[11px] font-semibold text-nx-ink hover:bg-nx-card-muted"
                       onClick={() => void openConversation(p)}
                     >
                       Ver conversación
                     </button>
                     <button
                       type="button"
-                      className="mr-1 rounded border border-[#e5e7eb] px-2 py-1 text-[11px] font-semibold text-[#374151] hover:bg-[#f8fafc]"
+                      className="mr-1 rounded border border-nx-border px-2 py-1 text-[11px] font-semibold text-nx-ink hover:bg-nx-card-muted"
                       onClick={() => openEdit(p)}
                     >
                       Editar
@@ -600,7 +605,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
             <>
               <button
                 type="button"
-                className="rounded-lg border border-[#e5e7eb] bg-white px-4 py-2 text-sm font-medium text-[#374151] hover:bg-[#f8fafc]"
+                className="rounded-lg border border-nx-border bg-white px-4 py-2 text-sm font-medium text-nx-ink hover:bg-nx-card-muted"
                 onClick={() => setAddOpen(false)}
               >
                 Cancelar
@@ -608,7 +613,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               <button
                 type="submit"
                 form="add-prospect-form"
-                className="rounded-lg bg-nx-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-nx-brand-hover"
+                className="nx-btn nx-btn-primary px-4 py-2 text-sm"
               >
                 Guardar
               </button>
@@ -627,7 +632,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               ['phone', 'Teléfono', 'tel'],
             ].map(([key, lab, tp, req]) => (
               <div key={key}>
-                <label className="text-xs font-medium text-[#374151]">{lab}</label>
+                <label className="text-xs font-medium text-nx-ink">{lab}</label>
                 <input
                   type={tp}
                   required={!!req}
@@ -638,7 +643,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               </div>
             ))}
             <div className="md:col-span-2">
-              <label className="text-xs font-medium text-[#374151]">Notas</label>
+              <label className="text-xs font-medium text-nx-ink">Notas</label>
               <textarea
                 rows={3}
                 className={inputCls}
@@ -658,7 +663,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
             <>
               <button
                 type="button"
-                className="rounded-lg border border-[#e5e7eb] bg-white px-4 py-2 text-sm font-medium text-[#374151] hover:bg-[#f8fafc]"
+                className="rounded-lg border border-nx-border bg-white px-4 py-2 text-sm font-medium text-nx-ink hover:bg-nx-card-muted"
                 onClick={() => setImportOpen(false)}
               >
                 Cancelar
@@ -666,7 +671,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               <button
                 type="submit"
                 form="bulk-import-form"
-                className="rounded-lg bg-nx-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-nx-brand-hover"
+                className="nx-btn nx-btn-primary px-4 py-2 text-sm"
               >
                 Importar
               </button>
@@ -674,17 +679,17 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
           }
         >
           <form id="bulk-import-form" className="space-y-3" onSubmit={handleBulk}>
-            <p className="text-xs text-[#6b7280] leading-relaxed">
+            <p className="text-xs text-nx-muted leading-relaxed">
               Una línea por prospecto, columnas separadas por <strong>|</strong>:
               <br />
-              <span className="font-mono text-[11px] rounded bg-[#f8fafc] px-1 py-0.5 text-[#374151]">
+              <span className="font-mono text-[11px] rounded bg-nx-card-muted px-1 py-0.5 text-nx-ink">
                 Nombre | Empresa | Rol | Industria | País | LinkedIn URL | Email
               </span>
             </p>
             <textarea
               required
               rows={8}
-              className="w-full rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 font-mono text-xs text-[#111827] shadow-sm focus:border-[#9ca3af] focus:outline-none focus:ring-2 focus:ring-[#9ca3af]/25"
+              className="w-full rounded-lg border border-nx-border bg-white px-3 py-2 font-mono text-xs text-nx-ink shadow-sm focus:border-nx-subtle focus:outline-none focus:ring-2 focus:ring-nx-subtle/25"
               value={bulkText}
               placeholder={'María Pérez | Acme Corp | VP Sales | Software | España | https://linkedin.com/in/maria-demo | maria.demo@corp.test'}
               onChange={(e) => setBulkText(e.target.value)}
@@ -701,7 +706,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
             <>
               <button
                 type="button"
-                className="rounded-lg border border-[#e5e7eb] bg-white px-4 py-2 text-sm font-medium text-[#374151] hover:bg-[#f8fafc]"
+                className="rounded-lg border border-nx-border bg-white px-4 py-2 text-sm font-medium text-nx-ink hover:bg-nx-card-muted"
                 onClick={() => setEditRow(null)}
               >
                 Cancelar
@@ -709,7 +714,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               <button
                 type="submit"
                 form="edit-prospect-form"
-                className="rounded-lg bg-nx-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-nx-brand-hover"
+                className="nx-btn nx-btn-primary px-4 py-2 text-sm"
               >
                 Guardar
               </button>
@@ -728,7 +733,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               ['phone', 'Teléfono'],
             ].map(([key, lab, req]) => (
               <div key={key}>
-                <label className="text-xs font-medium text-[#374151]">{lab}</label>
+                <label className="text-xs font-medium text-nx-ink">{lab}</label>
                 <input
                   required={!!req}
                   className={inputCls}
@@ -740,7 +745,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               </div>
             ))}
             <div className="md:col-span-2">
-              <label className="text-xs font-medium text-[#374151]">Notas</label>
+              <label className="text-xs font-medium text-nx-ink">Notas</label>
               <textarea
                 rows={3}
                 className={inputCls}
@@ -757,7 +762,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
                 checked={recalc}
                 onChange={(e) => setRecalc(e.target.checked)}
               />
-              <label htmlFor="recalc" className="text-xs text-[#6b7280]">
+              <label htmlFor="recalc" className="text-xs text-nx-muted">
                 Recalcular scoring (compatibilidad / probabilidad / estado compatible o no compatible según ICP)
               </label>
             </div>
@@ -774,7 +779,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               <button
                 type="button"
                 disabled={conversationLoading || conversationBusy}
-                className="rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc] disabled:opacity-40"
+                className="rounded-lg border border-nx-border bg-white px-3 py-2 text-xs font-semibold text-nx-ink hover:bg-nx-card-muted disabled:opacity-40"
                 onClick={() => void handleGenerateFollowupNow()}
               >
                 Generar follow-up ahora
@@ -782,7 +787,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               <button
                 type="button"
                 disabled={conversationLoading || conversationBusy || simDisabled}
-                className="rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc] disabled:opacity-40"
+                className="rounded-lg border border-nx-border bg-white px-3 py-2 text-xs font-semibold text-nx-ink hover:bg-nx-card-muted disabled:opacity-40"
                 title={
                   simDisabled
                     ? 'Desactivado en modo real; usá Gmail send desde Centro de outreach.'
@@ -795,7 +800,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               <button
                 type="button"
                 disabled={conversationLoading || conversationBusy}
-                className="rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc] disabled:opacity-40"
+                className="rounded-lg border border-nx-border bg-white px-3 py-2 text-xs font-semibold text-nx-ink hover:bg-nx-card-muted disabled:opacity-40"
                 onClick={() => void handleMarkFollowupSent()}
               >
                 Marcar como enviado
@@ -803,7 +808,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               <button
                 type="button"
                 disabled={conversationLoading || conversationBusy}
-                className="rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc] disabled:opacity-40"
+                className="rounded-lg border border-nx-border bg-white px-3 py-2 text-xs font-semibold text-nx-ink hover:bg-nx-card-muted disabled:opacity-40"
                 onClick={() => void handleReprogramFollowup()}
               >
                 Reprogramar
@@ -811,7 +816,7 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               <button
                 type="button"
                 disabled={conversationLoading || conversationBusy}
-                className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-40"
+                className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-semibold text-zinc-900 hover:bg-zinc-100 disabled:opacity-40"
                 onClick={() => void handleReanalyzeState()}
               >
                 Reanalizar estado
@@ -826,22 +831,22 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
                     conversationRow.interest_level === 'high'
                   )
                 }
-                className="rounded-lg border border-emerald-300 bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-40"
+                className="rounded-lg border border-red-300 bg-red-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-red-700 disabled:opacity-40"
                 onClick={() => void handleAcceptMeetingSuggestion()}
               >
-                Aceptar reunión (simulado)
+                Aceptar reunión / Agendar en Calendar
               </button>
               <button
                 type="button"
                 disabled={conversationLoading || conversationBusy}
-                className="rounded-lg bg-nx-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-nx-brand-hover disabled:opacity-40"
+                className="nx-btn nx-btn-primary px-4 py-2 text-sm"
                 onClick={() => void handleGenerateNextReply()}
               >
                 {conversationBusy ? 'Generando…' : 'Generar siguiente respuesta IA'}
               </button>
               <button
                 type="button"
-                className="rounded-lg border border-[#e5e7eb] bg-white px-4 py-2 text-sm font-medium text-[#374151] hover:bg-[#f8fafc]"
+                className="rounded-lg border border-nx-border bg-white px-4 py-2 text-sm font-medium text-nx-ink hover:bg-nx-card-muted"
                 onClick={() => setConversationRow(null)}
               >
                 Cerrar
@@ -851,21 +856,21 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
         >
           <div className="space-y-3">
             {conversationLoading ? (
-              <p className="text-sm text-[#6b7280]">Cargando conversación…</p>
+              <p className="text-sm text-nx-muted">Cargando conversación…</p>
             ) : null}
             {!conversationLoading &&
             (conversationRow.meeting_suggestion_pending ||
               conversationRow.interest_level === 'high') ? (
-              <div className="rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50 to-white px-4 py-3 text-sm text-emerald-950 shadow-sm">
-                <p className="font-semibold text-emerald-900">La IA puede estar sugiriendo coordinar una llamada</p>
-                <p className="mt-1 text-xs text-emerald-900/85">
+              <div className="rounded-xl border border-red-200 bg-gradient-to-r from-red-50 to-white px-4 py-3 text-sm text-red-950 shadow-sm">
+                <p className="font-semibold text-red-900">La IA puede estar sugiriendo coordinar una llamada</p>
+                <p className="mt-1 text-xs text-red-900/85">
                   Se crea un registro de reunión con timezone, duración sugerida y franjas placeholder (Google
                   Calendar en una fase posterior).
                 </p>
               </div>
             ) : null}
             {!conversationLoading && conversationMessages.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-[#e5e7eb] px-3 py-8 text-center text-sm text-[#6b7280]">
+              <div className="rounded-lg border border-dashed border-nx-border px-3 py-8 text-center text-sm text-nx-muted">
                 Todavía no hay mensajes para este prospecto.
               </div>
             ) : null}
@@ -881,14 +886,14 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
                       <div
                         className={`max-w-[85%] rounded-xl px-3 py-2 text-sm shadow-sm ${
                           inbound
-                            ? 'border border-[#e5e7eb] bg-white text-[#111827]'
+                            ? 'border border-nx-border bg-white text-nx-ink'
                             : 'bg-nx-brand text-white'
                         }`}
                       >
                         <p>{m.message}</p>
                         <p
                           className={`mt-1 text-[10px] ${
-                            inbound ? 'text-[#6b7280]' : 'text-[#e5e7eb]'
+                            inbound ? 'text-nx-muted' : 'text-nx-border'
                           }`}
                         >
                           {m.sender_type} · {m.channel} ·{' '}
@@ -902,8 +907,8 @@ export function CampanaProspectosSection({ campaignId, freeze = false, reloadKey
               </div>
             ) : null}
             {followupPreview ? (
-              <div className="rounded-lg border border-[#e5e7eb] bg-[#f8fafc] px-3 py-2 text-sm text-[#111827]">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b7280]">
+              <div className="rounded-lg border border-nx-border bg-nx-card-muted px-3 py-2 text-sm text-nx-ink">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-muted">
                   Preview follow-up
                 </p>
                 <p className="mt-1">{followupPreview}</p>

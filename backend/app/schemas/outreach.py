@@ -37,6 +37,10 @@ class OutreachStats(BaseModel):
     interested: int
     not_interested: int
     failed: int
+    total_prospects: int = 0
+    prospects_pending_contact: int = 0
+    messages_outbound: int = 0
+    messages_inbound: int = 0
 
 
 class OutreachCampaignRead(BaseModel):
@@ -52,6 +56,36 @@ class OutreachCampaignRead(BaseModel):
         default=False,
         description="Simulaciones de inbound / prospectos demo deshabilitadas por configuración.",
     )
+    sequence_block: dict | None = Field(
+        default=None,
+        description=(
+            "Si la secuencia espera reconectar una extensión/integración: "
+            "channel, error exacto, code, action."
+        ),
+    )
+    progress_note: str | None = Field(
+        default=None,
+        description="Último aviso operativo (búsqueda / secuencia / espera).",
+    )
+
+
+class ContinueWithoutChannelBody(BaseModel):
+    channel: Literal["linkedin", "whatsapp", "email"]
+    confirm: bool = Field(
+        default=False,
+        description="Debe ser true: confirma omitir el canal y seguir con el resto del plan.",
+    )
+
+
+class ContinueWithoutChannelResponse(BaseModel):
+    ok: bool
+    channel: str | None = None
+    allowed_channels: list[str] = Field(default_factory=list)
+    omitted_touches: int = 0
+    advanced_prospects: int = 0
+    message: str | None = None
+    detail: str | None = None
+    sequence_block: dict | None = None
 
 
 class OutreachStartResponse(BaseModel):
@@ -65,6 +99,14 @@ class OutreachStartResponse(BaseModel):
     campaign_status: str | None = None
     gmail_connected: bool = False
     used_gmail: bool = False
+    sourcing_ran: bool = False
+    sourcing_queued: bool = False
+    sourcing_imported: int = 0
+    sourcing_message: str | None = None
+    sourcing_quota_met: bool = False
+    sourcing_prospect_count_after: int = 0
+    sourcing_prospect_count_target: int = 0
+    channel_enrich_pending: int = 0
 
 
 class ProspectResponseSimulationRead(BaseModel):

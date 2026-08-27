@@ -6,7 +6,9 @@ import re
 from dataclasses import dataclass, field
 
 from app.models.campaign import Campaign
+from app.services.lead_sourcing.icp_industry_search import industry_search_terms
 from app.services.lead_sourcing.icp_mapper import _clean
+from app.services.lead_sourcing.icp_region import resolve_region_search_context
 
 _DEFAULT_NEGATIVES = (
     "university",
@@ -25,6 +27,9 @@ _DEFAULT_NEGATIVES = (
     "job board",
     "jobs board",
     "career fair",
+    "careers",
+    "talent acquisition",
+    "saas talent",
     "accelerator program",
     "online course",
     "bootcamp",
@@ -40,12 +45,17 @@ _DEFAULT_NEGATIVES = (
 class CompanyIcpProfile:
     industry: str
     country: str | None = None
+    search_location_phrase: str | None = None
+    brave_country_codes: list[str] = field(default_factory=list)
+    region_country_names: list[str] = field(default_factory=list)
     company_size: str | None = None
     company_stage: str | None = None
     buyer_persona: str | None = None
     company_type: str | None = None
     positive_keywords: list[str] = field(default_factory=list)
     negative_keywords: list[str] = field(default_factory=list)
+    # False cuando el usuario dejó industria vacía / "no importante".
+    industry_user_set: bool = True
 
     def all_negatives(self) -> list[str]:
         seen: set[str] = set()
@@ -69,23 +79,34 @@ class CompanyIcpProfile:
             parts.append(self.country)
         return " ".join(parts).strip()
 
+    def query_target_phrase(self) -> str:
+        """Frase corta para búsqueda (sin bolsa entera de países)."""
+        parts: list[str] = []
+        if self.company_stage:
+            parts.append(self.company_stage)
+        if self.industry:
+            parts.append(self.industry)
+        parts.append(self.company_type or "companies")
+        return " ".join(parts).strip()
+
     def secondary_phrases(self) -> list[str]:
         """Frases adicionales orientadas a empresa objetivo (no keyword suelta)."""
         phrases: list[str] = []
         ind = self.industry
-        loc = self.country or ""
         stage = self.company_stage or ""
+        ind_terms = industry_search_terms(ind)
 
-        if ind and loc:
-            phrases.append(f"{ind} software companies {loc}".strip())
-        if stage and ind:
-            phrases.append(f"{stage} {ind} startups {loc}".strip())
-        if self.buyer_persona and ind:
-            phrases.append(f"{ind} companies for {self.buyer_persona} {loc}".strip())
+        for term in ind_terms[:2]:
+            if term:
+                phrases.append(f"{term} companies".strip())
+        if stage and ind_terms:
+            phrases.append(f"{stage} {ind_terms[0]}".strip())
+        if self.buyer_persona and ind_terms:
+            phrases.append(f"{ind_terms[0]} for {self.buyer_persona}".strip())
 
         if ind and "saas" in ind.lower():
-            phrases.append(f"sales automation SaaS companies {loc}".strip())
-            phrases.append(f"B2B software startups {loc}".strip())
+            phrases.append("sales automation SaaS companies")
+            phrases.append("B2B software startups")
 
         seen: set[str] = set()
         out: list[str] = []
@@ -134,7 +155,12 @@ def _positive_keywords_from_campaign(
         words.append(stage)
     if size:
         words.append(size)
-    if country:
+    region_ctx = resolve_region_search_context(country)
+    if region_ctx:
+        words.extend(
+            t for t in re.split(r"[\s,/\-]+", region_ctx.query_phrase) if len(t) > 2
+        )
+    elif country:
         words.append(country)
     if role:
         words.extend(t for t in re.split(r"[\s,/\-]+", role) if len(t) > 2)
@@ -178,13 +204,20 @@ def _negative_keywords_from_icp(industry: str | None, role: str | None) -> list[
 
 
 def parse_company_icp(campaign: Campaign) -> CompanyIcpProfile:
-    industry = _clean(campaign.target_industry) or ""
+    raw_industry = _clean(campaign.target_industry) or ""
+    industry_user_set = bool(raw_industry) and raw_industry.strip().lower() not in {
+        "no importante",
+        "no_importante",
+        "any",
+    }
+    industry = raw_industry if industry_user_set else "B2B SaaS"
     country = _clean(campaign.target_country)
     size = _clean(campaign.target_company_size)
     role = _clean(campaign.target_role)
     stage = _infer_stage(size)
     company_type = _infer_company_type(industry, size)
 
+    region_ctx = resolve_region_search_context(country)
     positive = _positive_keywords_from_campaign(industry, size, country, role, stage)
     negative = _negative_keywords_from_icp(industry, role)
 
@@ -200,12 +233,16 @@ def parse_company_icp(campaign: Campaign) -> CompanyIcpProfile:
             pass
 
     return CompanyIcpProfile(
-        industry=industry or "B2B software",
+        industry=industry,
         country=country,
+        search_location_phrase=region_ctx.query_phrase if region_ctx else country,
+        brave_country_codes=list(region_ctx.brave_country_codes) if region_ctx else [],
+        region_country_names=list(region_ctx.country_names) if region_ctx else [],
         company_size=size,
         company_stage=stage,
         buyer_persona=role,
         company_type=company_type,
         positive_keywords=positive,
         negative_keywords=negative,
+        industry_user_set=industry_user_set,
     )

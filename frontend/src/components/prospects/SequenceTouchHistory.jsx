@@ -10,10 +10,10 @@ const CHANNEL_LABELS = {
 
 function statusBadgeClass(status, touchStatus) {
   if (status === 'sent' || touchStatus === 'enviado') {
-    return 'bg-emerald-50 text-emerald-800 ring-emerald-600/20'
+    return 'bg-red-50 text-red-800 ring-red-600/20'
   }
   if (status === 'respondido' || touchStatus === 'respondido') {
-    return 'bg-violet-50 text-violet-800 ring-violet-600/20'
+    return 'bg-zinc-50 text-zinc-800 ring-zinc-600/20'
   }
   if (status === 'current') {
     return 'bg-nx-brand/10 text-nx-brand ring-nx-brand/30'
@@ -22,12 +22,12 @@ function statusBadgeClass(status, touchStatus) {
     return 'bg-red-50 text-red-800 ring-red-600/20'
   }
   if (status === 'skipped' || touchStatus === 'omitido') {
-    return 'bg-slate-100 text-slate-600 ring-slate-500/20'
+    return 'bg-nx-card-muted text-nx-muted ring-nx-muted/20'
   }
   if (touchStatus === 'generado') {
-    return 'bg-sky-50 text-sky-800 ring-sky-600/20'
+    return 'bg-zinc-50 text-zinc-800 ring-zinc-600/20'
   }
-  return 'bg-slate-100 text-slate-600 ring-slate-500/20'
+  return 'bg-nx-card-muted text-nx-muted ring-nx-muted/20'
 }
 
 function formatOpenAiError(meta) {
@@ -47,51 +47,61 @@ function formatOpenAiError(meta) {
   return parts.length ? parts.join(' · ') : null
 }
 
-function StepRow({ step, busy, generationStatus, openaiRetryDay, onExecute, onSkip }) {
+function StepRow({ step, busy, generationStatus, openaiRetryDay, hideErrors, onExecute, onSkip, onMarkSent }) {
   const [open, setOpen] = useState(false)
   const channel = CHANNEL_LABELS[step.channel] || step.channel
+  const showErrors = !hideErrors
 
   return (
-    <div className="rounded-lg border border-[#e5e7eb] bg-white p-3 text-sm">
+    <div className="rounded-lg border border-nx-border bg-white p-3 text-sm">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="font-medium text-[#111827]">
+          <p className="font-medium text-nx-ink">
             Día {step.day} · {channel}
           </p>
           {step.sent_at ? (
             <>
-              <p className="text-xs text-[#6b7280]">Fecha envío: {fmtDate(step.sent_at)}</p>
-              <p className="text-xs text-[#6b7280]">Hora envío: {fmtTime(step.sent_at)}</p>
+              <p className="text-xs text-nx-muted">Fecha envío: {fmtDate(step.sent_at)}</p>
+              <p className="text-xs text-nx-muted">Hora envío: {fmtTime(step.sent_at)}</p>
             </>
           ) : step.scheduled_at ? (
-            <p className="text-xs text-[#6b7280]">Programado: {fmtDateTime(step.scheduled_at)}</p>
+            <p className="text-xs text-nx-muted">Programado: {fmtDateTime(step.scheduled_at)}</p>
           ) : null}
           {step.fallback_test ? (
-            <p className="mt-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900 ring-1 ring-amber-400/50">
+            <p className="mt-1 inline-flex rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-zinc-900 ring-1 ring-zinc-400/50">
               FALLBACK TEST
             </p>
           ) : null}
-          {step.error_message ? (
+          {showErrors && step.error_message ? (
             <p
               className={`mt-1 text-xs ${
-                step.openai_last_error?.retryable ? 'text-amber-800' : 'text-red-700'
+                step.openai_last_error?.retryable ? 'text-zinc-800' : 'text-red-700'
               }`}
             >
               {step.error_message}
             </p>
           ) : null}
-          {step.openai_last_error ? (
-            <p className="mt-1 text-[10px] text-[#6b7280]">
+          {showErrors && step.openai_last_error ? (
+            <p className="mt-1 text-[10px] text-nx-muted">
               {formatOpenAiError(step.openai_last_error)}
             </p>
           ) : null}
-          {step.validation_rejection ? (
+          {showErrors && step.validation_rejection ? (
             <p className="mt-1 text-xs font-medium text-red-800">
               Ver depuración del borrador rechazado abajo
             </p>
-          ) : step.touch_status === 'fallido' && !step.validation_rejection ? (
-            <p className="mt-1 text-xs text-amber-800">
-              Sin borrador guardado — reejecutá el toque para capturar la salida de la IA.
+          ) : showErrors && step.touch_status === 'fallido' && !step.validation_rejection ? (
+            <p className="mt-1 text-xs text-zinc-800">
+              {step.error_message ||
+                'El intento anterior falló — usá Ejecutar toque para generar y enviar de nuevo.'}
+            </p>
+          ) : step.can_execute && step.touch_status === 'pendiente' ? (
+            <p className="mt-1 text-xs text-nx-muted">
+              Próximo toque — Ejecutar genera el mensaje con IA y prepara el envío.
+            </p>
+          ) : step.can_mark_sent ? (
+            <p className="mt-1 text-xs text-nx-muted">
+              Borrador en Gmail listo. Enviá desde tu cuenta y marcá como enviado acá.
             </p>
           ) : null}
         </div>
@@ -103,7 +113,17 @@ function StepRow({ step, busy, generationStatus, openaiRetryDay, onExecute, onSk
       </div>
 
           {step.subject ? (
-            <p className="text-xs text-[#6b7280]">Asunto: {step.subject}</p>
+            <p className="text-xs text-nx-muted">Asunto: {step.subject}</p>
+          ) : null}
+          {step.gmail_web_link ? (
+            <a
+              href={step.gmail_web_link}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 inline-block text-xs font-medium text-nx-brand hover:underline"
+            >
+              Abrir borrador en Gmail
+            </a>
           ) : null}
           {step.body || step.message_body ? (
             <div className="mt-2">
@@ -115,16 +135,16 @@ function StepRow({ step, busy, generationStatus, openaiRetryDay, onExecute, onSk
                 {open ? 'Ocultar mensaje' : 'Ver mensaje'}
               </button>
               {open ? (
-                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-[#f8fafc] p-3 text-xs text-[#374151]">
+                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-nx-card-muted p-3 text-xs text-nx-ink">
                   {step.body || step.message_body}
                 </pre>
               ) : null}
             </div>
           ) : step.touch_status === 'enviado' || step.touch_status === 'respondido' ? (
-            <p className="mt-2 text-xs text-amber-700">Mensaje no disponible — reejecutá el toque si falló antes.</p>
+            <p className="mt-2 text-xs text-zinc-700">Mensaje no disponible — reejecutá el toque si falló antes.</p>
           ) : null}
 
-      {step.validation_rejection ? (
+      {showErrors && step.validation_rejection ? (
         <div className="mt-3">
           <SdrValidationDebugPanel validation={step.validation_rejection} compact />
         </div>
@@ -136,7 +156,7 @@ function StepRow({ step, busy, generationStatus, openaiRetryDay, onExecute, onSk
             type="button"
             disabled={busy}
             onClick={() => onExecute?.(step.day)}
-            className="rounded-lg bg-nx-brand px-3 py-1.5 text-xs font-medium text-white hover:bg-nx-brand/90 disabled:opacity-50"
+            className="nx-btn nx-btn-primary px-3 py-1.5 text-xs"
           >
             {busy
               ? generationStatus || 'Generando…'
@@ -149,11 +169,24 @@ function StepRow({ step, busy, generationStatus, openaiRetryDay, onExecute, onSk
               type="button"
               disabled={busy}
               onClick={() => onSkip?.(step.day)}
-              className="rounded-lg border border-[#e5e7eb] px-3 py-1.5 text-xs font-medium text-[#374151] hover:bg-[#f8fafc] disabled:opacity-50"
+              className="rounded-lg border border-nx-border px-3 py-1.5 text-xs font-medium text-nx-ink hover:bg-nx-card-muted disabled:opacity-50"
             >
               Omitir
             </button>
           ) : null}
+        </div>
+      ) : null}
+
+      {step.can_mark_sent ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onMarkSent?.(step.day)}
+            className="rounded-lg bg-red-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-800 disabled:opacity-50"
+          >
+            {busy ? 'Guardando…' : 'Marcar como enviado'}
+          </button>
         </div>
       ) : null}
     </div>
@@ -169,18 +202,19 @@ export function SequenceTouchHistory({
   openaiRetryDay = null,
   onExecute,
   onSkip,
+  onMarkSent,
 }) {
   const rows = steps.length ? steps : history
 
   if (!rows.length) {
     return (
-      <p className="text-xs text-[#6b7280]">Todavía no hay toques registrados en esta secuencia.</p>
+      <p className="text-xs text-nx-muted">Todavía no hay toques registrados en esta secuencia.</p>
     )
   }
 
   return (
     <div className="space-y-3">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-[#6b7280]">{title}</h4>
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-nx-muted">{title}</h4>
       {rows.map((step) => (
         <StepRow
           key={step.day}
@@ -188,8 +222,10 @@ export function SequenceTouchHistory({
           busy={busyDay === step.day}
           generationStatus={generationStatus}
           openaiRetryDay={openaiRetryDay}
+          hideErrors={busyDay === step.day}
           onExecute={onExecute}
           onSkip={onSkip}
+          onMarkSent={onMarkSent}
         />
       ))}
     </div>

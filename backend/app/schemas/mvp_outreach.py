@@ -266,6 +266,9 @@ class CompanyContactRowRead(BaseModel):
     person_name: str | None = None
     role: str | None = None
     email: str | None = None
+    phone: str | None = None
+    whatsapp_number: str | None = None
+    landline_phone: str | None = None
     linkedin_url: str | None = None
     confidence: int | None = None
     source: str | None = None

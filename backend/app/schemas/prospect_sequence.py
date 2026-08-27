@@ -166,6 +166,9 @@ class SequenceStepRead(BaseModel):
     fallback_test: bool = False
     can_execute: bool = False
     can_skip: bool = False
+    can_mark_sent: bool = False
+    gmail_draft_id: str | None = None
+    gmail_web_link: str | None = None
 
 
 class SequenceTrackingRead(BaseModel):
@@ -223,6 +226,12 @@ class ExecuteTouchRead(BaseModel):
     status_label: str
     message: str
     fallback_test: bool = False
+    gmail_sent: bool = False
+    gmail_draft_created: bool = False
+    gmail_message_id: str | None = None
+    gmail_draft_id: str | None = None
+    gmail_web_link: str | None = None
+    linkedin_assisted: bool = False
     tracking: SequenceTrackingRead
 
 
@@ -239,7 +248,7 @@ ResponseClass = Literal[
 
 class SimulateSequenceResponseBody(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
-    channel: Literal["email", "linkedin", "whatsapp"] | None = None
+    channel: Literal["email", "linkedin", "whatsapp", "call"] | None = None
 
 
 class CommercialStateDebugRead(BaseModel):

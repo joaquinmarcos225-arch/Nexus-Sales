@@ -1,0 +1,8 @@
+# Alta de empresa / usuarios (Ops)
+
+Cuando el usuario pida crear una empresa o usuarios en prod:
+
+1. **Nombre exacto** — usar el nombre que diga (ej. `CostGuard`). Nunca “Demo Client” ni variantes de demo.
+2. **Créditos = 0** hasta que diga que **pagó los proveedores** (OpenAI / Prospeo / Brave) y autorice acreditar. No asignar créditos “de cortesía” al crear SDR/director.
+3. **Nexus Support** — al crear la empresa, abrir hilo con `get_or_create_company_thread` para que figure en la bandeja de Support. Si el usuario es ops CostGuard, sumar su email a `NEXUS_SUPPORT_OPS_EMAILS` en Railway.
+4. Scripts: `setup_cliente.py` / `setup_vendedora.py` con `--credits 0` por defecto; créditos solo con flag explícito post-pago.

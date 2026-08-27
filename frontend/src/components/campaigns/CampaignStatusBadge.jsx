@@ -1,9 +1,9 @@
 const STYLE = {
-  draft: 'bg-slate-100 text-slate-700 border-slate-200',
-  ready: 'bg-sky-50 text-sky-800 border-sky-200',
-  running: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-  paused: 'bg-amber-50 text-amber-900 border-amber-200',
-  completed: 'bg-slate-900 text-white border-slate-900',
+  draft: 'bg-zinc-100 text-zinc-700 border-zinc-200',
+  ready: 'bg-zinc-100 text-zinc-800 border-zinc-200',
+  running: 'bg-red-50 text-red-800 border-red-200',
+  paused: 'bg-zinc-100 text-zinc-800 border-zinc-300',
+  completed: 'bg-zinc-900 text-white border-zinc-900',
 }
 
 export const CAMPAIGN_STATUS_LABEL = {
@@ -18,7 +18,7 @@ export function CampaignStatusBadge({ status }) {
   const key = STYLE[status] ? status : 'draft'
   const cls =
     STYLE[key] ??
-    'bg-slate-100 text-slate-700 border-slate-200'
+    'bg-zinc-100 text-zinc-700 border-zinc-200'
   const label = CAMPAIGN_STATUS_LABEL[key] ?? status
   return (
     <span

@@ -12,10 +12,10 @@ import {
 
 function StatusPill({ ok, label, warn }) {
   const cls = ok
-    ? 'bg-emerald-50 text-emerald-800 ring-emerald-200'
+    ? 'bg-red-50 text-red-800 ring-red-200'
     : warn
-      ? 'bg-amber-50 text-amber-800 ring-amber-200'
-      : 'bg-rose-50 text-rose-800 ring-rose-200'
+      ? 'bg-zinc-50 text-zinc-800 ring-zinc-200'
+      : 'bg-red-50 text-red-800 ring-red-200'
   return (
     <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ring-1 ${cls}`}>
       {label}
@@ -25,19 +25,19 @@ function StatusPill({ ok, label, warn }) {
 
 function MetricCard({ label, value, sub }) {
   return (
-    <div className="rounded-xl border border-[#e5e7eb] bg-white p-4 shadow-sm">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-[#6b7280]">{label}</p>
-      <p className="mt-2 text-2xl font-semibold tabular-nums text-[#111827]">{value}</p>
-      {sub ? <p className="mt-1 text-xs text-[#9ca3af]">{sub}</p> : null}
+    <div className="rounded-xl border border-nx-border bg-white p-4 shadow-sm">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-muted">{label}</p>
+      <p className="mt-2 text-2xl font-semibold tabular-nums text-nx-ink">{value}</p>
+      {sub ? <p className="mt-1 text-xs text-nx-subtle">{sub}</p> : null}
     </div>
   )
 }
 
 function Panel({ title, hint, children, className = '' }) {
   return (
-    <section className={`rounded-xl border border-[#e5e7eb] bg-white p-4 shadow-sm ${className}`}>
-      <h2 className="text-sm font-semibold text-[#111827]">{title}</h2>
-      {hint ? <p className="mt-0.5 text-xs text-[#6b7280]">{hint}</p> : null}
+    <section className={`rounded-xl border border-nx-border bg-white p-4 shadow-sm ${className}`}>
+      <h2 className="text-sm font-semibold text-nx-ink">{title}</h2>
+      {hint ? <p className="mt-0.5 text-xs text-nx-muted">{hint}</p> : null}
       {children}
     </section>
   )
@@ -61,6 +61,21 @@ const MODE_LABELS = {
   manual: 'Manual',
   semi_auto: 'Semi-auto',
   full_auto: 'Full-auto',
+}
+
+const CAMPAIGN_STATUS_LABELS = {
+  draft: 'Borrador',
+  ready: 'Lista',
+  running: 'En curso',
+  paused: 'Pausada',
+  completed: 'Completada',
+}
+
+function campaignStatusLabel(c) {
+  if (c?.automation_paused) {
+    return 'Pausada'
+  }
+  return CAMPAIGN_STATUS_LABELS[c?.status] || c?.status || '—'
 }
 
 export default function OperacionesPage() {
@@ -137,6 +152,14 @@ export default function OperacionesPage() {
       <PageHeader
         title="Centro de Operaciones"
         description="Observabilidad y control del motor autónomo de SDRs IA — jobs, colas, salud y decisiones."
+        actions={
+          <Link
+            to="/configuracion/integraciones"
+            className="text-xs font-semibold text-nx-brand hover:underline"
+          >
+            Configuración →
+          </Link>
+        }
       />
       <AlertBanner message={error} onDismiss={() => setError(null)} />
 
@@ -148,7 +171,7 @@ export default function OperacionesPage() {
               type="button"
               disabled={loading || !companyId}
               onClick={() => void load()}
-              className="rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc]"
+              className="rounded-lg border border-nx-border bg-white px-3 py-2 text-xs font-semibold text-nx-ink hover:bg-nx-card-muted"
             >
               Actualizar
             </button>
@@ -158,8 +181,8 @@ export default function OperacionesPage() {
               onClick={() => void toggleEmergencyStop()}
               className={`rounded-lg px-3 py-2 text-xs font-semibold text-white shadow-sm disabled:opacity-50 ${
                 overview?.global_automation_stop
-                  ? 'bg-emerald-600 hover:bg-emerald-700'
-                  : 'bg-rose-600 hover:bg-rose-700'
+                  ? 'bg-red-600 hover:bg-red-700'
+                  : 'bg-red-600 hover:bg-red-700'
               }`}
             >
               {savingStop
@@ -172,7 +195,20 @@ export default function OperacionesPage() {
         </div>
 
         {(loading || ctxLoading) && !overview ? (
-          <p className="text-sm text-[#6b7280]">Cargando centro de operaciones…</p>
+          <p className="text-sm text-nx-muted">Cargando centro de operaciones…</p>
+        ) : null}
+
+        {overview && !sched?.running ? (
+          <div className="mb-4 rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-xs text-zinc-900">
+            <p className="font-semibold">Scheduler detenido en este servidor</p>
+            <p className="mt-1 text-zinc-800">
+              Para jobs automáticos (Gmail inbound, follow-ups, auto-respuesta), activá en{' '}
+              <code className="rounded bg-white/80 px-1">backend/.env</code>:{' '}
+              <code className="rounded bg-white/80 px-1">NEXUS_AUTOMATION_SCHEDULER=1</code>
+              {sched?.enabled_env ? ` (env actual: "${sched.enabled_env}")` : ' (variable vacía o ausente)'}.
+              Reiniciá uvicorn después de cambiarla.
+            </p>
+          </div>
         ) : null}
 
         {overview ? (
@@ -216,17 +252,40 @@ export default function OperacionesPage() {
 
 function StatusPills({ overview, sched, integ }) {
   if (!overview) return null
+  const waOk = integ?.whatsapp_configured
+  const waDry = integ?.whatsapp_dry_run
   return (
     <div className="flex flex-wrap gap-2">
+      <StatusPill
+        ok={overview.real_mode}
+        warn={!overview.real_mode}
+        label={overview.real_mode ? 'Modo real' : 'Modo simulación'}
+      />
       <StatusPill
         ok={sched?.running}
         warn={!sched?.running && sched?.enabled_env}
         label={sched?.running ? 'Scheduler activo' : 'Scheduler detenido'}
       />
       <StatusPill
-        ok={integ?.status === 'healthy'}
-        warn={integ?.status === 'degraded'}
-        label={`Integraciones · ${integ?.status || '—'}`}
+        ok={Boolean(integ?.gmail_connected)}
+        warn={!integ?.gmail_connected}
+        label={integ?.gmail_connected ? 'Gmail OK' : 'Gmail pendiente'}
+      />
+      <StatusPill
+        ok={Boolean(integ?.calendar_connected)}
+        warn={!integ?.calendar_connected}
+        label={integ?.calendar_connected ? 'Calendar OK' : 'Calendar pendiente'}
+      />
+      <StatusPill
+        ok={waOk && !waDry}
+        warn={waDry || !waOk}
+        label={
+          waDry
+            ? 'WhatsApp dry-run (apagar)'
+            : waOk
+              ? 'WhatsApp Web asistido'
+              : 'WhatsApp (extensión)'
+        }
       />
       <StatusPill
         ok={!overview.global_automation_stop}
@@ -238,9 +297,9 @@ function StatusPills({ overview, sched, integ }) {
 
 function JobsTable({ jobs }) {
   return (
-    <div className="mt-3 overflow-x-auto rounded-lg border border-[#e5e7eb]">
+    <div className="mt-3 overflow-x-auto rounded-lg border border-nx-border">
       <table className="min-w-[640px] w-full text-left text-xs">
-        <thead className="bg-[#f8fafc] text-[#6b7280]">
+        <thead className="bg-nx-card-muted text-nx-muted">
           <tr>
             <th className="px-3 py-2 font-semibold">Job</th>
             <th className="px-3 py-2 font-semibold">Último OK</th>
@@ -249,16 +308,16 @@ function JobsTable({ jobs }) {
             <th className="px-3 py-2 font-semibold">Error</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-[#e5e7eb]">
+        <tbody className="divide-y divide-nx-border">
           {jobs.map((j) => (
-            <tr key={j.job_key} className="text-[#374151]">
+            <tr key={j.job_key} className="text-nx-ink">
               <td className="px-3 py-2 font-medium">{j.label || j.job_key}</td>
               <td className="whitespace-nowrap px-3 py-2">{fmtTime(j.last_success_at)}</td>
               <td className="px-3 py-2 tabular-nums">
                 {j.duration_sec != null ? `${j.duration_sec.toFixed(1)}s` : '—'}
               </td>
               <td className="px-3 py-2 tabular-nums">{j.run_count ?? 0}</td>
-              <td className="max-w-[12rem] truncate px-3 py-2 text-rose-600" title={j.last_error || ''}>
+              <td className="max-w-[12rem] truncate px-3 py-2 text-red-600" title={j.last_error || ''}>
                 {j.last_error || '—'}
               </td>
             </tr>
@@ -274,6 +333,16 @@ function HealthDl({ integ, tasks, queue, m }) {
     <dl className="mt-3 space-y-3 text-xs">
       <Row label="Gmail conectado" value={`${integ?.gmail_connected ?? 0} cuenta(s)`} />
       <Row label="Calendar conectado" value={`${integ?.calendar_connected ?? 0}`} />
+      <Row
+        label="WhatsApp"
+        value={
+          integ?.whatsapp_dry_run
+            ? 'Dry-run (apagar)'
+            : integ?.whatsapp_configured
+              ? 'Cloud API opt-in'
+              : 'Web asistido (extensión)'
+        }
+      />
       <Row label="Auto-reply pendientes" value={tasks.pending ?? 0} />
       <Row label="Tareas pendientes" value={queue?.total_pending ?? 0} />
       <Row label="Vencen en 15m" value={queue?.due_within_15m ?? 0} />
@@ -285,8 +354,8 @@ function HealthDl({ integ, tasks, queue, m }) {
 function Row({ label, value }) {
   return (
     <div className="flex justify-between gap-2">
-      <dt className="text-[#6b7280]">{label}</dt>
-      <dd className="font-semibold tabular-nums text-[#111827]">{value}</dd>
+      <dt className="text-nx-muted">{label}</dt>
+      <dd className="font-semibold tabular-nums text-nx-ink">{value}</dd>
     </div>
   )
 }
@@ -294,9 +363,9 @@ function Row({ label, value }) {
 function RecentErrors({ errors }) {
   if (!errors?.length) return null
   return (
-    <div className="mt-4 rounded-lg border border-rose-100 bg-rose-50/80 p-3">
-      <p className="text-[11px] font-semibold text-rose-800">Errores recientes</p>
-      <ul className="mt-1 space-y-1 text-[11px] text-rose-700">
+    <div className="mt-4 rounded-lg border border-red-100 bg-red-50/80 p-3">
+      <p className="text-[11px] font-semibold text-red-800">Errores recientes</p>
+      <ul className="mt-1 space-y-1 text-[11px] text-red-700">
         {errors.map((e) => (
           <li key={e.job_key}>
             {e.label}: {e.error}
@@ -308,10 +377,21 @@ function RecentErrors({ errors }) {
 }
 
 function CampaignModeTable({ campaigns, modeSaving, onMode }) {
+  if (!campaigns?.length) {
+    return (
+      <p className="mt-3 text-xs text-nx-muted">
+        No hay campañas en esta empresa. Creá una en{' '}
+        <Link to="/campanas" className="font-semibold text-nx-brand hover:underline">
+          Campañas
+        </Link>
+        .
+      </p>
+    )
+  }
   return (
     <div className="mt-3 overflow-x-auto">
       <table className="min-w-[720px] w-full text-left text-xs">
-        <thead className="bg-[#f8fafc] text-[#6b7280]">
+        <thead className="bg-nx-card-muted text-nx-muted">
           <tr>
             <th className="px-3 py-2 font-semibold">Campaña</th>
             <th className="px-3 py-2 font-semibold">Estado</th>
@@ -319,20 +399,18 @@ function CampaignModeTable({ campaigns, modeSaving, onMode }) {
             <th className="px-3 py-2 font-semibold">Acciones</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-[#e5e7eb]">
+        <tbody className="divide-y divide-nx-border">
           {campaigns.map((c) => (
             <tr key={c.id}>
-              <td className="px-3 py-2 font-medium text-[#111827]">
+              <td className="px-3 py-2 font-medium text-nx-ink">
                 <Link to={`/campanas/${c.id}`} className="hover:text-nx-brand">
                   {c.name}
                 </Link>
               </td>
               <td className="px-3 py-2">
-                {c.automation_paused ? (
-                  <span className="text-amber-700">Pausada</span>
-                ) : (
-                  <span className="text-emerald-700">{c.status}</span>
-                )}
+                <span className={c.automation_paused ? 'text-zinc-700' : 'text-red-700'}>
+                  {campaignStatusLabel(c)}
+                </span>
               </td>
               <td className="px-3 py-2">{MODE_LABELS[c.automation_mode] || c.automation_mode}</td>
               <td className="px-3 py-2">
@@ -346,7 +424,7 @@ function CampaignModeTable({ campaigns, modeSaving, onMode }) {
                       className={`rounded-md px-2 py-1 text-[10px] font-semibold ring-1 ${
                         c.automation_mode === mode
                           ? 'bg-nx-brand text-white ring-nx-brand'
-                          : 'bg-white text-[#374151] ring-[#e5e7eb] hover:bg-[#f8fafc]'
+                          : 'bg-white text-nx-ink ring-nx-border hover:bg-nx-card-muted'
                       }`}
                     >
                       {MODE_LABELS[mode]}
@@ -364,19 +442,19 @@ function CampaignModeTable({ campaigns, modeSaving, onMode }) {
 
 function DecisionFeed({ feed }) {
   return (
-    <ul className="mt-4 divide-y divide-[#e5e7eb]">
+    <ul className="mt-4 divide-y divide-nx-border">
       {feed.length === 0 ? (
-        <li className="py-6 text-center text-sm text-[#9ca3af]">
+        <li className="py-6 text-center text-sm text-nx-subtle">
           Sin eventos todavía. Procesá un inbound para ver decisiones.
         </li>
       ) : (
         feed.map((ev) => (
           <li key={ev.id} className="flex gap-3 py-3 text-xs">
-            <time className="w-28 shrink-0 text-[#9ca3af]">{fmtTime(ev.at)}</time>
+            <time className="w-28 shrink-0 text-nx-subtle">{fmtTime(ev.at)}</time>
             <div className="min-w-0 flex-1">
-              <p className="font-medium text-[#111827]">{ev.summary}</p>
-              <p className="mt-0.5 text-[#6b7280]">
-                <span className="rounded bg-[#f1f5f9] px-1.5 py-0.5 font-mono text-[10px]">
+              <p className="font-medium text-nx-ink">{ev.summary}</p>
+              <p className="mt-0.5 text-nx-muted">
+                <span className="rounded bg-nx-card-muted px-1.5 py-0.5 font-mono text-[10px]">
                   {ev.event_type}
                 </span>
                 <span className="ml-2">{ev.decision}</span>

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import replace
 from collections.abc import Callable
 from typing import Any
+
+from sqlalchemy.orm import Session
 
 from app.models.campaign import Campaign
 from app.schemas.lead_sourcing import CompanyCandidateRead, LeadCandidateRead
@@ -20,7 +23,6 @@ from app.services.lead_sourcing.contact_identity import (
     is_real_person_lead,
 )
 from app.services.lead_sourcing.generic_email_fallback import build_generic_email_leads
-from app.services.lead_sourcing.prospeo_contact_validation import is_forbidden_email
 from app.services.lead_sourcing.corporate_domain_resolver import (
     companies_ready_for_prospeo,
     company_has_verified_domain,
@@ -28,12 +30,14 @@ from app.services.lead_sourcing.corporate_domain_resolver import (
     resolve_corporate_domains_for_companies,
 )
 from app.services.lead_sourcing.prospeo_contact_validation import (
+    email_domain,
     is_directory_host,
+    is_forbidden_email,
+    is_prospeo_searchable_domain,
     validate_prospeo_contact,
 )
 from app.services.lead_sourcing.providers.base import ProviderAPIError
 from app.services.lead_sourcing.providers.prospeo_enrichment import _website_domain
-from app.services.lead_sourcing.prospeo_contact_validation import email_domain
 from app.services.lead_sourcing.linkedin_identity import is_personal_linkedin_url, normalize_linkedin_url
 from app.services.lead_sourcing.prospeo_lead_fit import score_prospeo_contact_fit
 from app.services.lead_sourcing.prospeo_phone import merge_contact_channels
@@ -56,14 +60,15 @@ from app.services.lead_sourcing.timeouts_config import (
     PROSPEO_ENRICH_BATCH_SIZE,
     PROSPEO_ENRICH_MAX_SEC,
     PROSPEO_ENRICH_PER_COMPANY_SEC,
+    PROSPEO_SEARCH_THROTTLE_SEC,
 )
 
 
 def _batch_size() -> int:
     try:
-        return max(1, min(int(os.getenv("PROSPEO_ENRICH_BATCH_SIZE", str(PROSPEO_ENRICH_BATCH_SIZE))), 5))
+        return max(1, min(int(os.getenv("PROSPEO_ENRICH_BATCH_SIZE", "8")), 15))
     except ValueError:
-        return PROSPEO_ENRICH_BATCH_SIZE
+        return 8
 
 
 def _build_enrich_progress(*, cursor: int, total: int, last_batch: int) -> dict[str, Any]:
@@ -208,7 +213,27 @@ def _apply_company_enrichment(company: CompanyCandidateRead, firmo: dict[str, An
     if not domain and web_dom and not is_directory_host(web_dom):
         domain = web_dom
     industry = firmo.get("industry") or firmo.get("company_industry") or company.industry
-    size = firmo.get("employee_count") or firmo.get("headcount") or firmo.get("company_size")
+    country = (
+        firmo.get("country")
+        or firmo.get("company_country")
+        or firmo.get("hq_country")
+        or firmo.get("location_country")
+        or company.country
+    )
+    size_raw = firmo.get("employee_count") or firmo.get("headcount") or firmo.get("company_size")
+    emp_count: int | None = company.employee_count
+    company_size = company.company_size
+    if isinstance(size_raw, int):
+        emp_count = size_raw
+        company_size = str(size_raw)
+    elif isinstance(size_raw, str) and size_raw.strip():
+        company_size = size_raw.strip()[:64]
+        nums = re.findall(r"\d+", size_raw.replace(",", ""))
+        if nums:
+            try:
+                emp_count = int(nums[0])
+            except ValueError:
+                pass
     corp_email = None
     email_obj = firmo.get("email") or {}
     if isinstance(email_obj, dict):
@@ -217,7 +242,9 @@ def _apply_company_enrichment(company: CompanyCandidateRead, firmo: dict[str, An
         update={
             "company_domain": domain,
             "industry": str(industry)[:255] if industry else company.industry,
-            "company_size": str(size)[:64] if size else company.company_size,
+            "country": str(country)[:128] if country else company.country,
+            "company_size": company_size,
+            "employee_count": emp_count,
             "corporate_email": str(corp_email).strip() if corp_email else company.corporate_email,
             "enrichment_source": "prospeo",
             "enrichment_confidence": 80,
@@ -243,7 +270,9 @@ def _lead_from_prospeo_person(
         return None
     channels = merge_contact_channels(person)
     email = channels.get("email")
-    phone = channels.get("phone")
+    mobile = channels.get("mobile_phone") or channels.get("whatsapp_number")
+    landline = channels.get("landline_phone")
+    phone = mobile or landline
     whatsapp_number = channels.get("whatsapp_number")
     phone_source = channels.get("phone_source")
     linkedin = channels.get("linkedin_url")
@@ -278,14 +307,15 @@ def _lead_from_prospeo_person(
         external_id=f"prospeo-{campaign_id}-{key[:20]}-{idx}",
         provider="prospeo",
         name=name[:255],
-        company_name=(company.name or "Empresa")[:255],
+        company_name=(company.name or "").strip()[:255] or "",
         role=str(role)[:255] if role else None,
         industry=company.industry,
         country=company.country,
         email=email,
-        phone=phone,
-        whatsapp=whatsapp_number or phone,
-        whatsapp_number=whatsapp_number or phone,
+        phone=mobile,
+        landline_phone=landline,
+        whatsapp=whatsapp_number,
+        whatsapp_number=whatsapp_number,
         phone_source=phone_source,
         linkedin_url=linkedin,
         company_website=company.website_url or (f"https://{domain}" if domain else None),
@@ -301,6 +331,7 @@ def _lead_from_prospeo_person(
         enrichment_source="prospeo",
         enrichment_confidence=conf,
         contact_kind="person",
+        company_size=company.company_size,
     )
     if not is_pipeline_contact(lead):
         return None
@@ -555,6 +586,9 @@ def build_company_contact_rows(
                         person_name=p.name,
                         role=p.role,
                         email=p.email,
+                        phone=(p.mobile_phone or p.phone or "").strip() or None,
+                        whatsapp_number=(p.whatsapp_number or p.whatsapp or "").strip() or None,
+                        landline_phone=(getattr(p, "landline_phone", None) or "").strip() or None,
                         linkedin_url=p.linkedin_url,
                         confidence=p.enrichment_confidence,
                         source=p.enrichment_source or p.provider,
@@ -573,6 +607,9 @@ def build_company_contact_rows(
                         person_name=p.name,
                         role=p.role,
                         email=p.email,
+                        phone=(p.mobile_phone or p.phone or "").strip() or None,
+                        whatsapp_number=(p.whatsapp_number or p.whatsapp or "").strip() or None,
+                        landline_phone=(getattr(p, "landline_phone", None) or "").strip() or None,
                         linkedin_url=p.linkedin_url,
                         confidence=p.enrichment_confidence,
                         source="generic_pattern",
@@ -606,6 +643,7 @@ def run_mvp_company_enrichment(
     skip_person_detail_enrich: bool = True,
     skip_company_firmographics: bool = True,
     cached_prospeo_health: dict[str, Any] | None = None,
+    db: Session | None = None,
 ) -> tuple[list[CompanyCandidateRead], list[LeadCandidateRead], dict[str, Any]]:
     prospeo = get_contact_enrichment_provider()
     people_clean = _strip_placeholders(people)
@@ -640,8 +678,14 @@ def run_mvp_company_enrichment(
             banner_message=cached_prospeo_health.get("banner_message"),
             detail=cached_prospeo_health.get("detail"),
         )
+        _cached_health_extra = {
+            k: cached_prospeo_health.get(k)
+            for k in ("rate_limited_until",)
+            if cached_prospeo_health.get(k)
+        }
     else:
         prospeo_health = fetch_prospeo_account_health()
+        _cached_health_extra = {}
     global_search_block: dict[str, Any] | None = None
     if effective_prospeo_search_blocked(
         error_code=prospeo_health.error_code,
@@ -650,10 +694,20 @@ def run_mvp_company_enrichment(
         rate_limited=prospeo_health.rate_limited,
         search_blocked=prospeo_health.search_blocked,
     ):
-        global_search_block = sanitize_prospeo_health_dict(prospeo_health.to_dict())
+        from app.services.lead_sourcing.prospeo_api_health import stamp_prospeo_rate_limit
+
+        blocked = sanitize_prospeo_health_dict(
+            {**prospeo_health.to_dict(), **_cached_health_extra}
+        )
+        if prospeo_health.rate_limited or "RATE_LIMIT" in str(
+            prospeo_health.error_code or ""
+        ).upper():
+            blocked = stamp_prospeo_rate_limit(blocked)
+        global_search_block = blocked
         if log_fn:
             log_fn(
-                prospeo_health.banner_message
+                blocked.get("banner_message")
+                or prospeo_health.banner_message
                 or prospeo_health.detail
                 or "Prospeo no pudo ejecutar búsquedas"
             )
@@ -662,17 +716,39 @@ def run_mvp_company_enrichment(
     batch_cap = max_companies_per_run if max_companies_per_run is not None else _batch_size()
     offset = max(0, company_offset)
 
+    # Floor de empresa: con industria ICP pedida, exigir relevancia estricta (70).
+    # Sin industria (rol-first / soft), mantener 55 para no vaciar el pool.
+    from app.services import campaign_icp as campaign_icp_mod
+    from app.services.lead_sourcing.company_relevance import (
+        MIN_COMPANY_RELEVANCE,
+        MIN_COMPANY_RELEVANCE_STRICT,
+    )
+
+    industry_set = not campaign_icp_mod.is_icp_token_empty(
+        getattr(campaign, "target_industry", None)
+    )
+    company_floor = (
+        MIN_COMPANY_RELEVANCE_STRICT
+        if industry_set
+        else min(int(fit_threshold), MIN_COMPANY_RELEVANCE)
+    )
     all_targets = [
         c
         for c in companies
-        if c.result_kind == "company" and (c.icp_relevance_score or 0) >= fit_threshold
+        if c.result_kind == "company" and (c.icp_relevance_score or 0) >= company_floor
     ]
-    all_targets.sort(key=lambda c: -(c.icp_relevance_score or 0))
+    # Priorizar dominios ASCII corporativos: LinkedIn/IDN queman cuota y dan 400.
+    all_targets.sort(
+        key=lambda c: (
+            0 if is_prospeo_searchable_domain(c.company_domain) else 1,
+            -(c.icp_relevance_score or 0),
+        )
+    )
     total_eligible = len(all_targets)
     batch_rows = all_targets[offset : offset + batch_cap]
 
     domain_stats: dict[str, Any] = {"skipped": 0, "resolved": 0, "unresolved": 0}
-    if batch_rows:
+    if batch_rows and not global_search_block:
         batch_ids = {c.external_id for c in batch_rows}
         to_resolve = [c for c in companies if c.external_id in batch_ids]
         resolved_subset, domain_stats = resolve_corporate_domains_for_companies(
@@ -700,6 +776,13 @@ def run_mvp_company_enrichment(
         ]
 
     deadline = enrich_deadline
+    _health_for_stats = (
+        global_search_block
+        if isinstance(global_search_block, dict)
+        else sanitize_prospeo_health_dict(
+            {**prospeo_health.to_dict(), **_cached_health_extra}
+        )
+    )
     stats: dict[str, Any] = {
         "companies_enriched": 0,
         "companies_searched": 0,
@@ -711,7 +794,7 @@ def run_mvp_company_enrichment(
         "errors": [],
         "contact_validation_debug": [],
         "prospeo_search_debug": [],
-        "prospeo_health": sanitize_prospeo_health_dict(prospeo_health.to_dict()),
+        "prospeo_health": _health_for_stats,
         "domain_resolution": domain_stats,
         "enrich_progress": _build_enrich_progress(
             cursor=offset, total=total_eligible, last_batch=0
@@ -726,6 +809,26 @@ def run_mvp_company_enrichment(
     global_person_keys: set[str] = set()
     debug_log: list[dict[str, Any]] = stats["contact_validation_debug"]
     prospeo_debug: list[dict[str, Any]] = stats["prospeo_search_debug"]
+    excl_em: set[str] = set()
+    excl_li: set[str] = set()
+    excl_phones: set[str] = set()
+    if db is not None:
+        try:
+            from app.services.nexus_contact_cache import (
+                merge_exclusion_sets,
+                tenant_delivered_exclusion_sets,
+            )
+            from app.services.prospect_ingestion import company_contact_exclusion_sets
+
+            excl_em, excl_li, excl_phones = company_contact_exclusion_sets(
+                db, int(campaign.company_id)
+            )
+            excl_em, excl_li, excl_phones = merge_exclusion_sets(
+                (excl_em, excl_li, excl_phones),
+                tenant_delivered_exclusion_sets(db, int(campaign.company_id)),
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def _record_discard(v, *, company_name: str, stage: str = "filtro_enrich") -> None:
         stats["people_discarded"] += 1
@@ -761,10 +864,33 @@ def run_mvp_company_enrichment(
         if time.monotonic() > deadline:
             stats["partial"] = True
             break
-        company_deadline = min(deadline, time.monotonic() + PROSPEO_ENRICH_PER_COMPANY_SEC)
+        # Si hay gente del pipeline ya ligada a esta empresa, priorizar otras (cupo).
+        already_have = sum(
+            1
+            for p in people_by_key.values()
+            if (p.company_name or "").strip().lower() == (company.name or "").strip().lower()
+            and (p.linkedin_url or p.email)
+        )
+        if already_have >= 1:
+            # Ya hay candidatos para esta empresa; buscar otras para completar cupo.
+            stats.setdefault("companies_skipped_already_have", 0)
+            stats["companies_skipped_already_have"] += 1
+            _finish_company_batch()
+            continue
+        # En rate limit: menos tiempo por empresa (solo web+enrich).
+        per_co = (
+            min(12.0, PROSPEO_ENRICH_PER_COMPANY_SEC)
+            if global_search_block
+            else PROSPEO_ENRICH_PER_COMPANY_SEC
+        )
+        company_deadline = min(deadline, time.monotonic() + per_co)
         try:
             domain = (company.company_domain or "").strip().lower()
-            if not domain or is_directory_host(domain):
+            if not is_prospeo_searchable_domain(domain):
+                if not domain or is_directory_host(domain):
+                    reason = "Sin dominio corporativo"
+                else:
+                    reason = "Dominio no usable en Prospeo (LinkedIn/IDN)"
                 prospeo_debug.append(
                     {
                         "company_name": company.name,
@@ -774,66 +900,217 @@ def run_mvp_company_enrichment(
                         "prospeo_results": 0,
                         "valid_results": 0,
                         "discarded_count": 0,
-                        "discard_reason": "Sin dominio corporativo",
-                        "status_message": "Prospeo omitido — sin dominio",
+                        "discard_reason": reason,
+                        "status_message": f"Prospeo omitido — {reason.lower()}",
                     }
                 )
-            else:
-                stats["companies_searched"] += 1
-                updated = company
-                if not skip_company_firmographics and time.monotonic() < company_deadline:
-                    try:
-                        firmo = enrich_company_domain(domain=domain, company_name=company.name)
-                        updated = _apply_company_enrichment(company, firmo)
-                        updated = updated.model_copy(
-                            update={
-                                "company_domain": domain,
-                                "domain_source": company.domain_source or updated.domain_source,
-                            }
-                        )
-                        enriched_companies[company.external_id] = updated
-                        stats["companies_enriched"] += 1
-                    except ProviderAPIError as e:
-                        err_msg = str(e)[:200]
-                        stats["errors"].append(f"{company.name}: company {err_msg}"[:200])
-                        updated = company
-                        prospeo_health = merge_health_from_api_error(
-                            prospeo_health,
-                            error_code=e.error_code,
-                            message=err_msg,
-                        )
-                        stats["prospeo_health"] = sanitize_prospeo_health_dict(
-                            prospeo_health.to_dict()
-                        )
-                        if e.error_code == "INSUFFICIENT_CREDITS" or "insufficient credit" in err_msg.lower():
-                            global_search_block = stats["prospeo_health"]
-                else:
-                    updated = company.model_copy(update={"company_domain": domain})
+                stats["companies_without_contacts"] += 1
+                stats["companies_skipped_no_domain"] = (
+                    int(stats.get("companies_skipped_no_domain") or 0) + 1
+                )
+                continue
+
+            stats["companies_searched"] += 1
+            updated = company
+            skip_firmo = bool(global_search_block) or skip_company_firmographics
+            if not skip_firmo and time.monotonic() < company_deadline:
+                try:
+                    firmo = enrich_company_domain(domain=domain, company_name=company.name)
+                    updated = _apply_company_enrichment(company, firmo)
+                    updated = updated.model_copy(
+                        update={
+                            "company_domain": domain,
+                            "domain_source": company.domain_source or updated.domain_source,
+                        }
+                    )
                     enriched_companies[company.external_id] = updated
+                    stats["companies_enriched"] += 1
+                except ProviderAPIError as e:
+                    err_msg = str(e)[:200]
+                    stats["errors"].append(f"{company.name}: company {err_msg}"[:200])
+                    updated = company
+                    prospeo_health = merge_health_from_api_error(
+                        prospeo_health,
+                        error_code=e.error_code,
+                        message=err_msg,
+                    )
+                    stats["prospeo_health"] = sanitize_prospeo_health_dict(
+                        prospeo_health.to_dict()
+                    )
+                    if e.error_code == "INSUFFICIENT_CREDITS" or "insufficient credit" in err_msg.lower():
+                        global_search_block = stats["prospeo_health"]
+            else:
+                updated = company.model_copy(update={"company_domain": domain})
+                enriched_companies[company.external_id] = updated
 
-                found_for_company = 0
-                company_diag: dict[str, Any] = {
-                    "company_name": company.name,
-                    "domain": domain,
-                    "domain_sent": domain,
-                    "request_executed": False,
-                    "prospeo_results": 0,
-                    "valid_results": 0,
-                    "discarded_count": 0,
-                    "discard_reason": "",
-                    "status_message": "",
-                    "search_blocked": False,
-                    "search_outcome": None,
-                    "error_code": None,
-                }
+            # Gate post-firmographics: solo descartar mismatch conocido grave.
+            # Desconocido / parcial = "casi perfecto" → sigue para poder llenar cupo.
+            from app.services.lead_sourcing.icp_import_gate import (
+                ICP_TIER_REJECT,
+                assess_icp_identity,
+            )
 
-                if global_search_block and effective_prospeo_search_blocked(
-                    error_code=global_search_block.get("error_code"),
-                    remaining_credits=global_search_block.get("remaining_credits"),
-                    insufficient_credits=bool(global_search_block.get("insufficient_credits")),
-                    rate_limited=bool(global_search_block.get("rate_limited")),
-                    search_blocked=bool(global_search_block.get("search_blocked")),
-                ):
+            company_tier, _ident, company_icp_reject = assess_icp_identity(
+                campaign_industry=campaign.target_industry,
+                campaign_country=campaign.target_country,
+                campaign_company_size=campaign.target_company_size,
+                prospect_industry=updated.industry,
+                prospect_country=updated.country,
+                company_size=updated.company_size,
+                employee_count=updated.employee_count,
+            )
+            if company_tier == ICP_TIER_REJECT:
+                stats["people_discarded"] = int(stats.get("people_discarded") or 0) + 1
+                stats.setdefault("companies_rejected_icp", 0)
+                stats["companies_rejected_icp"] = int(stats["companies_rejected_icp"]) + 1
+                if log_fn:
+                    log_fn(f"{company.name}: descartada — {company_icp_reject}")
+                prospeo_debug.append(
+                    {
+                        "company_name": company.name,
+                        "domain": domain,
+                        "request_executed": False,
+                        "discard_reason": company_icp_reject,
+                        "status_message": f"ICP estricto: {company_icp_reject}",
+                    }
+                )
+                stats["companies_without_contacts"] += 1
+                continue
+
+            found_for_company = 0
+            company_diag: dict[str, Any] = {
+                "company_name": company.name,
+                "domain": domain,
+                "domain_sent": domain,
+                "request_executed": False,
+                "prospeo_results": 0,
+                "valid_results": 0,
+                "discarded_count": 0,
+                "discard_reason": "",
+                "status_message": "",
+                "search_blocked": False,
+                "search_outcome": None,
+                "error_code": None,
+            }
+
+            if db is not None:
+                try:
+                    from app.services.nexus_contact_cache import find_cached_contacts_for_company
+
+                    cache_leads, cache_diag = find_cached_contacts_for_company(
+                        db,
+                        campaign,
+                        company_domain=domain,
+                        company_name=company.name,
+                        limit=_people_per_company(),
+                        exclude_emails=excl_em,
+                        exclude_linkedin=excl_li,
+                        exclude_phones=excl_phones,
+                    )
+                except Exception:  # noqa: BLE001
+                    cache_leads, cache_diag = [], {}
+                if cache_leads:
+                    for lead in cache_leads:
+                        gkey = (
+                            normalize_linkedin_url(lead.linkedin_url)
+                            or (lead.email or "").strip().lower()
+                            or lead.external_id
+                        )
+                        if gkey in global_person_keys:
+                            continue
+                        global_person_keys.add(gkey)
+                        lead = lead.model_copy(
+                            update={"linked_company_key": company.canonical_key or company.external_id}
+                        )
+                        people_by_key[lead.external_id] = lead
+                        stats["people_discovered"] += 1
+                        found_for_company += 1
+                    company_diag.update(
+                        {
+                            "valid_results": found_for_company,
+                            "status_message": f"Nexus cache ({found_for_company})",
+                            "nexus_cache": cache_diag,
+                        }
+                    )
+                    stats["nexus_cache_contacts"] = int(
+                        stats.get("nexus_cache_contacts") or 0
+                    ) + found_for_company
+                    _upsert_prospeo_debug(prospeo_debug, company_diag)
+                    if found_for_company >= 1:
+                        if log_fn:
+                            log_fn(
+                                f"{company.name}: {found_for_company} contacto(s) "
+                                "desde cache Nexus (sin Prospeo search)"
+                            )
+                        _finish_company_batch()
+                        continue
+
+            if global_search_block and effective_prospeo_search_blocked(
+                error_code=global_search_block.get("error_code"),
+                remaining_credits=global_search_block.get("remaining_credits"),
+                insufficient_credits=bool(global_search_block.get("insufficient_credits")),
+                rate_limited=bool(global_search_block.get("rate_limited")),
+                search_blocked=bool(global_search_block.get("search_blocked")),
+            ):
+                # search-person bloqueado: Brave + enrich-person (otro endpoint) sigue vivo.
+                rate_blocked = bool(global_search_block.get("rate_limited")) or (
+                    "RATE_LIMIT" in str(global_search_block.get("error_code") or "").upper()
+                )
+                if rate_blocked and time.monotonic() < company_deadline:
+                    from app.services.lead_sourcing.web_executive_fallback import (
+                        find_executives_via_web_enrich,
+                    )
+
+                    search_hits, fb_diag = find_executives_via_web_enrich(
+                        company=updated,
+                        role_hint=campaign.target_role,
+                        campaign_country=campaign.target_country,
+                        limit=_people_per_company(),
+                    )
+                    company_diag = {**company_diag, **fb_diag}
+                    enrich_discards: list[dict[str, Any]] = []
+                    for idx, hit in enumerate(search_hits):
+                        if time.monotonic() > company_deadline:
+                            stats["partial"] = True
+                            break
+                        lead = _lead_from_prospeo_person(
+                            person=hit,
+                            company=updated,
+                            campaign_id=campaign.id,
+                            fit_score=max(
+                                updated.icp_relevance_score or 0,
+                                company.icp_relevance_score or 0,
+                            ),
+                            fit_threshold=fit_threshold,
+                            idx=idx,
+                            icp_target_role=campaign.target_role,
+                            icp_target_industry=campaign.target_industry,
+                            icp_target_country=campaign.target_country,
+                            icp_target_company_size=campaign.target_company_size,
+                        )
+                        if lead is None:
+                            continue
+                        gkey = (
+                            normalize_linkedin_url(lead.linkedin_url)
+                            or (lead.email or "").strip().lower()
+                            or lead.external_id
+                        )
+                        if gkey in global_person_keys:
+                            continue
+                        global_person_keys.add(gkey)
+                        people_by_key[lead.external_id] = lead
+                        stats["people_discovered"] += 1
+                        found_for_company += 1
+                    company_diag["valid_results"] = found_for_company
+                    _upsert_prospeo_debug(prospeo_debug, company_diag)
+                    if found_for_company == 0:
+                        stats["companies_without_contacts"] += 1
+                    elif log_fn:
+                        log_fn(
+                            f"{company.name}: {found_for_company} via web+enrich "
+                            "(Prospeo search en rate limit)"
+                        )
+                else:
                     blocked_outcome = search_outcome_from_health(global_search_block)
                     company_diag.update(
                         {
@@ -852,89 +1129,59 @@ def run_mvp_company_enrichment(
                     )
                     prospeo_debug.append(company_diag)
                     stats["companies_without_contacts"] += 1
-                else:
-                    try:
-                        search_hits, search_diag = search_people_at_company_with_diagnostic(
-                            domain=domain,
-                            company_name=company.name,
-                            role_hint=campaign.target_role,
-                            limit=_people_per_company(),
+            else:
+                try:
+                    search_hits, search_diag = search_people_at_company_with_diagnostic(
+                        domain=domain,
+                        company_name=company.name,
+                        role_hint=campaign.target_role,
+                        limit=_people_per_company(),
+                    )
+                    if PROSPEO_SEARCH_THROTTLE_SEC > 0:
+                        time.sleep(PROSPEO_SEARCH_THROTTLE_SEC)
+                    company_diag = {**company_diag, **search_diag}
+                    enrich_discards: list[dict[str, Any]] = list(
+                        company_diag.get("person_discards") or []
+                    )
+                    if is_search_blocked_outcome(company_diag.get("search_outcome")):
+                        ec = company_diag.get("error_code")
+                        rate_hit = company_diag.get("search_outcome") == (
+                            "blocked_rate_limit"
+                        ) or (
+                            "RATE_LIMIT" in str(ec or "").upper()
                         )
-                        company_diag = {**company_diag, **search_diag}
-                        enrich_discards: list[dict[str, Any]] = list(
-                            company_diag.get("person_discards") or []
+                        prospeo_health = merge_health_from_api_error(
+                            prospeo_health,
+                            error_code=company_diag.get("error_code"),
+                            message=company_diag.get("api_error") or "",
                         )
-                        if is_search_blocked_outcome(company_diag.get("search_outcome")):
-                            ec = company_diag.get("error_code")
-                            if effective_prospeo_search_blocked(error_code=ec):
-                                global_search_block = sanitize_prospeo_health_dict(
-                                    {
-                                        **stats["prospeo_health"],
-                                        "error_code": ec,
-                                        "detail": company_diag.get("api_error")
-                                        or company_diag.get("discard_reason"),
-                                        "search_blocked": True,
-                                    }
-                                )
-                            prospeo_health = merge_health_from_api_error(
-                                prospeo_health,
-                                error_code=company_diag.get("error_code"),
-                                message=company_diag.get("api_error") or "",
+                        if rate_hit:
+                            from app.services.lead_sourcing.prospeo_api_health import (
+                                stamp_prospeo_rate_limit,
                             )
-                            stats["prospeo_health"] = sanitize_prospeo_health_dict(
-                                prospeo_health.to_dict()
+                            from app.services.lead_sourcing.web_executive_fallback import (
+                                find_executives_via_web_enrich,
                             )
-                            prospeo_debug.append(company_diag)
-                            stats["companies_without_contacts"] += 1
-                        else:
+
+                            global_search_block = stamp_prospeo_rate_limit(
+                                sanitize_prospeo_health_dict(prospeo_health.to_dict()),
+                                error_code=str(ec or "RATE_LIMITED"),
+                                detail=company_diag.get("api_error")
+                                or company_diag.get("discard_reason"),
+                            )
+                            stats["prospeo_health"] = global_search_block
+                            # Misma empresa: no gastar search-person; usar web+enrich.
+                            search_hits, fb_diag = find_executives_via_web_enrich(
+                                company=updated,
+                                role_hint=campaign.target_role,
+                                campaign_country=campaign.target_country,
+                                limit=_people_per_company(),
+                            )
+                            company_diag = {**company_diag, **fb_diag, "rate_limited_fallback": True}
                             for idx, hit in enumerate(search_hits):
                                 if time.monotonic() > company_deadline:
                                     stats["partial"] = True
                                     break
-                                if not skip_person_detail_enrich and time.monotonic() < company_deadline:
-                                    person_id = hit.get("person_id") or hit.get("id")
-                                    try:
-                                        if person_id:
-                                            detail = enrich_person_by_id(str(person_id))
-                                        else:
-                                            detail = enrich_person_record(
-                                                first_name=hit.get("first_name"),
-                                                last_name=hit.get("last_name"),
-                                                full_name=hit.get("full_name") or hit.get("name"),
-                                                company_name=company.name,
-                                                company_website=updated.website_url,
-                                                linkedin_url=hit.get("linkedin_url"),
-                                            )
-                                        if detail:
-                                            hit = {**hit, **detail}
-                                    except ProviderAPIError:
-                                        pass
-
-                                email_pre, _ = extract_email_phone(hit)
-                                validation = validate_prospeo_contact(
-                                    target_company_name=company.name,
-                                    target_domain=domain,
-                                    person=hit,
-                                    email=email_pre,
-                                    person_name=_person_display_name(hit),
-                                )
-                                if not validation.ok or is_forbidden_email(email_pre):
-                                    _record_discard(
-                                        validation,
-                                        company_name=company.name,
-                                        stage="filtro_enrich",
-                                    )
-                                    enrich_discards.append(
-                                        {
-                                            "person_name": validation.person_name
-                                            or _person_display_name(hit),
-                                            "reason": validation.reason,
-                                            "stage": "filtro_enrich",
-                                            "email_domain": validation.email_domain,
-                                        }
-                                    )
-                                    continue
-
                                 lead = _lead_from_prospeo_person(
                                     person=hit,
                                     company=updated,
@@ -942,7 +1189,6 @@ def run_mvp_company_enrichment(
                                     fit_score=max(
                                         updated.icp_relevance_score or 0,
                                         company.icp_relevance_score or 0,
-                                        fit_threshold,
                                     ),
                                     fit_threshold=fit_threshold,
                                     idx=idx,
@@ -952,112 +1198,199 @@ def run_mvp_company_enrichment(
                                     icp_target_company_size=campaign.target_company_size,
                                 )
                                 if lead is None:
-                                    enrich_discards.append(
-                                        {
-                                            "person_name": _person_display_name(hit),
-                                            "reason": "No pasó validación de persona",
-                                            "stage": "lead_build",
-                                            "email_domain": email_domain(email_pre),
-                                        }
-                                    )
                                     continue
-                                gkey = _person_global_key(
-                                    lead.email, lead.linkedin_url, lead.name
+                                gkey = (
+                                    normalize_linkedin_url(lead.linkedin_url)
+                                    or (lead.email or "").strip().lower()
+                                    or lead.external_id
                                 )
                                 if gkey in global_person_keys:
-                                    dup = replace(
-                                        validation,
-                                        ok=False,
-                                        reason="Persona ya asignada a otra empresa del pipeline",
-                                    )
-                                    _record_discard(
-                                        dup, company_name=company.name, stage="duplicate"
-                                    )
-                                    enrich_discards.append(
-                                        {
-                                            "person_name": lead.name,
-                                            "reason": dup.reason,
-                                            "stage": "duplicate",
-                                            "email_domain": email_domain(lead.email),
-                                        }
-                                    )
                                     continue
                                 global_person_keys.add(gkey)
                                 people_by_key[lead.external_id] = lead
                                 stats["people_discovered"] += 1
                                 found_for_company += 1
-
-                            company_diag["person_discards"] = enrich_discards
-                            company_diag = _sync_prospeo_company_diag(
-                                company_diag,
-                                search_hits=search_hits,
-                                found_valid=found_for_company,
-                                enrich_discards=enrich_discards,
-                            )
+                            company_diag["valid_results"] = found_for_company
                             _upsert_prospeo_debug(prospeo_debug, company_diag)
-
-                            if (
-                                found_for_company == 0
-                                and company_has_verified_domain(updated)
-                                and not is_search_blocked_outcome(
-                                    company_diag.get("search_outcome")
-                                )
-                                and company_diag.get("search_outcome")
-                                in (SEARCH_OUTCOME_NO_RESULTS, None, SEARCH_OUTCOME_OK)
-                            ):
-                                stats.setdefault("generic_fallback_added", 0)
-                                for glead in build_generic_email_leads(
-                                    company=updated,
-                                    domain=domain,
-                                    campaign=campaign,
-                                    fit_score=max(
-                                        updated.icp_relevance_score or 0,
-                                        company.icp_relevance_score or 0,
-                                        fit_threshold,
-                                    ),
-                                    fit_threshold=fit_threshold,
-                                ):
-                                    people_by_key[glead.external_id] = glead
-                                    stats["generic_fallback_added"] += 1
-                                if log_fn:
-                                    log_fn(
-                                        f"{company.name}: Prospeo 0 — fallback genéricos @{domain}"
-                                    )
-                            elif found_for_company == 0:
+                            if found_for_company == 0:
                                 stats["companies_without_contacts"] += 1
-                                if log_fn:
-                                    log_fn(
-                                        f"Sin contacto Prospeo para {company.name} ({domain}): "
-                                        f"{company_diag.get('status_message', '')}"
-                                    )
-                    except ProviderAPIError as e:
-                        err_msg = str(e)[:200]
-                        stats["errors"].append(f"{company.name}: search {err_msg}")
-                        blocked_outcome = search_outcome_from_health(
-                            {
-                                "error_code": e.error_code,
-                                "detail": err_msg,
-                                "search_blocked": True,
-                            }
+                        else:
+                            stats["prospeo_health"] = sanitize_prospeo_health_dict(
+                                prospeo_health.to_dict()
+                            )
+                            prospeo_debug.append(company_diag)
+                            stats["companies_without_contacts"] += 1
+                    else:
+                        for idx, hit in enumerate(search_hits):
+                            if time.monotonic() > company_deadline:
+                                stats["partial"] = True
+                                break
+                            if not skip_person_detail_enrich and time.monotonic() < company_deadline:
+                                person_id = hit.get("person_id") or hit.get("id")
+                                try:
+                                    if person_id:
+                                        detail = enrich_person_by_id(str(person_id))
+                                    else:
+                                        detail = enrich_person_record(
+                                            first_name=hit.get("first_name"),
+                                            last_name=hit.get("last_name"),
+                                            full_name=hit.get("full_name") or hit.get("name"),
+                                            company_name=company.name,
+                                            company_website=updated.website_url,
+                                            linkedin_url=hit.get("linkedin_url"),
+                                        )
+                                    if detail:
+                                        hit = {**hit, **detail}
+                                except ProviderAPIError:
+                                    pass
+
+                            email_pre, _ = extract_email_phone(hit)
+                            validation = validate_prospeo_contact(
+                                target_company_name=company.name,
+                                target_domain=domain,
+                                person=hit,
+                                email=email_pre,
+                                person_name=_person_display_name(hit),
+                            )
+                            if not validation.ok or is_forbidden_email(email_pre):
+                                _record_discard(
+                                    validation,
+                                    company_name=company.name,
+                                    stage="filtro_enrich",
+                                )
+                                enrich_discards.append(
+                                    {
+                                        "person_name": validation.person_name
+                                        or _person_display_name(hit),
+                                        "reason": validation.reason,
+                                        "stage": "filtro_enrich",
+                                        "email_domain": validation.email_domain,
+                                    }
+                                )
+                                continue
+
+                            lead = _lead_from_prospeo_person(
+                                person=hit,
+                                company=updated,
+                                campaign_id=campaign.id,
+                                fit_score=max(
+                                    updated.icp_relevance_score or 0,
+                                    company.icp_relevance_score or 0,
+                                ),
+                                fit_threshold=fit_threshold,
+                                idx=idx,
+                                icp_target_role=campaign.target_role,
+                                icp_target_industry=campaign.target_industry,
+                                icp_target_country=campaign.target_country,
+                                icp_target_company_size=campaign.target_company_size,
+                            )
+                            if lead is None:
+                                enrich_discards.append(
+                                    {
+                                        "person_name": _person_display_name(hit),
+                                        "reason": "No pasó validación de persona",
+                                        "stage": "lead_build",
+                                        "email_domain": email_domain(email_pre),
+                                    }
+                                )
+                                continue
+                            gkey = _person_global_key(
+                                lead.email, lead.linkedin_url, lead.name
+                            )
+                            if gkey in global_person_keys:
+                                dup = replace(
+                                    validation,
+                                    ok=False,
+                                    reason="Persona ya asignada a otra empresa del pipeline",
+                                )
+                                _record_discard(
+                                    dup, company_name=company.name, stage="duplicate"
+                                )
+                                enrich_discards.append(
+                                    {
+                                        "person_name": lead.name,
+                                        "reason": dup.reason,
+                                        "stage": "duplicate",
+                                        "email_domain": email_domain(lead.email),
+                                    }
+                                )
+                                continue
+                            global_person_keys.add(gkey)
+                            people_by_key[lead.external_id] = lead
+                            stats["people_discovered"] += 1
+                            found_for_company += 1
+
+                        company_diag["person_discards"] = enrich_discards
+                        company_diag = _sync_prospeo_company_diag(
+                            company_diag,
+                            search_hits=search_hits,
+                            found_valid=found_for_company,
+                            enrich_discards=enrich_discards,
                         )
-                        company_diag["api_error"] = err_msg
-                        company_diag["error_code"] = e.error_code
-                        company_diag["search_outcome"] = blocked_outcome
-                        company_diag["search_blocked"] = True
-                        company_diag["status_message"] = outcome_status_message(
-                            blocked_outcome, error_code=e.error_code
-                        )
-                        company_diag["discard_reason"] = err_msg
-                        prospeo_debug.append(company_diag)
-                        if effective_prospeo_search_blocked(error_code=e.error_code):
-                            global_search_block = stats["prospeo_health"]
-                        prospeo_health = merge_health_from_api_error(
-                            prospeo_health, error_code=e.error_code, message=err_msg
-                        )
-                        stats["prospeo_health"] = sanitize_prospeo_health_dict(
-                            prospeo_health.to_dict()
-                        )
-                        stats["companies_without_contacts"] += 1
+                        _upsert_prospeo_debug(prospeo_debug, company_diag)
+
+                        if (
+                            found_for_company == 0
+                            and not (campaign.target_role or "").strip()
+                            and company_has_verified_domain(updated)
+                            and not is_search_blocked_outcome(
+                                company_diag.get("search_outcome")
+                            )
+                            and company_diag.get("search_outcome")
+                            in (SEARCH_OUTCOME_NO_RESULTS, None, SEARCH_OUTCOME_OK)
+                        ):
+                            stats.setdefault("generic_fallback_added", 0)
+                            for glead in build_generic_email_leads(
+                                company=updated,
+                                domain=domain,
+                                campaign=campaign,
+                                fit_score=max(
+                                    updated.icp_relevance_score or 0,
+                                    company.icp_relevance_score or 0,
+                                ),
+                                fit_threshold=fit_threshold,
+                            ):
+                                people_by_key[glead.external_id] = glead
+                                stats["generic_fallback_added"] += 1
+                            if log_fn:
+                                log_fn(
+                                    f"{company.name}: Prospeo 0 — fallback genéricos @{domain}"
+                                )
+                        elif found_for_company == 0:
+                            stats["companies_without_contacts"] += 1
+                            if log_fn:
+                                log_fn(
+                                    f"Sin contacto Prospeo para {company.name} ({domain}): "
+                                    f"{company_diag.get('status_message', '')}"
+                                )
+                except ProviderAPIError as e:
+                    err_msg = str(e)[:200]
+                    stats["errors"].append(f"{company.name}: search {err_msg}")
+                    blocked_outcome = search_outcome_from_health(
+                        {
+                            "error_code": e.error_code,
+                            "detail": err_msg,
+                            "search_blocked": True,
+                        }
+                    )
+                    company_diag["api_error"] = err_msg
+                    company_diag["error_code"] = e.error_code
+                    company_diag["search_outcome"] = blocked_outcome
+                    company_diag["search_blocked"] = True
+                    company_diag["status_message"] = outcome_status_message(
+                        blocked_outcome, error_code=e.error_code
+                    )
+                    company_diag["discard_reason"] = err_msg
+                    prospeo_debug.append(company_diag)
+                    if effective_prospeo_search_blocked(error_code=e.error_code):
+                        global_search_block = stats["prospeo_health"]
+                    prospeo_health = merge_health_from_api_error(
+                        prospeo_health, error_code=e.error_code, message=err_msg
+                    )
+                    stats["prospeo_health"] = sanitize_prospeo_health_dict(
+                        prospeo_health.to_dict()
+                    )
+                    stats["companies_without_contacts"] += 1
         finally:
             _finish_company_batch()
 

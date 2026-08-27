@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth.deps import RequireProspectReassign, get_current_user, get_company_for_user
-from app.core.permissions import Permission, has_permission, normalize_role
+from app.core.permissions import Permission, has_permission, is_company_admin, normalize_role
 from app.database.session import get_db
 from app.deps import get_prospect
 from app.models.enums import UserRole
@@ -121,8 +121,6 @@ def claim_prospect(
     user: User = Depends(get_current_user),
     prospect: Prospect = Depends(get_prospect),
 ) -> ProspectRead:
-    if normalize_role(user.role) == UserRole.gerente:
-        raise HTTPException(status_code=403, detail="Gerente no puede tomar prospectos")
     if user.company_id != prospect.company_id:
         raise HTTPException(status_code=403, detail="No tenés acceso a este prospecto")
     own.claim_prospect(db, user=user, prospect=prospect)
@@ -139,8 +137,8 @@ def release_prospect(
     user: User = Depends(get_current_user),
     prospect: Prospect = Depends(get_prospect),
 ) -> ProspectRead:
-    if normalize_role(user.role) != UserRole.gerente:
-        raise HTTPException(status_code=403, detail="Solo Gerente puede liberar prospectos")
+    if not is_company_admin(user.role):
+        raise HTTPException(status_code=403, detail="Solo Director/Owner puede liberar prospectos")
     if not own.can_release_prospect(user, prospect):
         raise HTTPException(status_code=403, detail="No podés liberar este prospecto")
     own.release_prospect(db, user=user, prospect=prospect)
@@ -156,8 +154,8 @@ def reassign_prospect(
     db: Session = Depends(get_db),
     prospect: Prospect = Depends(get_prospect),
 ) -> ProspectRead:
-    if normalize_role(actor.role) != UserRole.gerente:
-        raise HTTPException(status_code=403, detail="Solo Gerente puede reasignar prospectos")
+    if not is_company_admin(actor.role):
+        raise HTTPException(status_code=403, detail="Solo Director/Owner puede reasignar prospectos")
     if actor.company_id != prospect.company_id:
         raise HTTPException(status_code=403, detail="No tenés acceso a este prospecto")
     own.reassign_prospect(db, actor=actor, prospect=prospect, to_user_id=payload.to_user_id)

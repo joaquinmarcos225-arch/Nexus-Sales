@@ -1,4 +1,4 @@
-"""Generación playbook SDR outbound — claridad sobre qué hacemos, no suposiciones de dolor."""
+"""Generación playbook SDR outbound — personalización + problema/beneficio + CTA a reunión."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ class _ValidationAccum:
 
 
 _EMAIL_DAY1_WORDS_MIN = 55
-_EMAIL_DAY1_WORDS_MAX = 130
+_EMAIL_DAY1_WORDS_MAX = 120
 _EMAIL_DAY1_WORDS_IDEAL_MIN = 70
 _EMAIL_DAY1_WORDS_IDEAL_MAX = 110
 
@@ -70,35 +70,71 @@ _PRODUCT_PITCH = re.compile(
     re.I,
 )
 
-# Suposiciones de dolor / hipótesis sobre el prospecto — prohibidas en todo el mensaje.
+# Culpa / fricción directa hacia el prospecto — prohibido (sí se permite frame sectorial del producto).
 _PAIN_ASSUMPTION_BANNED = re.compile(
     r"(seguramente\s+(?:te|le)\s+(?:pasa|ocurre|enfrent|tien)|"
-    r"probablemente\s+(?:te|le|teng)|"
-    r"suelen?\s+(?:tener|pasar|enfrentar|sufrir|encontrar|padecer)|"
-    r"much[oa]s\s+(?:empresas|equipos|organizaciones|compa[nñ][ií]as|especialistas)\s+"
-    r"(?:tienen|sufren|enfrentan|padecen|experimentan)|"
-    r"a\s+menudo\s+(?:ven|tienen|sufren|enfrentan|padecen)|"
-    r"hablando\s+con\s+(?:l[ií]deres|directores|equipos|especialistas)|"
-    r"en\s+empresas\s+similares|"
+    r"probablemente\s+(?:te|le)\s+(?:pasa|ocurre|enfrent|teng)|"
     r"¿(?:te|le)\s+(?:pasa|sucede|identific|reconoc)|"
-    r"detect(?:ás|as)\s+esta\s+dificultad|"
-    r"(?:los|las)\s+\w+\s+suelen\s+tener)",
+    r"detect(?:ás|as)\s+esta\s+dificultad)",
     re.I,
 )
 
-# Lenguaje corporativo genérico.
+# Follow-ups: nunca reprochar falta de lectura del mensaje anterior.
+_GUILT_FOLLOWUP_BANNED = re.compile(
+    r"(pudiste\s+(?:leer|revisar|ver)|"
+    r"viste\s+(?:mi|el)\s+mensaje|"
+    r"le[ií]ste\s+(?:mi|el)\s+(?:mensaje|correo|mail)|"
+    r"revisaste\s+(?:mi|el|lo\s+que)|"
+    r"si\s+(?:pudiste|viste|revisaste)\s+(?:leer|revisar|ver|lo))",
+    re.I,
+)
+
+# Frame de problema/beneficio sectorial permitido (anclado a producto o research).
+_SECTORAL_VALUE = re.compile(
+    r"(habitualmente|en tu sector|en tu (?:rol|industria|empresa)|"
+    r"(?:los|las)\s+(?:directores|equipos|l[ií]deres|gerentes)|"
+    r"empresas (?:como|de tu)|"
+    r"ayudamos a|pierden|recortar|reduc(?:ir|e)|aceler|"
+    r"cuellos?\s+de\s+botella|tiempo\s+(?:manual|perdido)|"
+    r"olvid[eé]\s+(?:mencionarte|comentarte))",
+    re.I,
+)
+
+# Porcentajes / métricas inventadas (salvo que el producto las traiga explícitas).
+_INVENTED_METRIC = re.compile(
+    r"\b\d{1,3}\s*%|\b\d+\s*(?:x|veces)\b|aceler(?:ar|amos)\s+un\s+\d+",
+    re.I,
+)
+
+# Puente contextual de follow-up (sin culpa) — incluye modo despedida suave.
+_CONTEXT_BRIDGE = re.compile(
+    r"(dejar esto arriba|paso r[aá]pido|olvid[eé]\s+(?:mencionarte|comentarte)|"
+    r"te escribo brevemente|retomo|te escrib[ií]|te hab[ií]a escrito|"
+    r"hace unos d[ií]as|por ac[aá] para|te escribo por aqu[ií]|seguimiento|"
+    r"para ver si (?:logramos|podemos) coincidir|"
+    r"[uú]ltima vez|dejo una idea|cuando te venga bien|"
+    r"armamos una charla|agendamos unos minutos|te calza una charla|"
+    r"quedo atento)",
+    re.I,
+)
+
+# Lenguaje corporativo genérico / buzzwords sin mecanismo concreto del producto.
 _GENERIC_CORPORATE = re.compile(
     r"(consolid(?:ar|a)\s+informaci[oó]n|centraliz(?:ar|a)\s+informaci[oó]n|"
     r"mejora(?:r)?\s+(?:la\s+)?eficiencia|optimiza(?:r)?\s+procesos|"
     r"datos relevantes|decisiones [áa]giles|potencia(?:r)?\s+productividad|"
     r"informaci[oó]n dispersa|visibilidad(?:\s+unificada)?|procesos m[aá]s eficientes|"
     r"alinear equipos|sinergias|transformaci[oó]n digital|best practices|"
-    r"operaciones m[aá]s [áa]giles|toma de decisiones|datos confiables)",
+    r"operaciones m[aá]s [áa]giles|toma de decisiones|datos confiables|"
+    r"(?:menos|reduc(?:ir|e|imos)|baja(?:r)?)\s+fricci[oó]n(?:\s+operativa)?|"
+    r"fricci[oó]n\s+operativa|sin\s+fricci[oó]n|"
+    r"agiliza(?:r)?\s+(?:el\s+)?d[ií]a\s+a\s+d[ií]a|"
+    r"mejorar\s+(?:la\s+)?operaci[oó]n|simplifica(?:r)?\s+procesos)",
     re.I,
 )
 
 _PRESENTATION_OK = re.compile(
-    r"(soy\s+\S+|te escribo desde|escribo desde|desde\s+\S+|mi nombre es)",
+    r"(soy\s+\S+|mi nombre es|te escribo desde|te hablo desde|escribo desde|desde\s+\S+)",
     re.I,
 )
 
@@ -142,79 +178,109 @@ _BENEFITS_MARKERS = _CONCRETE_OUTCOME_MARKERS
 _FIRST_TOUCH_SECTION_KEYS = ("greeting", "presentation", "problem", "solution", "benefits", "cta")
 
 _SDR_PLAYBOOK_SYSTEM = """
-Sos un SDR outbound B2B senior (español). Escribís claro, directo y breve.
+Sos un SDR outbound senior (español). Escribís mensajes personalizados, claros y breves.
 
-OBJETIVO: mostrar qué hacemos, qué resultado generamos, y abrir una conversación (reunión breve).
-NO intentás convencer al prospecto de que tiene un problema.
+OBJETIVO ÚNICO: agendar una reunión corta (5–10 min). NUNCA intentar cerrar la venta.
+
+PERSONALIZACIÓN (lo que más vende hoy):
+- Usá SIEMPRE la INVESTIGACIÓN PREVIA y/o datos CRM (empresa, rol, señales públicas).
+- B2B: gancho sobre la EMPRESA o el equipo del prospecto.
+- B2C: gancho sobre la PERSONA (perfil, rol, trayectoria).
+- Si no hay dato confirmado: gancho suave con empresa/rol CRM. PROHIBIDO inventar hechos.
 
 PRODUCTO DE CAMPAÑA (OBLIGATORIO):
-Leé el bloque PRODUCTO SELECCIONADO. El mensaje debe basarse en ESE producto y su resultado.
-PROHIBIDO inventar propuesta de valor genérica ni suponer dolores del prospecto.
+Leé PRODUCTO SELECCIONADO. Problema + solución deben anclarse a ESE producto (dolor sectorial o beneficio real), no a features de relleno.
 
-PRIMER TOQUE — estructura fija:
-1) Saludo con nombre del prospecto
-2) Presentación: Soy [SDR] de [empresa/producto]
-3) Por qué escribo: "Te escribo porque ayudamos a..." (resultado principal, sin suposiciones)
-4) Qué hacemos: explicación breve del producto o proceso
-5) Qué resultado genera: beneficio concreto en lenguaje simple (ej. reducir tiempo manual de prospección, contactar más prospectos en menos tiempo, centralizar outreach, más conversaciones reales)
-6) Invitación a reunión/conversación breve
+PRIMER TOQUE — estructura fija (adaptá longitud al canal):
+1) Saludo cordial con nombre
+2) Presentación + gancho: Soy [SDR]. Una frase que demuestre investigación (LinkedIn/empresa/persona)
+3) Problema + solución: en pocas líneas, el dolor/necesidad que resolvés (sector/rol) + beneficio concreto — NO lista de características
+4) CTA de muy bajo esfuerzo: reunión/videollamada corta (5–10 min), idealmente con día/horario tentativo
+5) Firma (email): Saludos, [SDR]
 
 PROHIBIDO:
-- Suponer dolores ("seguramente te pasa", "suelen tener problemas", "muchas empresas sufren")
-- Lenguaje corporativo vacío
-- CTAs genéricos ("¿Te sucede esto?", "¿Qué opinas?", "¿Detectas esta dificultad?")
-
-Texto plano. Sin markdown. Más corto es mejor.
-"""
-
-_SDR_PLAYBOOK_FOLLOW_UP_SYSTEM = """
-Sos un SDR outbound B2B senior (español). Escribís seguimientos humanos, breves y que EVOLUCIONAN.
-
-REGLA DE ORO — SECUENCIA 21 DÍAS:
-- Día 1 = único toque con explicación completa del producto (qué hacemos + resultado + reunión).
-- Días 4, 7, 13, 16, 19 = más corto, más humano, MENOS vendedor. NO repetir el pitch del Día 1.
-- Día 10 = aportar valor (dato, caso, aprendizaje). NO repetir el pitch.
-
-OBLIGATORIO:
-- Leé el HISTORIAL de toques anteriores y referenciá con naturalidad.
-- Cada toque tiene UN objetivo distinto (routing, continuar sí/no, valor, timing, cierre).
-- Máximo UNA frase recordatoria del tema si hace falta — nunca re-explicar producto entero.
-
-PROHIBIDO en follow-ups:
-- Reescribir el pitch del Día 1 ("Te escribo porque… Lo hacemos mediante… Esto les permite…")
-- Listar features, beneficios completos o pedir reunión como en el primer contacto (salvo invitación muy suave en Día 10)
-- Suponer dolores del prospecto
-- Lenguaje corporativo vacío
+- Culpa directa ("seguramente te pasa", "¿te sucede esto?")
+- Pitch de features / cerrar venta
+- CTAs genéricos ("¿Qué opinas?", "¿Detectas esta dificultad?")
+- Mensajes mucho más largos que los ejemplos del playbook
 
 Texto plano. Sin markdown.
 """
 
+_SDR_PLAYBOOK_FOLLOW_UP_SYSTEM = """
+Sos un SDR outbound senior (español). Escribís follow-ups humanos, breves y con valor NUEVO.
+
+REGLA DE ORO: NUNCA digas "¿pudiste leer/revisar mi mensaje anterior?" ni reproches falta de respuesta.
+Eso genera culpa y fricción. El mensaje anterior es solo hilo conductor.
+
+ESTRUCTURA DE SEGUIMIENTO (todos los canales):
+1) Puente contextual ultra corto (dejar arriba en bandeja / paso rápido / olvidé mencionarte…)
+2) Nuevo ángulo de valor: dato, testimonio corto, beneficio distinto o recurso — NO repetir el pitch del Día 1
+3) CTA de baja fricción: volver a proponer reunión corta o facilitar la respuesta (esta tarde vs lunes)
+
+REGLAS POR DÍA:
+- Días 4/7/10/13: puente + valor nuevo + CTA reunión
+- Día 16/19: break-up / cierre suave sin culpa; puerta abierta
+
+PROHIBIDO:
+- Reescribir el pitch completo del Día 1
+- "¿Pudiste leer/revisar…?", "sin respuesta", "viste mi mensaje"
+- Listar features o cerrar venta
+
+Texto plano. Sin markdown. Más corto es mejor.
+"""
+
 _PRIOR_TOUCH_REFERENCE = re.compile(
-    r"(te hab[ií]a escrito|retomo|mis mensajes|mensaje anterior|mensajes anteriores|"
-    r"seguimiento|hace unos d[ií]as|como coment[eé]|en mi (?:email|mensaje)|"
-    r"sin respuesta|sin novedades|sin tu respuesta)",
+    r"(te hab[ií]a escrito|te escrib[ií]|te envi[eé]|retomo|mis mensajes|mensaje anterior|"
+    r"mensajes anteriores|seguimiento|hace unos d[ií]as|como coment[eé]|en mi (?:email|mensaje|correo)|"
+    r"email que|correo que|sin respuesta|sin novedades|sin tu respuesta|que te envi[eé])",
+    re.I,
+)
+
+_COORDINATE_CALL_CTA = re.compile(
+    r"(coordinar|llamada breve|agenda|agendar|demo|esta semana|"
+    r"otra persona|alguien m[aá]s del equipo|persona indicada|con qui[eé]n hablar)",
     re.I,
 )
 
 _HUMAN_FOLLOWUP_CTA = re.compile(
     r"(persona indicada|alguien m[aá]s del equipo|con qui[eé]n|"
-    r"tiene sentido seguir|prefer[ií]s que|dej(?:emos|ar)lo para|"
+    r"coordinar|llamada breve|agenda|agendar|demo|esta semana|"
+    r"tiene sentido seguir|prefer[ií]s que|dej(?:emos|ar)lo para|lo dejamos para|dejamos para|"
     r"no est[aá] en agenda|evaluando para este a[nñ]o|"
-    r"seguir conversando|dejar para m[aá]s adelante|"
-    r"prioridad ahora|en el radar|seguir o|dejarlo para)",
+    r"seguir conversando|seguimos conversando|dejar para m[aá]s adelante|"
+    r"prioridad|prioridades|en el radar|seguir o|dejarlo para|revis)",
+    re.I,
+)
+
+_EMAIL_FOLLOWUP_MARKERS = re.compile(
+    r"(correo|email|escrib[ií].*d[ií]as|automatiz|prospecci[oó]n|cargando datos|"
+    r"tareas manuales)",
+    re.I,
+)
+
+_FUTURE_RECONTACT = re.compile(
+    r"(trimestre|pr[oó]ximo\s+(?:trimestre|año|semestre)|m[aá]s adelante|"
+    r"prioridades cambian|volver[eé] a escribir|última vez|última nota|no ocupar)",
+    re.I,
+)
+
+_GENERIC_EMAIL_SUBJECTS = re.compile(
+    r"^(seguimiento|consulta|ventas|una idea|operaciones|automatizaci[oó]n)$",
     re.I,
 )
 
 _VALUE_ADD_MARKERS = re.compile(
     r"(caso|cliente|empresa|dato|%|\d+\s*%|aprendizaje|insight|"
-    r"estudio|tendencia|observamos|vimos que|logr[oó]|redujo|aument[oó])",
+    r"estudio|tendencia|observamos|vimos que|logr[oó]|redujo|aument[oó]|"
+    r"tiempo.*(?:operativ|prospecci[oó]n)|tareas operativas|conversaciones reales)",
     re.I,
 )
 
 _BREAKUP_MARKERS = re.compile(
-    r"(cierro|no seguir ocupando|quedo a disposici[oó]n|puerta abierta|"
-    r"no tuve respuesta|dejo esta conversaci[oó]n|saludos|"
-    r"m[aá]s adelante tiene sentido)",
+    r"(cierro|no seguir ocupando|no ocupar|última vez|última nota|quedo a disposici[oó]n|"
+    r"quedo atento|puerta abierta|no tuve respuesta|no tuvimos respuesta|"
+    r"dejo esta conversaci[oó]n|saludos|m[aá]s adelante tiene sentido|otras prioridades)",
     re.I,
 )
 
@@ -278,14 +344,22 @@ def _product_context_block(product: dict[str, str], *, for_follow_up: bool = Fal
     ]
     if for_follow_up:
         lines.append(
-            "MODO FOLLOW-UP: el pitch completo ya se envió en Día 1. "
-            "Usá esta info solo como contexto — NO repitas la explicación del producto. "
-            "Día 10: podés citar un dato/caso relacionado; resto de días: máximo una frase recordatoria."
+            "MODO FOLLOW-UP: el pitch completo ya se envió en el primer toque. "
+            "Usá esta info solo para un ÁNGULO NUEVO (dato, caso, beneficio distinto). "
+            "NO repitas la explicación del producto. NUNCA reproches falta de lectura."
         )
     else:
         lines.append(
-            "Usá esta info para explicar QUÉ HACEMOS y QUÉ RESULTADO genera. "
-            "NO inventes dolores del prospecto ni supongas que 'seguramente le pasa' algo."
+            "Usá esta info para: (1) un gancho personalizado con investigación/CRM, "
+            "(2) el problema/necesidad sectorial o de rol que el producto resuelve, "
+            "(3) la solución/beneficio concreto. PROHIBIDO inventar hechos no respaldados. "
+            "PROHIBIDO cerrar la venta — solo pedir reunión corta.\n"
+            "VALOR OBLIGATORIO: en solution/benefits (o el bloque único de valor) citá "
+            "mecanismos o números concretos de la propuesta de valor / beneficios del "
+            "producto (ej. «automatiza 60–90%…», canales email/LinkedIn/WhatsApp, "
+            "cola cuando hay interés). PROHIBIDO rellenar con buzzwords vacíos "
+            "(«menos fricción operativa», «mejorar eficiencia», «optimizar procesos») "
+            "si no estánlantan el valor real de la ficha."
         )
     return "\n".join(lines) + "\n\n"
 
@@ -652,7 +726,12 @@ def _validate_base_text(text: str, field: str) -> _ValidationAccum:
     acc.extend(_collect_pattern_matches(text, field, _GLOBAL_BANNED, "frase prohibida"))
     acc.extend(
         _collect_pattern_matches(
-            text, field, _PAIN_ASSUMPTION_BANNED, "suposición de dolor/problema prohibida"
+            text, field, _PAIN_ASSUMPTION_BANNED, "culpa/fricción directa hacia el prospecto"
+        )
+    )
+    acc.extend(
+        _collect_pattern_matches(
+            text, field, _GUILT_FOLLOWUP_BANNED, "reproche de lectura/respuesta prohibido"
         )
     )
     return acc
@@ -674,12 +753,15 @@ def _validate_why_write_text(
     acc = _ValidationAccum()
     acc.extend(_validate_base_text(text, field))
     acc.extend(_collect_pattern_matches(text, field, _GENERIC_CORPORATE, "lenguaje corporativo genérico"))
-    if text and not _WHY_WRITE_MARKERS.search(text):
+    if text and not (
+        _WHY_WRITE_MARKERS.search(text)
+        or _SECTORAL_VALUE.search(text)
+        or _RESULT_MARKERS.search(text)
+    ):
         acc.issues.append(
-            f'{field}: debe explicar por qué escribís (ej. "Te escribo porque ayudamos a…")'
+            f"{field}: debe plantear el problema/necesidad o el beneficio que resolvés "
+            f'(ej. "Habitualmente los [rol]…" / "Ayudamos a…")'
         )
-    if text and not _RESULT_MARKERS.search(text):
-        acc.issues.append(f"{field}: debe mencionar el resultado principal que generamos")
     return acc
 
 
@@ -687,10 +769,14 @@ def _validate_solution_text(text: str, field: str, *, how_context: str = "") -> 
     acc = _ValidationAccum()
     acc.extend(_validate_base_text(text, field))
     acc.extend(_collect_pattern_matches(text, field, _GENERIC_CORPORATE, "explicación genérica/corporativa"))
-    if text and not _mentions_how_we_do_it(text, how_context=how_context):
+    if text and not (
+        _mentions_how_we_do_it(text, how_context=how_context)
+        or _RESULT_MARKERS.search(text)
+        or _SECTORAL_VALUE.search(text)
+    ):
         acc.issues.append(
-            f'{field}: debe explicar qué hacemos / cómo (ej. "Lo hacemos mediante…", '
-            f'"Utilizamos…", "Automatizamos…" + funcionamiento concreto)'
+            f"{field}: debe explicar la solución/beneficio concreto del producto "
+            f'(ej. "Ayudamos a… a recortar…", "Automatizamos…")'
         )
     return acc
 
@@ -703,14 +789,18 @@ def _is_first_touch(prior_touches: list[dict[str, Any]]) -> bool:
     return not prior_touches
 
 
+def _has_followup_bridge(body: str) -> bool:
+    return bool(_PRIOR_TOUCH_REFERENCE.search(body) or _CONTEXT_BRIDGE.search(body))
+
+
 def _prior_touches_block(prior: list[dict[str, Any]]) -> str:
     if not prior:
         return "HISTORIAL: primer contacto — no hay toques anteriores.\n\n"
 
     lines = [
         "HISTORIAL COMPLETO DE TOQUES SIN RESPUESTA.",
-        "La secuencia EVOLUCIONA: el pitch completo del producto ya fue en Día 1.",
-        "OBLIGATORIO: referenciá toques anteriores con naturalidad — NO repitas el mismo pitch.",
+        "La secuencia EVOLUCIONA: el pitch completo del producto ya fue en el primer toque.",
+        "Usá un puente contextual corto + ángulo NUEVO de valor. NUNCA reproches falta de lectura.",
         "NUNCA actúes como si el contacto fuera completamente nuevo.\n",
     ]
     for t in prior:
@@ -738,56 +828,62 @@ def _first_touch_structure_block(
     prospect_first_name: str,
     prospect_role: str = "",
     prospect_industry: str = "",
+    prospect_company: str = "",
+    prospect_id: int | str | None = None,
+    campaign_id: int | str | None = None,
 ) -> str:
-    sender = sender_name.strip() or "[nombre SDR]"
+    from app.services.message_structure_variants import (
+        first_touch_structure_prompt,
+        pick_first_touch_variant,
+    )
+    from app.services.nexus_outreach_playbook_approved import approved_playbook_reference
+    from app.services.outreach_display_names import first_real_name_token, is_placeholder_token
+
+    sender = first_real_name_token(sender_name, fallback="") or "[nombre SDR]"
+    if is_placeholder_token(sender):
+        sender = "[nombre SDR]"
     brand = brand_name.strip() or "[empresa/producto]"
-    first = prospect_first_name.strip() or "[Nombre]"
-    role = prospect_role.strip() or "rol del prospecto"
-    industry = prospect_industry.strip() or "industria del prospecto"
+    first = (prospect_first_name or "").strip()
+    if not first or is_placeholder_token(first):
+        first = "[Nombre]"
+    role = prospect_role.strip() or prospect_industry.strip() or ""
+    approved = approved_playbook_reference(step_day=1, channel=channel)
+    variant = pick_first_touch_variant(
+        channel=channel,
+        prospect_id=prospect_id,
+        campaign_id=campaign_id,
+    )
+    shape = first_touch_structure_prompt(
+        channel=channel,
+        variant=variant,
+        sender_name=sender,
+        brand_name=brand,
+        prospect_first_name=first,
+        prospect_role=role,
+        prospect_company=prospect_company,
+    )
+    return (
+        f"{approved}\n{shape}\n"
+        "Completá sections JSON. body ensamblado = greeting + presentation + "
+        "bloques de valor (problem/solution/benefits según variante) + cta (+ firma email).\n"
+        "internal.probable_problem = el ángulo de valor del mensaje (anclado al producto).\n"
+    )
 
-    base = f"""
-ESTRUCTURA OBLIGATORIA — PRIMER TOQUE (sections en JSON + body armado):
-Audiencia: {role} · {industry}. Claridad sobre qué hacemos — sin suponer dolores.
 
-LÍNEA 1 — greeting: "Hola {first}," / "Buen día {first}," / "Buenas {first},"
-LÍNEA 2 — presentation: "Soy {sender} de {brand}." (obligatorio este formato)
-
-BLOQUE problem (por qué escribo): "Te escribo porque ayudamos a [resultado principal]…"
-  Enfocado en el resultado que generamos, NO en suponer dolores del prospecto.
-  PROHIBIDO: "seguramente te pasa", "suelen tener problemas", "muchas empresas sufren".
-
-BLOQUE solution (qué hacemos / cómo): "Lo hacemos mediante…" / "Lo logramos mediante…" / "Utilizamos…" / "Automatizamos…"
-  Explicá herramienta + funcionamiento (automatización, canales, integración). Basado en el PRODUCTO SELECCIONADO.
-
-BLOQUE benefits (qué resultado genera): "Esto les permite [beneficio concreto]…"
-  Resultado tangible en lenguaje simple. Ejemplos válidos:
-  - reducir el tiempo manual de prospección
-  - contactar más prospectos en menos tiempo
-  - centralizar outreach por Mail, WhatsApp y LinkedIn
-  - ayudar al SDR a dedicar más tiempo a conversaciones reales
-  - generar más oportunidades comerciales sin aumentar carga manual
-
-internal.probable_problem = el mismo resultado concreto (NO dolor del prospecto).
-
-BLOQUE cta: Invitación a reunión/conversación breve (termina en ?). Ejemplos:
-  - "¿Te interesaría coordinar una reunión breve para mostrarte cómo funciona?"
-  - "¿Tendría sentido conversar 10 minutos para mostrarte cómo aplica?"
-  PROHIBIDO: "¿Te sucede esto?" / "¿Detectas esta dificultad?" / "¿Qué opinas?"
-
-Completá las 6 sections. body = greeting + presentation (líneas seguidas) + bloques separados por línea en blanco.
-Más corto y directo es mejor.
-"""
-    if channel == "email":
-        return (
-            base
-            + "Email: ideal 70-110 palabras; aceptable 55-130. Más corto y directo es mejor.\n"
-        )
-    if channel == "linkedin":
-        return base + "LinkedIn: misma estructura, 250-380 caracteres, ultra conciso.\n"
-    return base + "WhatsApp: misma estructura, 1-4 líneas, ultra conciso.\n"
+def _first_touch_value_paragraph(sections: dict[str, Any]) -> str:
+    """Párrafos de valor separados (problema / cómo / resultado)."""
+    blocks: list[str] = []
+    for key in ("problem", "solution", "benefits"):
+        val = str(sections.get(key) or "").strip()
+        if not val:
+            continue
+        blocks.append(val if val.endswith((".", "?", "!")) else f"{val}.")
+    return "\n\n".join(blocks)
 
 
 def _assemble_first_touch_body(sections: dict[str, Any]) -> str:
+    from app.services.outbound_text_normalize import normalize_outbound_email_body
+
     opening: list[str] = []
     for key in ("greeting", "presentation"):
         val = str(sections.get(key) or "").strip()
@@ -795,151 +891,77 @@ def _assemble_first_touch_body(sections: dict[str, Any]) -> str:
             opening.append(val)
     parts: list[str] = []
     if opening:
+        # Hola X,\nSoy Y de Z.  (saludo + presentación juntos)
         parts.append("\n".join(opening))
-    for key in ("problem", "solution", "benefits", "cta"):
-        val = str(sections.get(key) or "").strip()
-        if val:
-            parts.append(val)
-    return "\n\n".join(parts)
+    value = _first_touch_value_paragraph(sections)
+    if value:
+        parts.append(value)
+    cta = str(sections.get("cta") or "").strip()
+    if cta:
+        parts.append(cta)
+    return normalize_outbound_email_body("\n\n".join(parts))
 
 
-def _follow_up_structure_block(*, step_day: int, channel: Channel) -> str:
-    evolution = (
-        "SECUENCIA EVOLUTIVA: el pitch completo del producto SOLO fue en Día 1. "
-        "Este toque debe ser más corto, más humano y con un objetivo distinto.\n"
-        "PROHIBIDO reescribir el pitch del Día 1 (qué hacemos + cómo + beneficios + reunión).\n"
+def _follow_up_structure_block(
+    *,
+    step_day: int,
+    channel: Channel,
+    prospect_id: int | str | None = None,
+    campaign_id: int | str | None = None,
+) -> str:
+    from app.services.message_structure_variants import (
+        follow_up_structure_prompt,
+        pick_follow_up_variant,
     )
-    if step_day == 4 and channel == "linkedin":
-        return evolution + """
-DÍA 4 — LinkedIn · SEGUIMIENTO HUMANO (NO re-vender el producto):
+    from app.services.nexus_outreach_playbook_approved import approved_playbook_reference
 
-Objetivo: referenciar el email del Día 1 y preguntar si es la persona indicada o a quién hablar.
-
-Tono ejemplo (adaptá al historial, no copies literal):
-"Hola [Nombre].
-Te había escrito hace unos días porque ayudamos a empresas a [resultado en UNA frase].
-Quería saber si sos la persona indicada para evaluar este tipo de iniciativas o si debería hablar con alguien más del equipo."
-
-Reglas:
-- Referenciá el Día 1 (email) explícitamente.
-- Máximo UNA frase recordatoria del tema — NO re-explicar producto, features ni beneficios.
-- CTA humano de routing (¿persona indicada? ¿con quién hablar?).
-- 180-320 caracteres. Sin pedir reunión como en Día 1.
-"""
-    if step_day == 7 and channel == "whatsapp":
-        return evolution + """
-DÍA 7 — WhatsApp · CONTACTO RÁPIDO (NO explicar producto):
-
-Objetivo: retomar mensajes previos y preguntar si tiene sentido seguir o dejarlo.
-
-Tono ejemplo:
-"Hola [Nombre].
-Retomo mis mensajes anteriores para no insistir por distintos canales sin sentido.
-¿Tiene sentido seguir conversando sobre este tema o preferís que lo deje para más adelante?"
-
-Reglas:
-- 1-3 líneas. Ultra breve.
-- Referenciá email/LinkedIn previos.
-- NO expliques qué hacemos ni cómo funciona el producto.
-- CTA sí/no o continuar vs dejarlo.
-"""
-    if step_day == 10 and channel == "email":
-        return evolution + """
-DÍA 10 — Email · APORTAR VALOR (NO repetir pitch):
-
-Objetivo: compartir un dato, mini caso o aprendizaje relacionado con el problema que resuelve el producto.
-
-Reglas:
-- Referenciá toques anteriores sin respuesta (Día 1, 4, 7).
-- El valor es el protagonista: dato concreto, caso breve, insight del sector.
-- NO repitas la estructura del Día 1 (presentación + qué hacemos + cómo + beneficios).
-- Cierre con invitación SUAVE a conversar (no pitch de reunión como Día 1).
-- 50-90 palabras.
-"""
-    if step_day == 13 and channel == "linkedin":
-        return evolution + """
-DÍA 13 — LinkedIn · NUEVO ÁNGULO (timing / prioridad):
-
-Objetivo: preguntar si el tema está en agenda o no es prioridad ahora.
-
-Tono ejemplo:
-"Hola [Nombre].
-Capaz este tema no es prioridad ahora mismo.
-¿Es algo que están evaluando para este año o directamente no está en agenda?"
-
-Reglas:
-- Referenciá la secuencia previa brevemente.
-- NO re-expliques producto ni pidas reunión.
-- 150-280 caracteres. Pregunta directa sobre timing/prioridad.
-"""
-    if step_day == 16 and channel == "whatsapp":
-        return evolution + """
-DÍA 16 — WhatsApp · ÚLTIMO INTENTO HUMANO (NO explicar producto):
-
-Objetivo: cierre activo — ¿seguimos o lo dejamos?
-
-Tono ejemplo:
-"Hola [Nombre].
-Retomo mis mensajes anteriores y no te molesto más.
-Solo quería saber si tiene sentido seguir conversando o si preferís que lo dejemos para más adelante."
-
-Reglas:
-- 1-3 líneas. Referenciá historial.
-- NO expliques producto. NO pidas reunión.
-- CTA mínimo esfuerzo (sí/no, seguir o dejar).
-"""
-    if step_day == 19 and channel == "email":
-        return evolution + """
-DÍA 19 — Email · RUPTURA ELEGANTE (NO vender, NO explicar, NO insistir):
-
-Objetivo: cerrar la secuencia con respeto y dejar puerta abierta.
-
-Tono ejemplo:
-"Hola [Nombre].
-Como no tuve respuesta, cierro esta conversación para no seguir ocupando espacio en tu bandeja.
-Si más adelante tiene sentido retomar el tema, quedo a disposición.
-Saludos."
-
-Reglas:
-- Referenciá que no hubo respuesta (sin culpar).
-- PROHIBIDO: pitch, explicar producto, pedir reunión, presionar.
-- 40-70 palabras. Despedida profesional.
-"""
-    return evolution + """
-SEGUIMIENTO — toque posterior al Día 1:
-- Referenciá al menos un toque anterior.
-- Objetivo único y humano. NO repetir pitch del Día 1.
-- Más corto que el mensaje anterior. CTA de baja fricción.
-"""
+    approved = approved_playbook_reference(step_day=step_day, channel=channel)
+    variant = pick_follow_up_variant(
+        channel=channel,
+        prospect_id=prospect_id,
+        campaign_id=campaign_id,
+        step_day=step_day,
+    )
+    shape = follow_up_structure_prompt(
+        channel=channel,
+        variant=variant,
+        step_day=step_day,
+    )
+    return f"{approved}\n{shape}\n"
 
 
 def _channel_rules(channel: Channel, *, first_touch: bool, step_day: int = 1) -> str:
     if first_touch:
         if channel == "email":
             return (
-                "CANAL Email Día 1: body ideal 70-110 palabras, aceptable 55-130. "
-                "Subject 3-6 palabras (resultado o qué hacemos).\n"
+                "CANAL Email primer toque: body ideal 70-110 palabras. "
+                "Subject breve con curiosidad, personalizado a la empresa del prospecto. "
+                "Bloques grandes editables (sin plantilla de audiencia fija) + CTA reunión.\n"
             )
         if channel == "linkedin":
-            return "CANAL LinkedIn Día 1: body 250-380 caracteres. Sin subject.\n"
-        return "CANAL WhatsApp Día 1: 1-4 líneas. Ultra directo. Sin subject.\n"
-    if step_day == 4:
-        return "CANAL LinkedIn Día 4: 180-320 caracteres. Seguimiento humano, sin re-pitch.\n"
-    if step_day == 7:
-        return "CANAL WhatsApp Día 7: 1-3 líneas (~40-220 caracteres). Contacto rápido.\n"
-    if step_day == 10:
-        return "CANAL Email Día 10: 50-90 palabras. Valor + invitación suave. Subject breve.\n"
-    if step_day == 13:
-        return "CANAL LinkedIn Día 13: 150-280 caracteres. Ángulo timing/prioridad.\n"
-    if step_day == 16:
-        return "CANAL WhatsApp Día 16: 1-3 líneas (~40-220 caracteres). Último intento humano.\n"
-    if step_day == 19:
-        return "CANAL Email Día 19: 40-70 palabras. Ruptura elegante. Subject breve neutro.\n"
+            return (
+                "CANAL LinkedIn primer toque: body 180-280 caracteres (máx ~320). "
+                "Más directo que email. Sin subject. Variante automática. "
+                "PROHIBIDO pegar ficha de producto; reescribir valor en 1–2 oraciones.\n"
+            )
+        return (
+            "CANAL WhatsApp primer toque: 30-50 palabras ideal (máx ~70). "
+            "Un solo bloque, informal, legible de un vistazo. CTA reunión corta.\n"
+        )
     if channel == "email":
-        return "CANAL Email follow-up: breve, humano, sin re-pitch.\n"
+        return (
+            "CANAL Email follow-up: modo despedida suave, sin re-pitch completo, "
+            "CTA liviano + «Quedo atento». Preferí mismo hilo (Re:). 50-90 palabras.\n"
+        )
     if channel == "linkedin":
-        return "CANAL LinkedIn follow-up: breve, conversacional. Sin subject.\n"
-    return "CANAL WhatsApp follow-up: 1-3 líneas. Ultra directo.\n"
+        return (
+            "CANAL LinkedIn follow-up: corto, despedida suave, sin culpa, "
+            "«Quedo atento». Sin subject.\n"
+        )
+    return (
+        "CANAL WhatsApp follow-up: 1-3 líneas, despedida suave, "
+        "«Quedo atento». Sin culpa.\n"
+    )
 
 
 def _structure_instructions(
@@ -950,17 +972,32 @@ def _structure_instructions(
     campaign: dict[str, str],
     prospect: dict[str, str],
 ) -> str:
+    prospect_id = prospect.get("id")
+    campaign_id = campaign.get("id") or campaign.get("campaign_id")
     if _is_first_touch(prior_touches):
-        first = (prospect.get("name") or "").split()[0] if prospect.get("name") else ""
+        from app.services.outreach_display_names import prospect_greeting_name, sender_first_name
+
+        first = prospect_greeting_name(prospect)
         return _first_touch_structure_block(
             channel=channel,
-            sender_name=str(campaign.get("sender_name") or ""),
+            sender_name=sender_first_name(
+                campaign_sender=str(campaign.get("sender_name") or ""),
+                fallback="",
+            ),
             brand_name=str(campaign.get("brand_name") or ""),
             prospect_first_name=first,
             prospect_role=str(prospect.get("role") or ""),
             prospect_industry=str(prospect.get("industry") or ""),
+            prospect_company=str(prospect.get("company_name") or ""),
+            prospect_id=prospect_id,
+            campaign_id=campaign_id,
         )
-    return _follow_up_structure_block(step_day=step_day, channel=channel)
+    return _follow_up_structure_block(
+        step_day=step_day,
+        channel=channel,
+        prospect_id=prospect_id,
+        campaign_id=campaign_id,
+    )
 
 
 def _build_user_prompt(
@@ -976,10 +1013,17 @@ def _build_user_prompt(
     tone: str,
 ) -> str:
     pname = (prospect.get("name") or "").strip()
-    first = pname.split()[0] if pname else "Hola"
+    from app.services.outreach_display_names import outreach_company_display, prospect_greeting_name, sender_first_name
+
+    first = prospect_greeting_name(prospect) or "ahí"
     first_touch = _is_first_touch(prior_touches)
-    sender = (campaign.get("sender_name") or "").strip() or "SDR"
-    brand = (campaign.get("brand_name") or "").strip() or campaign.get("name") or "empresa"
+    sender = sender_first_name(
+        campaign_sender=str(campaign.get("sender_name") or ""),
+        fallback="equipo",
+    )
+    brand = outreach_company_display(
+        campaign.get("brand_name") or campaign.get("seller_company_name")
+    ) or "nuestro equipo"
     structure = _structure_instructions(
         channel=channel,
         step_day=step_day,
@@ -989,7 +1033,12 @@ def _build_user_prompt(
     )
     product_block = _product_context_block(product, for_follow_up=not first_touch)
     role_block = _role_context_block(prospect, campaign)
-    edu_block = f"{education[:600]}\n\n" if (education or "").strip() else ""
+    edu_block = f"{education[:1400]}\n\n" if (education or "").strip() else ""
+    research = (prospect.get("research_brief") or "").strip()
+    # Evitar duplicar si education ya trae el brief.
+    research_block = ""
+    if research and research[:80] not in (education or ""):
+        research_block = f"{research[:1200]}\n\n"
     return (
         f"Playbook Día {step_day}. Objetivo: {step_objective}\n"
         f"{_channel_rules(channel, first_touch=first_touch, step_day=step_day)}\n"
@@ -999,6 +1048,7 @@ def _build_user_prompt(
         f"{role_block}"
         f"{product_block}"
         f"{edu_block}"
+        f"{research_block}"
         f"Prospecto: {pname} ({first}) | {prospect.get('role')} @ {prospect.get('company_name')}\n"
         f"Industria: {prospect.get('industry') or '—'} | Web: {prospect.get('website') or '—'}\n\n"
         f"{oai._mvp_prospect_context_block(prospect)}"
@@ -1009,17 +1059,18 @@ def _build_user_prompt(
         + (
             "CAMPOS JSON — primer toque:\n"
             "internal (razonamiento, no va al mensaje):\n"
-            "  probable_problem = resultado principal que generamos (NO dolor del prospecto)\n"
-            "  why_it_matters = por qué escribimos / relevancia para su rol\n"
-            "  hypothesis = qué hacemos / cómo lo hacemos (breve)\n"
-            "  response_question = CTA de reunión\n"
+            "  probable_problem = problema/necesidad sectorial o beneficio que resolvés (anclado al producto)\n"
+            "  why_it_matters = por qué es relevante para su rol/empresa (con research si hay)\n"
+            "  hypothesis = cómo lo resolvés / beneficio concreto (breve)\n"
+            "  response_question = CTA de reunión corta\n"
             "sections (van al mensaje):\n"
-            "  problem = por qué escribo (Te escribo porque ayudamos a…)\n"
-            "  solution = qué hacemos (Lo hacemos mediante…)\n"
-            "  benefits = qué resultado genera — concreto y simple (ej. reducir tiempo manual de prospección, "
-            "contactar más prospectos en menos tiempo, centralizar outreach, más conversaciones reales)\n"
-            "OBLIGATORIO en Día 1: saludo + presentación + qué hacemos + cómo + resultado + CTA.\n"
-            "probable_problem y benefits deben nombrar el mismo resultado tangible.\n\n"
+            "  greeting = Hola [Nombre],\n"
+            "  presentation = Soy [SDR]. + gancho investigado (empresa B2B / persona B2C)\n"
+            "  problem = dolor/necesidad sectorial o de rol (1–2 frases)\n"
+            "  solution = solución/beneficio del producto (1–2 frases, sin features)\n"
+            "  benefits = opcional / vacío\n"
+            "  cta = reunión 5–10 min con ¿...?\n"
+            "OBLIGATORIO: saludo + presentación con gancho + problema/solución + CTA reunión. Nunca cerrar venta.\n\n"
             'JSON: {"internal":{"probable_problem":"","why_it_matters":"","hypothesis":"","response_question":"","selling_to_role":""},'
             '"sections":{"greeting":"","presentation":"","problem":"","solution":"","benefits":"","cta":""},'
             '"subject":"...","body":"..."}\n'
@@ -1031,7 +1082,19 @@ def _build_user_prompt(
                 "  response_question = pregunta/CTA humana de este toque\n"
                 "  selling_to_role = rol al que apunta el mensaje\n"
                 "NO rellenes probable_problem/hypothesis con un re-pitch del producto.\n"
-                'JSON: {"internal":{"probable_problem":"","why_it_matters":"","hypothesis":"","response_question":"","selling_to_role":""},'
+                + (
+                    "Día 7 WhatsApp: body 1-3 líneas; retomá mensajes previos; CTA con ¿seguir conversando o dejarlo?\n"
+                    f'Ejemplo: {{"internal":{{"why_it_matters":"Seguimiento Día 7","response_question":"¿Tiene sentido seguir conversando o preferís que lo deje para más adelante?","selling_to_role":"{prospect.get("role") or "Decisor"}"}},'
+                    f'"body":"Hola {first}.\\nRetomo mis mensajes anteriores para no insistir sin sentido.\\n¿Tiene sentido seguir conversando sobre este tema o preferís que lo deje para más adelante?\\n{sender}"}}\n'
+                    if step_day == 7 and channel == "whatsapp"
+                    else ""
+                )
+                + (
+                    "Día 16 WhatsApp: último intento humano; preguntá si seguimos o lo dejamos.\n"
+                    if step_day == 16 and channel == "whatsapp"
+                    else ""
+                )
+                + 'JSON: {"internal":{"probable_problem":"","why_it_matters":"","hypothesis":"","response_question":"","selling_to_role":""},'
                 '"subject":null|"..." ,"body":"..."}\n'
             )
         )
@@ -1079,6 +1142,61 @@ def _salvage_body_from_raw(raw: str, stripped: str) -> str | None:
             if len(body) >= 20:
                 return body
     return None
+
+
+def _recover_touch_data_after_parse_error(
+    exc: SdrResponseParseError,
+    *,
+    channel: Channel,
+    prospect: dict[str, str],
+    campaign: dict[str, str],
+    product: dict[str, str],
+    step_day: int,
+    step_objective: str,
+    prior_touches: list[dict[str, Any]],
+    first_touch: bool,
+) -> tuple[dict[str, Any], bool] | None:
+    """Recupera un borrador usable cuando OpenAI no devolvió JSON válido."""
+    from app.services.openai_fallback import build_sdr_playbook_fallback_json, is_openai_fallback_enabled
+
+    salvage = (exc.salvage_body or "").strip()
+    if salvage and len(salvage) >= 20 and not first_touch:
+        from app.services.openai_fallback import normalize_follow_up_internal
+
+        internal = normalize_follow_up_internal(
+            {
+                "probable_problem": "",
+                "why_it_matters": f"Seguimiento Día {step_day}: {step_objective or 'retomar conversación'}",
+                "hypothesis": "",
+                "response_question": "",
+                "selling_to_role": "",
+            },
+            body=salvage,
+            prospect=prospect,
+            step_day=step_day,
+            step_objective=step_objective,
+        )
+        return (
+            {
+                "internal": internal,
+                "body": salvage,
+            },
+            False,
+        )
+
+    if first_touch and not is_openai_fallback_enabled():
+        return None
+
+    raw = build_sdr_playbook_fallback_json(
+        channel=channel,
+        prospect=prospect,
+        campaign=campaign,
+        product=product,
+        step_day=step_day,
+        step_objective=step_objective,
+        prior_touches=prior_touches,
+    )
+    return json.loads(raw), True
 
 
 def _generation_debug_base(
@@ -1165,11 +1283,25 @@ def _validate_internal(
     *,
     follow_up: bool = False,
     step_day: int = 1,
+    step_objective: str = "",
     outcome_context: str = "",
     how_context: str = "",
+    body: str = "",
 ) -> _ValidationAccum:
     acc = _ValidationAccum()
     if follow_up:
+        if body.strip():
+            from app.services.openai_fallback import normalize_follow_up_internal
+
+            repaired = normalize_follow_up_internal(
+                internal,
+                body=body,
+                prospect=prospect,
+                step_day=step_day,
+                step_objective=step_objective,
+            )
+            internal.clear()
+            internal.update(repaired)
         for key in ("why_it_matters", "response_question"):
             if len(str(internal.get(key) or "").strip()) < 8:
                 acc.issues.append(f"internal.{key} incompleto — debe reflejar el objetivo del Día {step_day}")
@@ -1208,17 +1340,25 @@ def _validate_internal(
                     val,
                     f"internal.{key}",
                     _PAIN_ASSUMPTION_BANNED,
-                    "suposición de dolor/problema prohibida",
+                    "culpa/fricción directa hacia el prospecto",
                 )
             )
     probable = str(internal.get("probable_problem") or "").strip()
-    if probable and not _mentions_concrete_outcome(probable, outcome_context=outcome_context):
+    if probable and not (
+        _mentions_concrete_outcome(probable, outcome_context=outcome_context)
+        or _SECTORAL_VALUE.search(probable)
+        or _RESULT_MARKERS.search(probable)
+    ):
         acc.issues.append(
-            "internal.probable_problem: debe describir el resultado que generamos, no un dolor del prospecto"
+            "internal.probable_problem: debe describir el problema/beneficio que resolvés (anclado al producto)"
         )
     hypothesis = str(internal.get("hypothesis") or "").strip()
-    if hypothesis and not _mentions_how_we_do_it(hypothesis, how_context=how_context):
-        acc.issues.append("internal.hypothesis: debe explicar brevemente qué hacemos / cómo lo hacemos")
+    if hypothesis and not (
+        _mentions_how_we_do_it(hypothesis, how_context=how_context)
+        or _RESULT_MARKERS.search(hypothesis)
+        or _SECTORAL_VALUE.search(hypothesis)
+    ):
+        acc.issues.append("internal.hypothesis: debe explicar brevemente la solución/beneficio")
     return acc
 
 
@@ -1243,102 +1383,169 @@ def _validate_follow_up_body(
     channel: Channel,
 ) -> _ValidationAccum:
     acc = _ValidationAccum()
+    if channel == "whatsapp":
+        text = body.strip()
+        if len(text) < 10:
+            acc.issues.append("body vacío o demasiado corto")
+        elif len(text) > 500:
+            acc.issues.append(f"Día {step_day}: WhatsApp demasiado largo ({len(text)} caracteres)")
+        acc.extend(
+            _collect_pattern_matches(
+                text, "body", _GUILT_FOLLOWUP_BANNED, "reproche de lectura/respuesta prohibido"
+            )
+        )
+        return acc
+
     acc.extend(_validate_base_text(body, "body"))
     acc.extend(_collect_pattern_matches(body, "body", _GENERIC_CORPORATE, "lenguaje corporativo genérico"))
     acc.extend(_collect_pattern_matches(body, "body", _PRODUCT_PITCH, "re-pitch de producto prohibido en follow-up"))
 
-    if step_day in (4, 7, 10, 16) and not _PRIOR_TOUCH_REFERENCE.search(body):
+    if step_day in (4, 7, 10, 13) and not _has_followup_bridge(body):
         acc.issues.append(
-            f"Día {step_day}: debe referenciar mensajes/toques anteriores del historial"
+            f"Día {step_day}: debe tener puente contextual corto (sin reprochar falta de lectura)"
         )
-    if step_day == 19 and not (
-        _PRIOR_TOUCH_REFERENCE.search(body) or _BREAKUP_MARKERS.search(body)
+    if step_day in (16, 19) and not (
+        _has_followup_bridge(body) or _BREAKUP_MARKERS.search(body)
     ):
-        acc.issues.append("Día 19: debe indicar que no hubo respuesta antes de cerrar")
+        acc.issues.append(
+            f"Día {step_day}: debe cerrar con despedida suave (p. ej. Quedo atento)"
+        )
 
     pitch_blocks = _pitch_block_count(body)
-    if step_day in (4, 7, 13, 16, 19) and pitch_blocks >= 2:
+    if pitch_blocks >= 2:
         acc.issues.append(
-            f"Día {step_day}: no repetir estructura del pitch del Día 1 — mensaje más humano y breve"
+            f"Día {step_day}: no repetir estructura del pitch del primer toque — mensaje más humano y breve"
         )
-    if step_day == 10 and pitch_blocks >= 3:
-        acc.issues.append("Día 10: aportá valor (dato/caso), no reescribas el pitch completo del Día 1")
+    if _RE_PITCH_STRUCTURE.search(body):
+        acc.issues.append(
+            f"Día {step_day}: no re-explicar cómo funciona el producto en follow-up"
+        )
 
-    if step_day == 4:
-        if not _HUMAN_FOLLOWUP_CTA.search(body):
+    # Modo despedida suave: CTA liviano permitido; largo por canal (no por día rígido).
+    if channel == "email":
+        wc = _word_count(body)
+        if wc < 12 or wc > 120:
             acc.issues.append(
-                "Día 4: debe preguntar si es la persona indicada o con quién hablar del tema"
+                f"Día {step_day}: email follow-up ~20-90 palabras (tiene {wc})"
             )
-        if _RE_PITCH_STRUCTURE.search(body):
-            acc.issues.append("Día 4: no re-explicar cómo funciona el producto (máximo una frase recordatoria)")
+    elif channel == "linkedin":
         n = len(body)
-        if n < 120 or n > 340:
-            acc.issues.append(f"Día 4: LinkedIn debe tener 180-320 caracteres (tiene {n})")
+        if n < 40 or n > 420:
+            acc.issues.append(
+                f"Día {step_day}: LinkedIn follow-up ~80-320 caracteres (tiene {n})"
+            )
+    else:
+        if len(body) > 380:
+            acc.issues.append(
+                f"Día {step_day}: WhatsApp follow-up demasiado largo ({len(body)} caracteres)"
+            )
 
-    elif step_day == 7:
-        if not _HUMAN_FOLLOWUP_CTA.search(body):
-            acc.issues.append("Día 7: debe preguntar si seguir conversando o dejarlo para más adelante")
-        if _WHAT_WE_DO_MARKERS.search(body) or _RE_PITCH_STRUCTURE.search(body):
-            acc.issues.append("Día 7: no explicar el producto — solo retomar y preguntar")
-        if len(body) > 280:
-            acc.issues.append(f"Día 7: WhatsApp demasiado largo ({len(body)} caracteres, máx ~220)")
-
-    elif step_day == 10:
-        if not _VALUE_ADD_MARKERS.search(body):
-            acc.issues.append("Día 10: debe aportar valor concreto (dato, caso, aprendizaje o insight)")
-        wc = _word_count(body)
-        if wc < 35 or wc > 100:
-            acc.issues.append(f"Día 10: email de valor debe tener 50-90 palabras (tiene {wc})")
-
-    elif step_day == 13:
-        if not _HUMAN_FOLLOWUP_CTA.search(body):
-            acc.issues.append("Día 13: debe preguntar sobre prioridad/timing (¿está en agenda este año?)")
-        if _RE_PITCH_STRUCTURE.search(body):
-            acc.issues.append("Día 13: nuevo ángulo humano — no re-explicar producto")
-        n = len(body)
-        if n < 100 or n > 300:
-            acc.issues.append(f"Día 13: LinkedIn debe tener 150-280 caracteres (tiene {n})")
-
-    elif step_day == 16:
-        if not _HUMAN_FOLLOWUP_CTA.search(body):
-            acc.issues.append("Día 16: debe preguntar si seguir o dejarlo — último intento humano")
-        if _WHAT_WE_DO_MARKERS.search(body) or _RE_PITCH_STRUCTURE.search(body):
-            acc.issues.append("Día 16: no explicar producto")
-        if len(body) > 280:
-            acc.issues.append(f"Día 16: WhatsApp demasiado largo ({len(body)} caracteres)")
-
-    elif step_day == 19:
-        if not _BREAKUP_MARKERS.search(body):
-            acc.issues.append("Día 19: debe cerrar elegantemente (cierro conversación, quedo a disposición)")
-        if _CONVERSATION_CTA.search(body) and re.search(r"reuni[oó]n", body, re.I):
-            acc.issues.append("Día 19: ruptura elegante — no pedir reunión ni insistir")
-        if _WHAT_WE_DO_MARKERS.search(body) or _RE_PITCH_STRUCTURE.search(body):
-            acc.issues.append("Día 19: no vender ni explicar producto")
-        wc = _word_count(body)
-        if wc < 25 or wc > 85:
-            acc.issues.append(f"Día 19: email de cierre debe tener 40-70 palabras (tiene {wc})")
+    if not (
+        _COORDINATE_CALL_CTA.search(body)
+        or _CONVERSATION_CTA.search(body)
+        or _HUMAN_FOLLOWUP_CTA.search(body)
+        or ("?" in body or "¿" in body)
+        or _BREAKUP_MARKERS.search(body)
+    ):
+        acc.issues.append(
+            f"Día {step_day}: debe invitar a conversar/reunión o cerrar con Quedo atento"
+        )
 
     return acc
 
 
 def _first_touch_retry_hint() -> str:
     return (
-        " Día 1: incluí un resultado concreto en probable_problem, sections.benefits y body.resultado. "
-        "Ejemplos: reducir tiempo manual de prospección; contactar más prospectos en menos tiempo; "
-        "centralizar outreach; más conversaciones reales; más oportunidades sin aumentar carga manual."
+        " Primer toque: usá la VARIANTE automática indicada (bloques grandes editables). "
+        "PROHIBIDO plantillas rígidas tipo «ayudamos a equipos comerciales a …». "
+        "Hola [Nombre] + presentación + valor anclado al PRODUCTO/ICP + CTA reunión. "
+        "Email: subject breve. LinkedIn/WhatsApp: más cortos."
     )
 
 
 def _follow_up_retry_hint(step_day: int) -> str:
-    hints = {
-        4: " Seguimiento humano: referenciá Día 1, UNA frase del tema, preguntá si es la persona indicada.",
-        7: " Contacto rápido: retomá mensajes previos, preguntá seguir o dejarlo. Sin explicar producto.",
-        10: " Aportá un dato/caso/insight. No repitas el pitch del Día 1. Invitación suave al final.",
-        13: " Preguntá si está en agenda o no es prioridad. Sin re-pitch.",
-        16: " Último intento humano: ¿seguimos o lo dejamos? Sin producto.",
-        19: " Ruptura elegante: cerrá sin vender ni explicar. Puerta abierta.",
-    }
-    return hints.get(step_day, " Secuencia evolutiva: no repetir pitch del Día 1.")
+    return (
+        " Follow-up modo despedida suave: bloque corto editable (sin re-pitch del Día 1), "
+        "CTA liviano a reunión si aplica, y cierre con «Quedo atento». "
+        "PROHIBIDO: ¿pudiste leer/revisar?, sin respuesta, culpa."
+    )
+
+
+def _salvage_follow_up_touch_locally(
+    *,
+    data: dict[str, Any],
+    body: str,
+    channel: Channel,
+    step_day: int,
+    step_objective: str,
+    prospect: dict[str, str],
+    campaign: dict[str, str],
+    product: dict[str, str],
+    prior_touches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Rearma el borrador localmente (sin otra llamada a OpenAI) y lo deja listo para enviar."""
+    from app.services.openai_fallback import build_sdr_playbook_fallback_json, normalize_follow_up_internal
+
+    template = json.loads(
+        build_sdr_playbook_fallback_json(
+            channel=channel,
+            prospect=prospect,
+            campaign=campaign,
+            product=product,
+            step_day=step_day,
+            step_objective=step_objective,
+            prior_touches=prior_touches,
+        )
+    )
+    salvaged_body = str(body or "").strip()
+    if not (
+        len(salvaged_body) >= 20
+        and _has_followup_bridge(salvaged_body)
+        and ("?" in salvaged_body or "¿" in salvaged_body or _BREAKUP_MARKERS.search(salvaged_body))
+    ):
+        salvaged_body = str(template.get("body") or "").strip()
+
+    internal = normalize_follow_up_internal(
+        data.get("internal") if isinstance(data.get("internal"), dict) else {},
+        body=salvaged_body,
+        prospect=prospect,
+        step_day=step_day,
+        step_objective=step_objective,
+    )
+    if len(str(internal.get("response_question") or "").strip()) < 8:
+        internal = normalize_follow_up_internal(
+            template.get("internal") if isinstance(template.get("internal"), dict) else {},
+            body=salvaged_body,
+            prospect=prospect,
+            step_day=step_day,
+            step_objective=step_objective,
+        )
+
+    out = {**data, "internal": internal, "body": salvaged_body}
+    acc = _ValidationAccum()
+    acc.extend(_validate_follow_up_body(salvaged_body, step_day=step_day, channel=channel))
+    acc.extend(
+        _validate_internal(
+            internal,
+            prospect,
+            campaign,
+            follow_up=True,
+            step_day=step_day,
+            step_objective=step_objective,
+            body=salvaged_body,
+        )
+    )
+    if acc.issues:
+        fallback_body = str(template.get("body") or "").strip()
+        out["body"] = fallback_body
+        out["internal"] = normalize_follow_up_internal(
+            template.get("internal") if isinstance(template.get("internal"), dict) else {},
+            body=fallback_body,
+            prospect=prospect,
+            step_day=step_day,
+            step_objective=step_objective,
+        )
+    return out
 
 
 def _validate_greeting_text(text: str, field: str, *, first_name: str) -> _ValidationAccum:
@@ -1360,22 +1567,75 @@ def _validate_presentation_line(
     *,
     sender_name: str,
     brand_name: str,
+    research_brief: str = "",
+    prospect_company: str = "",
 ) -> _ValidationAccum:
     acc = _ValidationAccum()
     acc.extend(_validate_pitch_text(text, field))
     t = text.strip()
-    if not re.search(r"^soy\s+", t, re.I):
-        acc.issues.append(f'{field}: debe ser "Soy [nombre SDR] de [empresa]"')
+    if not _PRESENTATION_OK.search(t):
+        acc.issues.append(
+            f'{field}: debe presentarte (ej. "Soy [SDR]." o "Mi nombre es [SDR]…")'
+        )
     sender = sender_name.strip()
-    brand = brand_name.strip()
     if sender:
         token = sender.split()[0].lower()
         if token not in t.lower():
             acc.issues.append(f"{field}: debe incluir el nombre del SDR ({sender})")
-    if brand:
-        brand_word = brand.split()[0].lower()
-        if brand_word not in t.lower():
-            acc.issues.append(f"{field}: debe incluir la empresa/producto ({brand})")
+
+    brief = (research_brief or "").strip().lower()
+    low = t.lower()
+    no_confirmed = (not brief) or ("dato no confirmado" in brief)
+    invented_hook = re.compile(
+        r"(vi en linkedin|vi que .{0,40}crec|sigue creciendo|crecimiento de|"
+        r"en estos d[ií]as|este trimestre|le[ií] que|me enter[eé] que)",
+        re.I,
+    )
+    if invented_hook.search(t):
+        if no_confirmed:
+            acc.issues.append(
+                f"{field}: no inventes ganchos (LinkedIn/crecimiento/news) sin evidencia "
+                "en la investigación previa; usá rol/empresa del CRM"
+            )
+        else:
+            # Exigir que al menos un token del brief aparezca en el gancho.
+            brief_tokens = {
+                w
+                for w in re.findall(r"[a-záéíóúñ]{5,}", brief)
+                if w
+                not in {
+                    "dato",
+                    "confirmado",
+                    "empresa",
+                    "prospecto",
+                    "producto",
+                    "contacto",
+                    "linkedin",
+                    "gancho",
+                    "sugerido",
+                    "persona",
+                    "contexto",
+                }
+            }
+            company_tokens = {
+                w for w in re.findall(r"[a-záéíóúñ]{3,}", (prospect_company or "").lower())
+            }
+            allowed = brief_tokens | company_tokens
+            if allowed and not any(tok in low for tok in allowed):
+                acc.issues.append(
+                    f"{field}: el gancho debe usar un dato del brief o la empresa del CRM; "
+                    "no inventes señales"
+                )
+
+    # No tratar la marca vendedora como si fuera la empresa del prospecto.
+    brand = (brand_name or "").strip().lower()
+    if brand and len(brand) >= 4 and brand in low:
+        company_l = (prospect_company or "").strip().lower()
+        if brand not in company_l:
+            acc.warnings.append(
+                f"{field}: aparece la marca vendedora ({brand_name}); "
+                "no la confundas con la empresa del prospecto"
+            )
     return acc
 
 
@@ -1434,13 +1694,11 @@ def _validate_first_touch_sections(
     how_context: str = "",
 ) -> _ValidationAccum:
     acc = _ValidationAccum()
-    first_name = (prospect.get("name") or "").split()[0] if prospect.get("name") else ""
+    from app.services.outreach_display_names import is_placeholder_token, prospect_greeting_name
 
-    for key in _FIRST_TOUCH_SECTION_KEYS:
-        if len(str(sections.get(key) or "").strip()) < 8:
-            if key == "solution" and _mentions_how_we_do_it(how_context):
-                continue
-            acc.issues.append(f"sections.{key} faltante o incompleto")
+    first_name = prospect_greeting_name(prospect)
+    if is_placeholder_token(first_name):
+        first_name = ""
 
     greeting = str(sections.get("greeting") or "").strip()
     presentation = str(sections.get("presentation") or "").strip()
@@ -1448,13 +1706,49 @@ def _validate_first_touch_sections(
     solution = str(sections.get("solution") or "").strip()
     benefits = str(sections.get("benefits") or "").strip()
     cta = str(sections.get("cta") or "").strip()
+    value_para = _first_touch_value_paragraph(sections)
+
+    for key in _FIRST_TOUCH_SECTION_KEYS:
+        if len(str(sections.get(key) or "").strip()) >= 8:
+            continue
+        if key in ("problem", "benefits"):
+            # problem puede ir vacío si solution ya trae problema+beneficio.
+            if value_para and (
+                _mentions_how_we_do_it(value_para, how_context=how_context)
+                or _RESULT_MARKERS.search(value_para)
+                or _SECTORAL_VALUE.search(value_para)
+            ):
+                continue
+            if key == "problem" and (
+                _WHY_WRITE_MARKERS.search(presentation) or _SECTORAL_VALUE.search(presentation)
+            ):
+                continue
+            if key == "benefits" and value_para and _mentions_concrete_outcome(
+                value_para, outcome_context=outcome_context
+            ):
+                continue
+        if key == "solution" and (
+            _mentions_how_we_do_it(how_context)
+            or (problem and (_RESULT_MARKERS.search(problem) or _SECTORAL_VALUE.search(problem)))
+        ):
+            continue
+        acc.issues.append(f"sections.{key} faltante o incompleto")
 
     if greeting:
         acc.extend(_validate_greeting_text(greeting, "sections.greeting", first_name=first_name))
     if presentation:
+        research = (
+            (prospect.get("research_brief") or "")
+            or (prospect.get("prospecting_context") or "")
+        )
         acc.extend(
             _validate_presentation_line(
-                presentation, "sections.presentation", sender_name=sender_name, brand_name=brand_name
+                presentation,
+                "sections.presentation",
+                sender_name=sender_name,
+                brand_name=brand_name,
+                research_brief=research,
+                prospect_company=(prospect.get("company_name") or ""),
             )
         )
     if problem:
@@ -1463,6 +1757,25 @@ def _validate_first_touch_sections(
         acc.extend(
             _validate_solution_text(solution, "sections.solution", how_context=how_context)
         )
+        product_blob = " ".join(
+            filter(
+                None,
+                [
+                    product.get("name"),
+                    product.get("value_proposition"),
+                    product.get("description"),
+                    product.get("benefits"),
+                    product.get("pain_points"),
+                ],
+            )
+        ).lower()
+        for m in _INVENTED_METRIC.finditer(solution):
+            token = m.group(0).lower().replace(" ", "")
+            if token and token not in product_blob.replace(" ", ""):
+                acc.issues.append(
+                    "sections.solution: no inventes métricas/% sin que estén en el producto"
+                )
+                break
     if benefits:
         acc.extend(
             _validate_benefits_text(benefits, "sections.benefits", outcome_context=outcome_context)
@@ -1495,7 +1808,11 @@ def _validate_first_touch_body(
     internal: dict[str, Any] | None = None,
 ) -> _ValidationAccum:
     acc = _ValidationAccum()
-    first_name = (prospect.get("name") or "").split()[0] if prospect.get("name") else ""
+    from app.services.outreach_display_names import is_placeholder_token, prospect_greeting_name
+
+    first_name = prospect_greeting_name(prospect)
+    if is_placeholder_token(first_name):
+        first_name = ""
     outcome_context = _first_touch_outcome_context(
         internal=internal, sections=sections, body=body
     )
@@ -1518,9 +1835,12 @@ def _validate_first_touch_body(
         )
 
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", body) if p.strip()]
-    if len(paragraphs) < 5:
+    signature_re = re.compile(r"^(saludos|un abrazo|atentamente)\b", re.I)
+    content_paras = [p for p in paragraphs if not signature_re.match(p.split("\n", 1)[0].strip())]
+
+    if len(content_paras) < 3:
         acc.issues.append(
-            "primer toque: body debe tener saludo+presentación, por qué escribimos, qué hacemos, resultado y CTA"
+            "primer toque: body debe tener saludo+presentación, un párrafo de valor impactante y CTA"
         )
 
     if paragraphs:
@@ -1530,49 +1850,56 @@ def _validate_first_touch_body(
                 _validate_greeting_text(opening_lines[0], "body.saludo", first_name=first_name)
             )
         if len(opening_lines) >= 2:
+            research = (
+                (prospect.get("research_brief") or "")
+                or (prospect.get("prospecting_context") or "")
+            )
             acc.extend(
                 _validate_presentation_line(
                     opening_lines[1],
                     "body.presentación",
                     sender_name=sender_name,
                     brand_name=brand_name,
+                    research_brief=research,
+                    prospect_company=(prospect.get("company_name") or ""),
                 )
             )
-        elif len(paragraphs) >= 1 and not re.search(r"^soy\s+", paragraphs[0], re.I | re.M):
-            acc.issues.append('body: falta línea "Soy [SDR] de [empresa]"')
+        elif not _PRESENTATION_OK.search(paragraphs[0]):
+            acc.issues.append("body: falta presentación del SDR y la marca")
 
-    if len(paragraphs) >= 2:
-        acc.extend(_validate_why_write_text(paragraphs[1], "body.por_qué_escribo", prospect, campaign))
+    value_para = content_paras[1] if len(content_paras) >= 2 else ""
     solution_section = str((sections or {}).get("solution") or "").strip()
     solution_ok_in_sections = bool(
         solution_section and _mentions_how_we_do_it(solution_section, how_context=how_context)
     )
-    if len(paragraphs) >= 3 and not solution_ok_in_sections:
+    if value_para and not solution_ok_in_sections:
         acc.extend(
-            _validate_solution_text(
-                paragraphs[2], "body.qué_hacemos", how_context=how_context
-            )
+            _validate_solution_text(value_para, "body.valor", how_context=how_context)
         )
-    elif len(paragraphs) < 3 and not solution_ok_in_sections:
-        acc.issues.append("body.qué_hacemos: falta párrafo de qué hacemos / cómo")
-    if len(paragraphs) >= 4:
         acc.extend(
             _validate_benefits_text(
-                paragraphs[3], "body.resultado", outcome_context=outcome_context
+                value_para, "body.valor", outcome_context=outcome_context
             )
         )
+    elif not value_para and not solution_ok_in_sections:
+        acc.issues.append("body.valor: falta el párrafo de valor impactante")
 
-    if len(paragraphs) >= 2:
-        product_text = " ".join(paragraphs[1:4]) if len(paragraphs) >= 4 else " ".join(paragraphs[1:])
-        acc.extend(_validate_product_alignment(product_text, "body (por qué escribimos/qué hacemos/resultado)", product))
+    if content_paras:
+        product_text = " ".join(content_paras[1:2])
+        if product_text:
+            acc.extend(
+                _validate_product_alignment(
+                    product_text, "body (valor impactante)", product
+                )
+            )
 
-    if paragraphs:
-        last = paragraphs[-1]
-        acc.extend(_collect_pattern_matches(last, "body.cta", _GENERIC_CTA_BANNED, "CTA genérico prohibido"))
-        if not last.rstrip().endswith("?"):
-            acc.issues.append("primer toque: debe terminar con invitación a reunión/conversación (?)")
-        if not _CONVERSATION_CTA.search(last):
-            acc.issues.append("primer toque: CTA final debe invitar a reunión o conversación breve")
+    cta_para = content_paras[-1] if content_paras else ""
+    if cta_para and cta_para != value_para:
+        acc.extend(_collect_pattern_matches(cta_para, "body.cta", _GENERIC_CTA_BANNED, "CTA genérico prohibido"))
+        if not cta_para.rstrip().endswith("?"):
+            acc.issues.append("primer toque: CTA debe terminar en ?")
+        if not _CONVERSATION_CTA.search(cta_para):
+            acc.issues.append("primer toque: CTA debe invitar a reunión o demo breve")
 
     return acc
 
@@ -1651,6 +1978,77 @@ def _validate_body(
     return acc
 
 
+def _subject_company_label(company: str) -> str:
+    from app.services.outreach_display_names import prospect_company_display
+
+    name = prospect_company_display(company)
+    if not name:
+        return "tu equipo"
+    if len(name) > 42:
+        first_word = name.split()[0] if name.split() else name
+        return first_word[:42]
+    return name
+
+
+def _playbook_email_subject(
+    *,
+    step_day: int,
+    prospect: dict[str, str],
+    raw_subject: str | None,
+) -> str:
+    company = _subject_company_label(str(prospect.get("company_name") or ""))
+    templates = {
+        1: f"Automatización de prospección para {company}",
+        10: f"Prospección manual en {company}",
+        19: f"Prospección en {company}",
+    }
+    if step_day in templates:
+        return templates[step_day][:72]
+    raw = (raw_subject or "").strip()
+    if raw and not _GENERIC_EMAIL_SUBJECTS.match(raw):
+        return raw[:72]
+    return raw or "Seguimiento"
+
+
+def _touch_from_approved_fallback(
+    *,
+    channel: Channel,
+    prospect: dict[str, str],
+    campaign: dict[str, str],
+    product: dict[str, str],
+    step_day: int,
+    step_objective: str,
+    prior_touches: list[dict[str, Any]],
+    first_touch: bool,
+) -> dict[str, Any]:
+    """Plantilla aprobada del playbook — último recurso si la IA no pasa validación."""
+    from app.services.openai_fallback import (
+        build_sdr_playbook_fallback_json,
+        normalize_follow_up_internal,
+    )
+
+    raw = build_sdr_playbook_fallback_json(
+        channel=channel,
+        prospect=prospect,
+        campaign=campaign,
+        product=product,
+        step_day=step_day,
+        step_objective=step_objective,
+        prior_touches=prior_touches,
+    )
+    data = json.loads(raw)
+    if not first_touch:
+        body = str(data.get("body") or "").strip()
+        data["internal"] = normalize_follow_up_internal(
+            data.get("internal") if isinstance(data.get("internal"), dict) else {},
+            body=body,
+            prospect=prospect,
+            step_day=step_day,
+            step_objective=step_objective,
+        )
+    return data
+
+
 def generate_sdr_playbook_touch(
     *,
     channel: Channel,
@@ -1663,209 +2061,26 @@ def generate_sdr_playbook_touch(
     prior_touches: list[dict[str, Any]],
     tone: str = "",
 ) -> tuple[str | None, str, SdrReasoningRead]:
-    first_touch = _is_first_touch(prior_touches)
-    sender = str(campaign.get("sender_name") or "")
-    brand = str(campaign.get("brand_name") or campaign.get("name") or "")
-    user = _build_user_prompt(
+    """
+    Cold / follow-up outbound: banco determinístico por canal (B2B/B2C).
+    Sin inventar industria; valor desde ficha de producto.
+    """
+    del education, step_objective, tone  # contexto LLM legacy; el banco no lo usa
+    from app.services.cold_message_bank import first_touch_on_channel, render_cold_bank_touch
+    from app.services.outbound_text_normalize import normalize_outbound_email_body
+
+    first_on_ch = first_touch_on_channel(prior_touches, channel)
+    rendered = render_cold_bank_touch(
         channel=channel,
         prospect=prospect,
         campaign=campaign,
         product=product,
-        education=education,
-        step_day=step_day,
-        step_objective=step_objective,
         prior_touches=prior_touches,
-        tone=tone,
+        first_touch=first_on_ch,
+        step_day=step_day,
     )
-    from app.services.openai_fallback import is_openai_fallback_enabled
-
-    last_accum = _ValidationAccum()
-    data: dict[str, Any] = {}
-    if is_openai_fallback_enabled():
-        attempts = 1
-    else:
-        attempts = 4 if first_touch else 3
-    last_generation_debug: dict[str, Any] | None = None
-
-    for attempt in range(1, attempts + 1):
-        extra = ""
-        if last_accum.issues:
-            hint = (
-                " Incluí saludo, presentación, por qué escribís, qué hacemos, resultado concreto y CTA de reunión. "
-                "Basate en el PRODUCTO SELECCIONADO. Sin suposiciones de dolor."
-                + _first_touch_retry_hint()
-                if first_touch
-                else _follow_up_retry_hint(step_day)
-            )
-            extra = "\n\nCORREGÍ: " + "; ".join(last_accum.issues) + "." + hint
-        system_prompt = _SDR_PLAYBOOK_SYSTEM if first_touch else _SDR_PLAYBOOK_FOLLOW_UP_SYSTEM
-        user_prompt = user + extra
-        if first_touch:
-            max_output_tokens = 850
-        elif step_day == 10:
-            max_output_tokens = 420
-        elif step_day == 19:
-            max_output_tokens = 280
-        else:
-            max_output_tokens = 320 if channel == "email" else 220
-        temperature = random.uniform(0.55, 0.72)
-        from app.services.openai_fallback import build_sdr_playbook_fallback_json
-
-        chat = oai._raw_chat_with_meta(
-            system_prompt,
-            user_prompt,
-            temperature=temperature,
-            max_output_tokens=max_output_tokens,
-            fallback_factory=lambda: build_sdr_playbook_fallback_json(
-                channel=channel,
-                prospect=prospect,
-                campaign=campaign,
-                product=product,
-                step_day=step_day,
-                step_objective=step_objective,
-                prior_touches=prior_touches,
-            ),
-        )
-        is_fallback = bool(getattr(chat, "fallback", False))
-        last_generation_debug = _generation_debug_base(
-            channel=channel,
-            step_day=step_day,
-            first_touch=first_touch,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            raw_response=chat.text,
-            model=chat.model,
-            input_tokens=chat.input_tokens,
-            output_tokens=chat.output_tokens,
-            total_tokens=chat.total_tokens,
-            max_output_tokens=max_output_tokens,
-            temperature=temperature,
-        )
-        data = _parse_json_response_debug(chat.text, debug_base=last_generation_debug)
-        sections_raw = data.get("sections") if isinstance(data.get("sections"), dict) else None
-        if first_touch and sections_raw:
-            assembled = _assemble_first_touch_body(sections_raw)
-            if assembled:
-                data["body"] = assembled
-        body = str(data.get("body") or "").strip()
-        if len(body) < 20:
-            last_accum = _ValidationAccum(issues=["body vacío"])
-            continue
-        if is_fallback:
-            from app.services.openai_fallback import apply_fallback_marker_to_body
-
-            data["body"] = apply_fallback_marker_to_body(body)
-            last_accum = _ValidationAccum()
-            break
-        internal = data.get("internal") if isinstance(data.get("internal"), dict) else {}
-        subject_raw = str(data.get("subject") or "").strip() if channel == "email" else None
-        outcome_context = (
-            _first_touch_outcome_context(internal=internal, sections=sections_raw, body=body)
-            if first_touch
-            else ""
-        )
-        how_context = (
-            _first_touch_how_context(internal=internal, sections=sections_raw, body=body)
-            if first_touch
-            else ""
-        )
-        last_accum = _ValidationAccum()
-        last_accum.extend(
-            _validate_internal(
-                internal,
-                prospect,
-                campaign,
-                follow_up=not first_touch,
-                step_day=step_day,
-                outcome_context=outcome_context,
-                how_context=how_context,
-            )
-        )
-        last_accum.extend(
-            _validate_body(
-                channel,
-                body,
-                subject=subject_raw or None,
-                first_touch=first_touch,
-                step_day=step_day,
-                sender_name=sender,
-                brand_name=brand,
-                prospect=prospect,
-                campaign=campaign,
-                product=product,
-                sections=sections_raw,
-                internal=internal,
-            )
-        )
-        if first_touch and internal:
-            rq = str(internal.get("response_question") or "")
-            if rq and not _CONVERSATION_CTA.search(rq):
-                last_accum.issues.append("internal.response_question debe ser CTA de conversación")
-            if rq:
-                last_accum.extend(
-                    _collect_pattern_matches(
-                        rq, "internal.response_question", _GENERIC_CTA_BANNED, "CTA genérico prohibido"
-                    )
-                )
-        if not last_accum.issues:
-            break
-
-    body = str(data.get("body") or "").strip()
-    subject_raw = str(data.get("subject") or "").strip() if channel == "email" else None
-    sections_raw = data.get("sections") if isinstance(data.get("sections"), dict) else None
-    if len(body) < 20:
-        raise SdrResponseParseError(
-            message="OpenAI devolvió un borrador SDR vacío.",
-            debug={
-                **(last_generation_debug or {}),
-                "parse_error": "body vacío o demasiado corto tras parseo JSON (< 20 caracteres)",
-                "stacktrace": None,
-            },
-            salvage_body=_salvage_body_from_raw(
-                str((last_generation_debug or {}).get("raw_response") or ""),
-                str((last_generation_debug or {}).get("stripped_response") or ""),
-            ),
-        )
-    internal = data.get("internal") if isinstance(data.get("internal"), dict) else {}
-    if last_accum.issues:
-        raise SdrDraftValidationError(
-            _validation_report(
-                channel=channel,
-                step_day=step_day,
-                body=body,
-                subject=subject_raw or None,
-                sections=sections_raw,
-                internal=internal,
-                accum=last_accum,
-                attempts=attempts,
-                generation_debug=last_generation_debug,
-            )
-        )
-    reasoning = SdrReasoningRead(
-        probable_problem=str(internal.get("probable_problem") or "")[:400],
-        why_it_matters=str(internal.get("why_it_matters") or "")[:400],
-        hypothesis=str(internal.get("hypothesis") or "")[:400],
-        response_question=str(internal.get("response_question") or "")[:300],
-        selling_to_role=str(
-            internal.get("selling_to_role")
-            or prospect.get("selling_to_role")
-            or prospect.get("role")
-            or ""
-        )[:200],
-    )
-
-    subject: str | None = None
+    body = rendered.body
+    subject = rendered.subject
     if channel == "email":
-        pname = (prospect.get("name") or "").strip()
-        first = pname.split()[0] if pname else "Hola"
-        subject = str(data.get("subject") or "").strip() or None
-        if subject:
-            subject = oai._normalize_gmail_subject_human(
-                subject,
-                first_name=first,
-                full_name=pname,
-                company=str(prospect.get("company_name") or ""),
-                product_name="",
-            )
-
-    return subject, body, reasoning
+        body = normalize_outbound_email_body(body)
+    return subject, body, rendered.reasoning

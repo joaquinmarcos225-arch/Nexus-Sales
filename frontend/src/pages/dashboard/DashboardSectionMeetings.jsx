@@ -5,6 +5,7 @@ import { useDashboardAnalytics } from '../../context/DashboardAnalyticsContext.j
 import { AlertBanner } from '../../components/AlertBanner.jsx'
 import { SortFilterTable } from '../../components/dashboard/SortFilterTable.jsx'
 import { fetchCompanyMeetings } from '../../utils/api.js'
+import { fmtDateTime } from '../../utils/ownershipUi.js'
 import {
   Bar,
   BarChart,
@@ -16,14 +17,35 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { NX_CHART, NX_CHART_GRID, NX_CHART_TOOLTIP, averageBy, chartAvgCaption } from '../../utils/chartTheme.js'
 
-function fmt(iso) {
-  if (!iso) return '—'
-  try {
-    return new Date(iso).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' })
-  } catch {
-    return '—'
+const MEETING_STATUS_LABELS = {
+  pending: 'Invitación enviada',
+  confirmed: 'Confirmada',
+  completed: 'Completada',
+  canceled: 'Cancelada',
+  no_show: 'No asistió',
+}
+
+const COMMERCIAL_STATUS_LABELS = {
+  no_interesado: 'No interesado',
+  no_prioridad: 'Contactar más adelante',
+}
+
+function meetingStatusLabel(meeting) {
+  const commercial = String(meeting?.prospect_commercial_state || '').toLowerCase()
+  const status = String(meeting?.meeting_status || '').toLowerCase()
+
+  if (commercial === 'no_interesado' && status !== 'completed') {
+    return COMMERCIAL_STATUS_LABELS.no_interesado
   }
+  if (commercial === 'no_prioridad' && status === 'pending') {
+    return COMMERCIAL_STATUS_LABELS.no_prioridad
+  }
+  if (status === 'pending' && !meeting?.google_calendar_event_id) {
+    return 'Pendiente de agendar'
+  }
+  return MEETING_STATUS_LABELS[status] || status || '—'
 }
 
 export default function DashboardSectionMeetings() {
@@ -37,6 +59,7 @@ export default function DashboardSectionMeetings() {
     .sort((a, b) => (b.meetings_scheduled ?? 0) - (a.meetings_scheduled ?? 0))
 
   const [meetings, setMeetings] = useState([])
+  const [showCanceled, setShowCanceled] = useState(false)
 
   useEffect(() => {
     if (!companyId) {
@@ -44,7 +67,7 @@ export default function DashboardSectionMeetings() {
       return
     }
     let c = false
-    void fetchCompanyMeetings(companyId)
+    void fetchCompanyMeetings(companyId, { includeCanceled: showCanceled })
       .then((list) => {
         if (!c) setMeetings(Array.isArray(list) ? list : [])
       })
@@ -54,13 +77,15 @@ export default function DashboardSectionMeetings() {
     return () => {
       c = true
     }
-  }, [companyId, data])
+  }, [companyId, data, showCanceled])
+
+  const avgWeekly = averageBy(weekly, 'count')
 
   return (
     <>
       <PageHeader
-        title="Reuniones"
-        description="Módulo Meeting + métricas de pipeline comercial (simulado; Calendar externo después)."
+        title="Reuniones agendadas"
+        description="Reuniones creadas por Nexus (auto-booking o manual). Incluye invitaciones de Google Calendar."
       />
       <AlertBanner message={error} onDismiss={() => void refresh()} />
 
@@ -98,22 +123,27 @@ export default function DashboardSectionMeetings() {
           ) : null}
 
           <div className="h-64 w-full rounded-xl border border-nx-border bg-nx-card p-4">
-            <p className="mb-2 text-xs font-semibold text-nx-muted">
+            <p className="mb-0.5 text-xs font-semibold text-nx-muted">
               Reuniones completadas por semana (fecha agendada)
             </p>
+            {weekly.length ? (
+              <p className="mb-2 text-[10px] text-nx-muted">{chartAvgCaption('Prom. semanal', avgWeekly)}</p>
+            ) : (
+              <p className="mb-2 text-[10px] text-nx-muted">Sin datos semanales aún.</p>
+            )}
             <ResponsiveContainer width="100%" height="85%">
               <LineChart data={weekly} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <CartesianGrid {...NX_CHART_GRID} />
                 <XAxis dataKey="week_label" tick={{ fontSize: 10 }} />
                 <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                <Tooltip />
+                <Tooltip {...NX_CHART_TOOLTIP} />
                 <Line
                   type="monotone"
                   dataKey="count"
-                  stroke="#0369a1"
+                  stroke={NX_CHART.brand}
                   strokeWidth={2}
                   name="Completadas"
-                  dot={{ fill: '#0c4a6e' }}
+                  dot={{ fill: NX_CHART.brandDeep }}
                 />
               </LineChart>
             </ResponsiveContainer>
@@ -129,37 +159,66 @@ export default function DashboardSectionMeetings() {
                 }))}
                 margin={{ top: 4, right: 8, left: 0, bottom: 40 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <CartesianGrid {...NX_CHART_GRID} />
                 <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-20} textAnchor="end" height={48} />
                 <YAxis allowDecimals={false} />
                 <Tooltip />
-                <Bar dataKey="reuniones" fill="#0284c7" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="reuniones" fill={NX_CHART.brandHover} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
 
           <div className="mt-6">
-            <p className="mb-2 text-xs font-semibold text-nx-muted">Registros recientes (módulo Meeting)</p>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-nx-muted">Reuniones agendadas (recientes)</p>
+              <label className="flex items-center gap-2 text-xs text-nx-muted">
+                <input
+                  type="checkbox"
+                  checked={showCanceled}
+                  onChange={(e) => setShowCanceled(e.target.checked)}
+                  className="rounded border-nx-border"
+                />
+                Mostrar canceladas / rechazadas
+              </label>
+            </div>
             <div className="overflow-x-auto rounded-xl border border-nx-border bg-nx-card">
-              <table className="w-full min-w-[720px] text-left text-sm">
+              <table className="w-full min-w-[920px] text-left text-sm">
                 <thead className="border-b border-nx-border bg-nx-card-muted/40 text-[11px] uppercase text-nx-muted">
                   <tr>
-                    <th className="px-3 py-2 font-semibold">Título</th>
+                    <th className="px-3 py-2 font-semibold">Prospecto</th>
+                    <th className="px-3 py-2 font-semibold">Campaña</th>
                     <th className="px-3 py-2 font-semibold">Cuándo</th>
                     <th className="px-3 py-2 font-semibold">Estado</th>
-                    <th className="px-3 py-2 font-semibold">TZ / min</th>
+                    <th className="px-3 py-2 font-semibold">Calendar</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-nx-border">
-                  {meetings.slice(0, 20).map((m) => (
+                  {meetings.slice(0, 30).map((m) => (
                     <tr key={m.id} className="hover:bg-nx-card-muted/30">
-                      <td className="max-w-[240px] truncate px-3 py-2 text-nx-ink" title={m.title}>
-                        {m.title}
+                      <td className="px-3 py-2 text-nx-ink">
+                        <p className="font-medium">{m.prospect_name || '—'}</p>
+                        <p className="text-xs text-nx-muted">{m.prospect_company_name || m.title}</p>
                       </td>
-                      <td className="whitespace-nowrap px-3 py-2 text-xs text-nx-muted">{fmt(m.scheduled_for)}</td>
-                      <td className="px-3 py-2 text-xs capitalize text-nx-ink">{m.meeting_status}</td>
-                      <td className="px-3 py-2 text-xs text-nx-muted">
-                        {m.timezone} · {m.duration_minutes}m
+                      <td className="max-w-[160px] truncate px-3 py-2 text-xs text-nx-muted" title={m.campaign_name}>
+                        {m.campaign_name || `#${m.campaign_id}`}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 text-xs text-nx-muted">
+                        {fmtDateTime(m.scheduled_for, m.timezone)}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-nx-ink">{meetingStatusLabel(m)}</td>
+                      <td className="px-3 py-2 text-xs">
+                        {m.google_calendar_html_link ? (
+                          <a
+                            href={m.google_calendar_html_link}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-medium text-zinc-700 hover:underline"
+                          >
+                            Ver invitación
+                          </a>
+                        ) : (
+                          <span className="text-nx-muted">Sin evento</span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -167,7 +226,7 @@ export default function DashboardSectionMeetings() {
               </table>
               {!meetings.length ? (
                 <p className="px-3 py-8 text-center text-sm text-nx-muted">
-                  Sin reuniones registradas. Aceptá una sugerencia IA desde la conversación de un prospecto.
+                  Sin reuniones todavía. Cuando un prospecto confirme horario, aparecerá acá.
                 </p>
               ) : null}
             </div>

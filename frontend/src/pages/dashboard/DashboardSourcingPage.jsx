@@ -49,11 +49,11 @@ export default function DashboardSourcingPage() {
       />
       <AlertBanner message={error} />
 
-      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-zinc-200 bg-white p-3 shadow-sm">
+      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-nx-border bg-white p-3 shadow-sm">
         <label className="block text-xs">
-          <span className="font-semibold text-zinc-700">Campaña destino</span>
+          <span className="font-semibold text-nx-ink">Campaña destino</span>
           <select
-            className="mt-1 block min-w-[14rem] rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+            className="mt-1 block min-w-[14rem] rounded-lg border border-nx-border px-2 py-1.5 text-sm"
             value={campaignId}
             onChange={(e) => setCampaignId(e.target.value)}
             disabled={loading || !campaigns.length}
@@ -68,21 +68,21 @@ export default function DashboardSourcingPage() {
         {selected ? (
           <Link
             to={`/campanas/${selected.id}`}
-            className="text-xs font-semibold text-violet-800 hover:underline"
+            className="text-xs font-semibold text-zinc-800 hover:underline"
           >
             Abrir campaña →
           </Link>
         ) : null}
       </div>
 
-      {loading ? <p className="text-sm text-zinc-500">Cargando campañas…</p> : null}
+      {loading ? <p className="text-sm text-nx-muted">Cargando campañas…</p> : null}
 
       {selected ? (
         <LeadSourcingPanel campaignId={selected.id} campaign={selected} onImported={() => void load()} />
       ) : null}
 
       {!loading && !campaigns.length ? (
-        <p className="text-sm text-zinc-500">Creá una campaña con ICP para empezar a buscar prospectos.</p>
+        <p className="text-sm text-nx-muted">Creá una campaña con ICP para empezar a buscar prospectos.</p>
       ) : null}
     </div>
   )

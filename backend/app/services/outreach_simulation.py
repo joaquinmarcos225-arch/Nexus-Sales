@@ -122,6 +122,8 @@ def make_message(
     channel: str,
     direction: str,
     gmail_message_id: str | None = None,
+    linkedin_message_id: str | None = None,
+    whatsapp_message_id: str | None = None,
     is_testing: bool = False,
 ) -> OutreachMessage:
     return OutreachMessage(
@@ -132,5 +134,7 @@ def make_message(
         channel=channel,
         direction=direction,
         gmail_message_id=gmail_message_id,
+        linkedin_message_id=linkedin_message_id,
+        whatsapp_message_id=whatsapp_message_id,
         is_testing=bool(is_testing),
     )

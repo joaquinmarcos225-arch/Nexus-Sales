@@ -48,6 +48,14 @@ DIRECTORY_HOST_FRAGMENTS: tuple[str, ...] = (
     "builtin.com",
     "techstars.com",
     "ycombinator.com",
+    # Listas / directorios SEO (no empleadores ICP)
+    "growthlist.co",
+    "growthlist.com",
+    "saasworthy.com",
+    "saashub.com",
+    "g2crowd.com",
+    "craft.co",
+    "cbinsights.com",
 )
 
 _GENERIC_EMAIL_DOMAINS: frozenset[str] = frozenset(
@@ -94,6 +102,20 @@ def is_directory_host(host: str | None) -> bool:
     if not h:
         return False
     return any(frag in h for frag in DIRECTORY_HOST_FRAGMENTS)
+
+
+def is_prospeo_searchable_domain(host: str | None) -> bool:
+    """Dominio usable en search-person (ASCII, no directorio, no vacío)."""
+    h = (host or "").strip().lower().removeprefix("www.")
+    if not h or "." not in h:
+        return False
+    if is_directory_host(h):
+        return False
+    try:
+        h.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def is_consumer_email_domain(domain: str | None) -> bool:

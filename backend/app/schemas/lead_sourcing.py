@@ -50,6 +50,7 @@ class ProspeoHealthRead(BaseModel):
     error_code: str | None = None
     banner_message: str | None = None
     detail: str | None = None
+    rate_limited_until: str | None = None
 
 
 class LeadSourcingStatusRead(BaseModel):
@@ -68,10 +69,6 @@ class LeadSourcingStatusRead(BaseModel):
     )
     message: str = ""
     providers: list[ProviderStatusRead] = Field(default_factory=list)
-    phantom_experimental: bool = Field(
-        default=False,
-        description="True si PhantomBuster está configurado (modo avanzado).",
-    )
     mvp_ready: bool = Field(
         default=False,
         description="Web Search + Prospeo listos.",
@@ -88,7 +85,7 @@ class LeadSourcingFilters(BaseModel):
 
 class LeadCandidateRead(BaseModel):
     external_id: str
-    provider: str = "phantombuster"
+    provider: str = "prospeo"
     first_name: str | None = None
     last_name: str | None = None
     name: str
@@ -101,6 +98,8 @@ class LeadCandidateRead(BaseModel):
     phone: str | None = None
     whatsapp: str | None = None
     whatsapp_number: str | None = None
+    landline_phone: str | None = None
+    mobile_phone: str | None = None
     phone_source: str | None = Field(
         default=None,
         description="Origen del teléfono: prospeo_search_mobile | prospeo_enrich_mobile | …",

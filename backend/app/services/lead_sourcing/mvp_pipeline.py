@@ -1,4 +1,4 @@
-"""Pipeline MVP Lead Sourcing — sin dependencia de PhantomBuster."""
+"""Pipeline MVP Lead Sourcing — ICP → Web Search → Prospeo → Nexus Outreach."""
 
 from __future__ import annotations
 
@@ -11,24 +11,29 @@ MVP_PIPELINE_STEPS: tuple[str, ...] = (
     "Nexus Outreach",
 )
 
-FULL_PIPELINE_STEPS_WITH_PHANTOM: tuple[str, ...] = (
-    "ICP",
-    "Web Search",
-    "PhantomBuster (experimental)",
-    "Prospeo",
-    "Nexus Outreach",
+PHANTOM_PIPELINE_STEPS = frozenset(
+    {
+        "prepare_phantom",
+        "extract_companies",
+        "people",
+        "extracting_people",
+        "preparing_phantom",
+        "phantom_ready",
+    }
 )
 
 
-def phantom_experimental_enabled() -> bool:
-    raw = (getenv("ENABLE_PHANTOM_EXPERIMENTAL") or "0").strip().lower()
-    return raw in ("1", "true", "yes", "on")
-
-
 def mvp_substeps_full() -> list[str]:
-    if phantom_experimental_enabled():
-        return ["companies", "prepare_phantom", "people", "enrich"]
     return ["companies", "enrich"]
+
+
+def get_min_lead_display_score() -> int:
+    raw = (getenv("LEAD_SOURCING_MIN_DISPLAY_SCORE") or "30").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 30
+    return max(0, min(100, n))
 
 
 def is_phantom_related_message(text: str) -> bool:
@@ -49,12 +54,7 @@ def is_phantom_related_message(text: str) -> bool:
     return any(m in t for m in markers)
 
 
-PHANTOM_PIPELINE_STEPS = frozenset(
-    {"prepare_phantom", "extract_companies", "people", "extracting_people", "preparing_phantom", "phantom_ready"}
-)
-
-
-def sanitize_panel_last_error(msg: str | None, *, include_phantom: bool) -> str | None:
+def sanitize_panel_last_error(msg: str | None, *, include_phantom: bool = False) -> str | None:
     if not msg or include_phantom:
         return msg
     if is_phantom_related_message(msg):

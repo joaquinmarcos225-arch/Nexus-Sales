@@ -41,19 +41,13 @@ from app.services.lead_sourcing.mvp_outreach_playbook import (
 from app.services.lead_sourcing.prospeo_contact_validation import is_directory_host
 
 
+from app.services.campaign_outreach_context import campaign_dict_for_outreach
+
+
 def _campaign_dict(campaign: Campaign) -> dict[str, str]:
-    product = campaign.product
-    return {
-        "name": campaign.name,
-        "tone": campaign.tone or "",
-        "target_industry": campaign.target_industry or "",
-        "target_country": campaign.target_country or "",
-        "target_role": campaign.target_role or "",
-        "calendar_link": campaign.calendar_link or "",
-        "preferred_channel_hint": "email",
-        "sender_name": campaign.sender_name or "",
-        "brand_name": product.name if product else campaign.name,
-    }
+    d = campaign_dict_for_outreach(campaign)
+    d["preferred_channel_hint"] = "email"
+    return d
 
 
 def _extract_target_notes_section(notes: str, header: str) -> str:
@@ -377,7 +371,10 @@ def generate_full_playbook_preview(
     campaign: Campaign,
     profile: LeadProfileRead,
 ) -> PlaybookFullPreviewRead:
-    """Genera los 7 toques completos en cadena (simulación sin respuesta) — no modifica estado."""
+    """QA/preview: genera todos los toques en memoria — NO persiste ni usa en producción.
+
+    El path de producto es scaffold + un toque al ejecutar (mensajes bajo demanda).
+    """
     from app.services.lead_sourcing.mvp_outreach_playbook import (
         DEFAULT_MVP_PLAYBOOK,
         lead_available_channels,

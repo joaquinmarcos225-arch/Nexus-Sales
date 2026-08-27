@@ -1,0 +1,23 @@
+# FROZEN: mensajes de secuencia bajo demanda
+
+**Estado:** el copy real se genera **solo al ejecutar el toque** (o ensure LI/WA del día). No pre-generar los N toques al importar/activar.
+
+## SÍ
+
+- `bootstrap_sequence_scaffold_fast` — placeholders `[Vista previa…] Se generará con IA…`
+- `execute_sequence_touch` / scheduler — un día debido
+- Kickoff: scaffold + **un** execute del día calendar-due (`Foco D`)
+- Preview QA efímero (`generate_full_playbook_preview`) sin persistir
+
+## NO
+
+- Llamar OpenAI / `generate_sdr_playbook_touch` en loop sobre todos los días en import, activate o kickoff
+- Revivir `generate_ready_outreach_drafts` como batch generator
+- Persistir los 7–8 mensajes reales al crear el prospecto
+
+## Archivos
+
+- `backend/app/services/prospect_sequence.py` — scaffold + execute
+- `backend/app/services/campaign_day1_assisted.py` — kickoff
+- `backend/app/services/lead_sourcing/service.py` — `generate_ready_outreach_drafts` = noop
+- `backend/tests/test_messages_on_demand.py` — regresión

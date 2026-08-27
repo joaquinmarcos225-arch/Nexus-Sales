@@ -21,7 +21,14 @@ from app.models.user import User
 from app.schemas.campaign_channels import coerce_allowed_channels
 from app.services import prospect_ownership as own
 from app.services.ai_instruction_context import campaign_education_blob
+from app.services.campaign_outreach_context import company_brand_name
 from app.services.lead_sourcing.linkedin_identity import is_personal_linkedin_url
+from app.core.sequence_playbook import (
+    PLAYBOOK_DAYS,
+    PLAYBOOK_NAME,
+    normalize_fired_milestones,
+    playbook_step_for_day,
+)
 from app.services.lead_sourcing.mvp_outreach_playbook import (
     DEFAULT_MVP_PLAYBOOK,
     lead_available_channels,
@@ -31,8 +38,6 @@ from app.services.lead_sourcing import sdr_playbook_outreach as sdr_pb
 
 logger = logging.getLogger(__name__)
 
-PLAYBOOK_NAME = "SDR 21d MVP"
-PLAYBOOK_DAYS = tuple(step.day for step in DEFAULT_MVP_PLAYBOOK)
 COOLDOWN_DAYS = own.OWNERSHIP_COOLDOWN_DAYS
 
 TOUCH_PENDIENTE = "pendiente"
@@ -61,16 +66,131 @@ def _now() -> datetime:
 def _fired_list(prospect: Prospect) -> list[int]:
     raw = getattr(prospect, "sequence_fired_milestones", None) or "[]"
     if isinstance(raw, list):
-        return [int(x) for x in raw if str(x).isdigit()]
-    try:
-        return [int(x) for x in json.loads(str(raw)) if str(x).isdigit()]
-    except Exception:
-        return []
+        parsed = [int(x) for x in raw if str(x).isdigit()]
+    else:
+        try:
+            parsed = [int(x) for x in json.loads(str(raw)) if str(x).isdigit()]
+        except Exception:
+            parsed = []
+    return normalize_fired_milestones(parsed)
 
 
 def _append_fired(prospect: Prospect, day: int) -> None:
     days = sorted(set(_fired_list(prospect) + [int(day)]))
     prospect.sequence_fired_milestones = json.dumps(days)
+
+
+def _remove_fired(prospect: Prospect, day: int) -> None:
+    days = [d for d in _fired_list(prospect) if int(d) != int(day)]
+    prospect.sequence_fired_milestones = json.dumps(days)
+
+
+def _touch_entry_lacks_real_delivery_meta(prospect: Prospect, day: int, entry: dict[str, Any]) -> bool:
+    """True si el toque figura enviado pero no hubo entrega real (fallback/sim)."""
+    if entry.get("fallback_test"):
+        return True
+    # WhatsApp Web asistido (SDR marcó enviado): es entrega real, no Cloud API wamid.
+    if entry.get("whatsapp_assisted_sent") or entry.get("sdr_marked_sent"):
+        return False
+    if getattr(prospect, "whatsapp_sdr_marked_sent_at", None) and (
+        entry.get("status") in (TOUCH_ENVIADO, TOUCH_RESPONDIDO)
+    ):
+        # Misma ventana: el mark-sent del SDR cuenta aunque falte el flag en el log viejo.
+        campaign = getattr(prospect, "campaign", None)
+        step = _playbook_step(day, campaign)
+        if step is not None and str(getattr(step, "channel", "") or "").lower() == "whatsapp":
+            return False
+
+    campaign = getattr(prospect, "campaign", None)
+    step = _playbook_step(day, campaign)
+    if step is None:
+        return False
+    from app.services.sequence_touch_gmail import sequence_email_touch_uses_gmail
+    from app.services.sequence_touch_whatsapp import sequence_whatsapp_touch_uses_api
+
+    channel = str(getattr(step, "channel", "") or "").strip().lower()
+    if sequence_whatsapp_touch_uses_api(day=day, channel=channel):
+        wamid = str(entry.get("whatsapp_message_id") or "").strip()
+        if entry.get("status") in (TOUCH_ENVIADO, TOUCH_RESPONDIDO):
+            return not wamid
+        return False
+    if channel == "whatsapp":
+        # Modo asistido (default): enviado + cuerpo/sent_at = real. No exigir wamid.
+        if entry.get("status") in (TOUCH_ENVIADO, TOUCH_RESPONDIDO):
+            has_body = bool(
+                (entry.get("message_body") or "").strip() or (entry.get("body") or "").strip()
+            )
+            has_sent_at = bool(entry.get("sent_at"))
+            return not (has_body or has_sent_at)
+        return False
+    if sequence_email_touch_uses_gmail(day=day, channel=channel):
+        if entry.get("gmail_draft_id") or entry.get("gmail_manually_sent") or entry.get("gmail_auto_detected"):
+            return False
+        if "gmail_message_id" in entry:
+            return not str(entry.get("gmail_message_id") or "").strip()
+        return entry.get("status") in (TOUCH_ENVIADO, TOUCH_RESPONDIDO)
+    return False
+
+
+def _clear_touch_draft(prospect: Prospect, day: int) -> None:
+    draft = _draft_by_day(prospect)
+    touch = draft.get(day)
+    if not touch:
+        return
+    for key in ("body", "message_body", "body_preview", "subject"):
+        touch.pop(key, None)
+    touches_list = []
+    campaign = getattr(prospect, "campaign", None)
+    for playbook_step in _playbook_steps(campaign):
+        item = draft.get(playbook_step.day)
+        if item:
+            touches_list.append(item)
+    prospect.sequence_playbook_draft = json.dumps(touches_list, ensure_ascii=False)
+
+
+def _reset_touch_for_retry(prospect: Prospect, day: int) -> None:
+    """Deja el toque listo para reejecutar tras un falso envío o fallo."""
+    _remove_fired(prospect, day)
+    _clear_touch_draft(prospect, day)
+    _set_touch_entry(
+        prospect,
+        day,
+        status=TOUCH_PENDIENTE,
+        sent_at=None,
+        message_id=None,
+        error=None,
+        validation_rejection=None,
+        openai_last_error=None,
+        generation_context=None,
+        fallback_test=False,
+        whatsapp_message_id=None,
+        gmail_message_id=None,
+        gmail_draft_id=None,
+        body=None,
+        message_body=None,
+        subject=None,
+    )
+
+
+def _maybe_reset_pseudo_sent_touch(prospect: Prospect, day: int) -> bool:
+    """Auto-limpia solo falsos envíos (sin wamid/gmail); no borra fallos con error."""
+    entry = _touch_entry(prospect, day)
+    status = entry.get("status")
+    if status in (TOUCH_ENVIADO, TOUCH_RESPONDIDO) and _touch_entry_lacks_real_delivery_meta(
+        prospect, day, entry
+    ):
+        _reset_touch_for_retry(prospect, day)
+        return True
+    return False
+
+
+def _maybe_reset_retryable_touch(prospect: Prospect, day: int) -> bool:
+    entry = _touch_entry(prospect, day)
+    status = entry.get("status")
+    if status == TOUCH_FALLIDO:
+        _reset_touch_for_retry(prospect, day)
+        return True
+    return _maybe_reset_pseudo_sent_touch(prospect, day)
 
 
 def _touch_log(prospect: Prospect) -> dict[str, dict[str, Any]]:
@@ -98,35 +218,84 @@ def _set_touch_entry(prospect: Prospect, day: int, **fields: Any) -> None:
     _save_touch_log(prospect, log)
 
 
-def _init_touch_log_generado(prospect: Prospect) -> None:
+def _init_touch_log_generado(prospect: Prospect, steps: Any = None) -> None:
     log: dict[str, dict[str, Any]] = {}
-    for step in DEFAULT_MVP_PLAYBOOK:
-        log[str(step.day)] = {"status": TOUCH_GENERADO}
+    iterable = steps if steps is not None else DEFAULT_MVP_PLAYBOOK
+    for step in iterable:
+        day = getattr(step, "day", None)
+        if day is None and isinstance(step, dict):
+            day = step.get("day")
+        if day is None:
+            continue
+        log[str(int(day))] = {"status": TOUCH_PENDIENTE}
     _save_touch_log(prospect, log)
 
 
-def _playbook_step(day: int):
-    return next((s for s in DEFAULT_MVP_PLAYBOOK if s.day == day), None)
+def _playbook_step(day: int, campaign: Campaign | None = None):
+    if campaign is not None:
+        from app.services.campaign_sequence_channels import effective_playbook_step
+
+        return effective_playbook_step(campaign, day)
+    return playbook_step_for_day(day)
 
 
-def _completed_days(prospect: Prospect) -> set[int]:
+def _playbook_steps(campaign: Campaign | None = None):
+    if campaign is not None:
+        from app.services.campaign_sequence_channels import effective_playbook_steps
+
+        return effective_playbook_steps(campaign)
+    return DEFAULT_MVP_PLAYBOOK
+
+
+def _planned_days(prospect: Prospect, campaign: Campaign | None = None) -> tuple[int, ...]:
+    """Días de la secuencia tal como se configuró (plan de campaña / draft completo)."""
+    if campaign is not None:
+        from app.services.campaign_sequence_channels import campaign_touch_days
+
+        cdays = campaign_touch_days(campaign)
+        if cdays:
+            return cdays
+
+    draft = _draft_by_day(prospect)
+    if draft:
+        days = tuple(sorted(int(d) for d in draft.keys()))
+        # Preview real guarda TODOS los toques. Un stub con 1 día no define el plan.
+        if len(days) >= 2:
+            return days
+
+    log = _touch_log(prospect)
+    if log:
+        days = tuple(sorted(int(k) for k in log.keys() if str(k).isdigit()))
+        if len(days) >= 2:
+            return days
+
+    return tuple(PLAYBOOK_DAYS)
+
+
+def _completed_days(prospect: Prospect, campaign: Campaign | None = None) -> set[int]:
     log = _touch_log(prospect)
     fired = set(_fired_list(prospect))
     draft = _draft_by_day(prospect)
+    planned = _planned_days(prospect, campaign)
     done: set[int] = set()
-    for day in PLAYBOOK_DAYS:
+    for day in planned:
         entry = log.get(str(day), {})
         status = entry.get("status")
         if status == TOUCH_OMITIDO:
             done.add(day)
             continue
         if status in (TOUCH_ENVIADO, TOUCH_RESPONDIDO):
+            if _touch_entry_lacks_real_delivery_meta(prospect, day, entry):
+                continue
             draft_touch = draft.get(day, {})
             _, body = _resolve_step_message(entry=entry, draft_touch=draft_touch, msg=None)
             if body:
                 done.add(day)
             continue
         if day in fired:
+            entry = log.get(str(day), {})
+            if _touch_entry_lacks_real_delivery_meta(prospect, day, entry):
+                continue
             draft_touch = draft.get(day, {})
             _, body = _resolve_step_message(entry=entry, draft_touch=draft_touch, msg=None)
             if body:
@@ -134,14 +303,31 @@ def _completed_days(prospect: Prospect) -> set[int]:
     return done
 
 
-def next_executable_day(prospect: Prospect) -> int | None:
+def next_executable_day(prospect: Prospect, campaign: Campaign | None = None) -> int | None:
     if prospect.sequence_started_at is None:
         return None
-    done = _completed_days(prospect)
-    for day in PLAYBOOK_DAYS:
+    done = _completed_days(prospect, campaign)
+    for day in _planned_days(prospect, campaign):
         if day not in done:
             return day
     return None
+
+
+def next_executable_channel(prospect: Prospect, campaign: Campaign | None = None) -> str:
+    """Canal del proximo toque: log / draft de campana / playbook."""
+    nxt = next_executable_day(prospect, campaign)
+    if nxt is None:
+        return ""
+    entry = _touch_log(prospect).get(str(nxt), {})
+    ch = str(entry.get("channel") or "").strip().lower()
+    if ch:
+        return ch
+    draft = _draft_by_day(prospect).get(nxt) or {}
+    ch = str(draft.get("channel") or "").strip().lower()
+    if ch:
+        return ch
+    step = _playbook_step(nxt, campaign)
+    return str(getattr(step, "channel", None) or "").strip().lower() if step else ""
 
 
 def _channel_ready(prospect: Prospect, channel: str) -> bool:
@@ -151,6 +337,10 @@ def _channel_ready(prospect: Prospect, channel: str) -> bool:
         return _has_valid_linkedin(prospect.linkedin_url)
     if channel == "whatsapp":
         return _has_valid_whatsapp(prospect.phone, prospect.whatsapp)
+    if channel == "call":
+        from app.services.call_assisted_service import prospect_has_callable_number
+
+        return prospect_has_callable_number(prospect)
     return False
 
 
@@ -181,10 +371,14 @@ def _resolve_touch_statuses(
     if status == TOUCH_OMITIDO:
         return TOUCH_OMITIDO, "skipped"
     if status == TOUCH_FALLIDO:
-        return TOUCH_FALLIDO, "current" if day == next_day else "failed"
+        if day == next_day:
+            return TOUCH_FALLIDO, "current"
+        return TOUCH_FALLIDO, "failed"
 
     sent_at = _parse_dt(entry.get("sent_at"))
     if status in (TOUCH_ENVIADO, TOUCH_RESPONDIDO) or day in _fired_list(prospect):
+        if _touch_entry_lacks_real_delivery_meta(prospect, day, entry):
+            return TOUCH_FALLIDO, "current" if day == next_day else "failed"
         _, body = _resolve_step_message(
             entry=entry,
             draft_touch=draft_touch or {},
@@ -211,7 +405,11 @@ def _resolve_touch_statuses(
 
 
 def _prospect_dict(prospect: Prospect) -> dict[str, str]:
+    from app.services.outreach_prospect_research import research_context_for_prompt
+
+    research = research_context_for_prompt(prospect)
     return {
+        "id": str(getattr(prospect, "id", "") or ""),
         "name": prospect.name or "",
         "company_name": prospect.company_name or "",
         "role": prospect.role or "",
@@ -221,17 +419,29 @@ def _prospect_dict(prospect: Prospect) -> dict[str, str]:
         "whatsapp": prospect.whatsapp or "",
         "country": prospect.country or "",
         "industry": prospect.industry or "",
+        "prospecting_context": research,
+        "research_brief": research,
     }
 
 
 def _campaign_dict(campaign: Campaign, seller: User | None) -> dict[str, str]:
+    from app.services.outreach_display_names import sender_first_name
+
+    sender = sender_first_name(
+        user=seller,
+        campaign_sender=getattr(campaign, "sender_name", None),
+        fallback="",
+    )
+    company_name = company_brand_name(campaign)
     return {
+        "id": str(getattr(campaign, "id", "") or ""),
         "name": campaign.name or "",
         "tone": campaign.tone or "",
         "target_role": campaign.target_role or "",
         "calendar_link": campaign.calendar_link or "",
-        "sender_name": (seller.name if seller else "") or "",
-        "brand_name": campaign.name or "",
+        "sender_name": sender,
+        "brand_name": company_name,
+        "company_name": company_name,
     }
 
 
@@ -261,6 +471,10 @@ def _usable_draft_touches(prospect: Prospect) -> dict[int, dict[str, Any]]:
     parsed = _parse_playbook_draft_raw(getattr(prospect, "sequence_playbook_draft", None))
     if not parsed:
         return {}
+    campaign = getattr(prospect, "campaign", None)
+    planned = set(_planned_days(prospect, campaign)) if campaign is not None else set(PLAYBOOK_DAYS)
+    if not planned:
+        planned = set(PLAYBOOK_DAYS)
     out: dict[int, dict[str, Any]] = {}
     for touch in parsed:
         day = touch.get("day")
@@ -270,7 +484,7 @@ def _usable_draft_touches(prospect: Prospect) -> dict[int, dict[str, Any]]:
             day_int = int(day)
         except (TypeError, ValueError):
             continue
-        if day_int in PLAYBOOK_DAYS:
+        if day_int in planned or day_int in PLAYBOOK_DAYS:
             out[day_int] = touch
     return out
 
@@ -339,12 +553,18 @@ def reconcile_sequence_state(
 ) -> dict[str, Any]:
     """
     Limpia borradores huérfanos o corruptos (sin secuencia iniciada).
-    No borra datos de secuencias en curso o finalizadas.
+    También deja el próximo toque reejecutable si quedó en fallido/falso envío.
     """
+    changed = False
     if prospect.sequence_started_at is not None:
+        nxt = next_executable_day(prospect)
+        if nxt is not None and _maybe_reset_pseudo_sent_touch(prospect, nxt):
+            changed = True
+        if changed and commit:
+            db.commit()
+            db.refresh(prospect)
         return build_sequence_debug(prospect)
 
-    changed = False
     if _is_corrupt_draft_state(prospect):
         prospect.sequence_playbook_draft = None
         changed = True
@@ -383,9 +603,7 @@ def is_own_prospect(user: User, prospect: Prospect) -> bool:
 
 
 def can_manage_outreach(user: User, prospect: Prospect) -> bool:
-    """SDR/Manager trabajan outreach solo de prospectos que tomaron."""
-    if normalize_role(user.role) == UserRole.gerente:
-        return False
+    """SDR/Manager/Director operan outreach de prospectos que tomaron."""
     if user.company_id != prospect.company_id:
         return False
     status = own.effective_ownership_status(prospect)
@@ -419,6 +637,7 @@ def _prospect_channels(prospect: Prospect) -> set[str]:
         linkedin_url=prospect.linkedin_url,
         phone=prospect.phone,
         whatsapp_number=prospect.whatsapp,
+        landline_phone=getattr(prospect, "landline_phone", None),
     )
 
 
@@ -431,14 +650,19 @@ def _has_valid_linkedin(linkedin_url: str | None) -> bool:
 
 
 def _has_valid_whatsapp(phone: str | None, whatsapp: str | None) -> bool:
-    return bool((whatsapp or phone or "").strip())
+    from app.services.whatsapp_cloud_service import normalize_whatsapp_digits
+
+    return bool(normalize_whatsapp_digits(phone, whatsapp))
 
 
 def _has_valid_contact(prospect: Prospect) -> bool:
+    from app.services.call_assisted_service import prospect_has_callable_number
+
     return (
         _has_valid_email(prospect.email)
         or _has_valid_linkedin(prospect.linkedin_url)
         or _has_valid_whatsapp(prospect.phone, prospect.whatsapp)
+        or prospect_has_callable_number(prospect)
     )
 
 
@@ -446,16 +670,44 @@ CHANNEL_LABELS: dict[str, str] = {
     "email": "Email",
     "linkedin": "LinkedIn",
     "whatsapp": "WhatsApp",
+    "call": "Llamada",
 }
 
-CHANNELS_REQUIRED = 2
-CHANNELS_TOTAL = 3
+CHANNELS_REQUIRED = 1
+CHANNELS_TOTAL = 4
+
+
+def _channels_still_needed(channel_count: int) -> int:
+    return max(0, CHANNELS_REQUIRED - channel_count)
+
+
+def _format_channels_requirement_message(*, channel_count: int) -> str:
+    """Mensaje claro: cuántos canales faltan para llegar al mínimo (no confundir con el mínimo mismo)."""
+    still = _channels_still_needed(channel_count)
+    if still == 0:
+        return (
+            f"{channel_count}/{CHANNELS_TOTAL} canales válidos "
+            f"(mínimo {CHANNELS_REQUIRED} requeridos)."
+        )
+    if still == 1:
+        return (
+            f"Falta 1 canal más: tenés {channel_count} de {CHANNELS_REQUIRED} requeridos "
+            f"({CHANNELS_TOTAL} posibles: email, LinkedIn, WhatsApp, llamada)."
+        )
+    return (
+        f"Faltan {still} canales: tenés {channel_count} de {CHANNELS_REQUIRED} requeridos "
+        f"({CHANNELS_TOTAL} posibles: email, LinkedIn, WhatsApp, llamada)."
+    )
 
 
 def _build_channels_detail(prospect: Prospect) -> list[dict[str, Any]]:
     email_ok = _has_valid_email(prospect.email)
     linkedin_ok = _has_valid_linkedin(prospect.linkedin_url)
     whatsapp_ok = _has_valid_whatsapp(prospect.phone, prospect.whatsapp)
+    from app.services.call_assisted_service import prospect_call_target, prospect_has_callable_number
+
+    call_ok = prospect_has_callable_number(prospect)
+    _, call_kind, call_display = prospect_call_target(prospect)
     return [
         {
             "key": "email",
@@ -473,17 +725,25 @@ def _build_channels_detail(prospect: Prospect) -> list[dict[str, Any]]:
             "key": "whatsapp",
             "label": CHANNEL_LABELS["whatsapp"],
             "ok": whatsapp_ok,
-            "detail": (prospect.whatsapp or prospect.phone) if whatsapp_ok else "Sin teléfono/WhatsApp",
+            "detail": (prospect.whatsapp or prospect.phone) if whatsapp_ok else "Sin celular/WhatsApp",
+        },
+        {
+            "key": "call",
+            "label": CHANNEL_LABELS["call"],
+            "ok": call_ok,
+            "detail": (
+                f"{'Fijo' if call_kind == 'landline' else 'Celular'} · {call_display}"
+                if call_ok
+                else "Sin teléfono para llamar"
+            ),
         },
     ]
 
 
 def _format_channels_summary(*, channel_count: int, available_channels: list[str]) -> str:
     detected = ", ".join(CHANNEL_LABELS.get(c, c) for c in sorted(available_channels)) or "ninguno"
-    return (
-        f"{channel_count}/{CHANNELS_TOTAL} canales válidos (mínimo {CHANNELS_REQUIRED}). "
-        f"Detectados: {detected}"
-    )
+    base = _format_channels_requirement_message(channel_count=channel_count)
+    return f"{base} Detectados: {detected}."
 
 
 def _format_readiness_block_detail(readiness: dict[str, Any]) -> str:
@@ -491,10 +751,7 @@ def _format_readiness_block_detail(readiness: dict[str, Any]) -> str:
     channel_count = int(readiness.get("channel_count") or 0)
     channels = readiness.get("available_channels") or []
     if channel_count < CHANNELS_REQUIRED:
-        parts.append(
-            f"Faltan canales: {channel_count}/{CHANNELS_TOTAL} válidos "
-            f"(se requieren al menos {CHANNELS_REQUIRED})"
-        )
+        parts.append(_format_channels_requirement_message(channel_count=channel_count))
     if not readiness.get("campaign"):
         parts.append("falta campaña asignada")
     product = readiness.get("product")
@@ -511,17 +768,81 @@ def _format_readiness_block_detail(readiness: dict[str, Any]) -> str:
     return _format_channels_summary(channel_count=channel_count, available_channels=channels)
 
 
+def _count_sent_touches(prospect: Prospect) -> int:
+    log = _touch_log(prospect)
+    return sum(
+        1
+        for entry in log.values()
+        if entry.get("status") in (TOUCH_ENVIADO, TOUCH_RESPONDIDO)
+    )
+
+
+def _sequence_testing_allows_reset() -> bool:
+    from app.services import outreach_metrics as om
+
+    return om.is_sequence_testing_enabled()
+
+
+def _reset_sequence_for_regenerate(db: Session, *, prospect: Prospect) -> None:
+    """Limpia borrador y progreso de secuencia para volver a generar."""
+    sent = _count_sent_touches(prospect)
+    testing_reset = _sequence_testing_allows_reset()
+    if sent > 0 and not testing_reset:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No se puede regenerar: ya hay toques enviados. "
+                "Reejecutá un toque fallido con «Ejecutar toque» o probá con otro prospecto."
+            ),
+        )
+    if sent > 0 and testing_reset:
+        from sqlalchemy import delete
+
+        from app.models.outreach import OutreachMessage
+
+        db.execute(
+            delete(OutreachMessage).where(
+                OutreachMessage.prospect_id == prospect.id,
+                OutreachMessage.is_testing.is_(True),
+            )
+        )
+    prospect.sequence_playbook_draft = None
+    prospect.sequence_touch_log = None
+    prospect.playbook_name = None
+    prospect.sequence_paused = False
+    prospect.sequence_fired_milestones = "[]"
+    prospect.next_touch_at = None
+    if prospect.sequence_started_at is not None and (sent == 0 or testing_reset):
+        prospect.sequence_started_at = None
+        if prospect.ownership_status == ProspectOwnershipStatus.en_secuencia.value:
+            prospect.ownership_status = ProspectOwnershipStatus.tomado.value
+    db.commit()
+    db.refresh(prospect)
+
+
 def explain_generate_sequence_block(
     user: User,
     prospect: Prospect,
     *,
     readiness: dict[str, Any] | None = None,
+    force_regenerate: bool = False,
 ) -> str | None:
     """Motivo legible si no se puede generar secuencia; None si está permitido."""
     if not can_manage_outreach(user, prospect):
         return "No tenés permisos para gestionar outreach de este prospecto"
     status = own.effective_ownership_status(prospect)
-    if status != ProspectOwnershipStatus.tomado.value:
+    if force_regenerate:
+        if status not in (
+            ProspectOwnershipStatus.tomado.value,
+            ProspectOwnershipStatus.en_secuencia.value,
+        ):
+            label = status.replace("_", " ")
+            return f"No podés regenerar la secuencia en el estado actual ({label})."
+        if _count_sent_touches(prospect) > 0 and not _sequence_testing_allows_reset():
+            return (
+                "Ya hay toques enviados — reejecutá un toque fallido o probá con otro prospecto."
+            )
+    elif status != ProspectOwnershipStatus.tomado.value:
         label = status.replace("_", " ")
         return (
             f"El prospecto debe estar Tomado para generar la secuencia "
@@ -529,7 +850,7 @@ def explain_generate_sequence_block(
         )
     if _is_corrupt_draft_state(prospect):
         return None
-    if _has_playbook_draft(prospect):
+    if _has_playbook_draft(prospect) and not force_regenerate:
         return (
             "Ya hay una secuencia generada — usá «Ver secuencia» o «Regenerar secuencia» "
             "si el borrador quedó vacío o corrupto"
@@ -623,10 +944,11 @@ def assess_outreach_readiness(db: Session, *, prospect: Prospect) -> dict[str, A
     if not _has_valid_contact(prospect):
         missing.append("contacto (email, LinkedIn o teléfono)")
     if not channels_ok:
-        missing.append(
-            f"al menos {CHANNELS_REQUIRED} canales válidos "
-            f"({channel_count}/{CHANNELS_TOTAL} detectados)"
-        )
+        still = _channels_still_needed(channel_count)
+        if still == 1:
+            missing.append("1 canal más (email, LinkedIn o WhatsApp)")
+        else:
+            missing.append(f"{still} canales más (email, LinkedIn o WhatsApp)")
 
     if not is_ready:
         if not campaign or not product:
@@ -731,11 +1053,11 @@ def can_start_sequence(user: User, prospect: Prospect, *, readiness: dict[str, A
     return True
 
 
-def compute_next_touch(prospect: Prospect) -> tuple[datetime | None, str | None]:
+def compute_next_touch(prospect: Prospect, campaign: Campaign | None = None) -> tuple[datetime | None, str | None]:
     if prospect.sequence_started_at is None:
         return None, None
-    done = _completed_days(prospect)
-    pending = [d for d in PLAYBOOK_DAYS if d not in done]
+    done = _completed_days(prospect, campaign)
+    pending = [d for d in _planned_days(prospect, campaign) if d not in done]
     if not pending:
         return None, "Secuencia completa"
     next_day = pending[0]
@@ -744,8 +1066,8 @@ def compute_next_touch(prospect: Prospect) -> tuple[datetime | None, str | None]
         start = start.replace(tzinfo=UTC)
     next_at = start + timedelta(days=max(0, next_day - 1))
     channel = next(
-        (s.channel for s in DEFAULT_MVP_PLAYBOOK if s.day == next_day),
-        "email",
+        (s.channel for s in _playbook_steps(campaign) if s.day == next_day),
+        next((s.channel for s in DEFAULT_MVP_PLAYBOOK if s.day == next_day), "email"),
     )
     return next_at, f"Día {next_day} · {channel}"
 
@@ -818,8 +1140,16 @@ def _message_preview(body: str | None, limit: int = 220) -> str | None:
 
 
 def build_sequence_tracking(db: Session, *, prospect: Prospect) -> dict[str, Any]:
-    done = _completed_days(prospect)
-    next_day = next_executable_day(prospect)
+    campaign = None
+    if prospect.campaign_id:
+        campaign = getattr(prospect, "campaign", None)
+        if campaign is None:
+            campaign = db.get(Campaign, prospect.campaign_id)
+    steps_plan = list(_playbook_steps(campaign))
+    planned_days = tuple(s.day for s in steps_plan) or PLAYBOOK_DAYS
+
+    done = _completed_days(prospect, campaign)
+    next_day = next_executable_day(prospect, campaign)
     draft = _draft_by_day(prospect)
     start = prospect.sequence_started_at
     log = _touch_log(prospect)
@@ -844,13 +1174,13 @@ def build_sequence_tracking(db: Session, *, prospect: Prospect) -> dict[str, Any
 
     msg_by_id: dict[int, OutreachMessage] = {m.id: m for m in outbound}
     msg_by_day: dict[int, OutreachMessage] = {}
-    for day in PLAYBOOK_DAYS:
+    for day in planned_days:
         entry = log.get(str(day), {})
         msg_id = entry.get("message_id")
         if msg_id and int(msg_id) in msg_by_id:
             msg_by_day[day] = msg_by_id[int(msg_id)]
 
-    fired_playbook = [d for d in PLAYBOOK_DAYS if d in done and d not in msg_by_day]
+    fired_playbook = [d for d in planned_days if d in done and d not in msg_by_day]
     orphan_msgs = [m for m in outbound if m.id not in {x.id for x in msg_by_day.values()}]
     for i, day in enumerate(fired_playbook):
         if day not in msg_by_day and i < len(orphan_msgs):
@@ -858,7 +1188,7 @@ def build_sequence_tracking(db: Session, *, prospect: Prospect) -> dict[str, Any
 
     steps: list[dict[str, Any]] = []
     history: list[dict[str, Any]] = []
-    for step in DEFAULT_MVP_PLAYBOOK:
+    for step in steps_plan:
         day = step.day
         draft_touch = draft.get(day, {})
         entry = log.get(str(day), {})
@@ -885,8 +1215,21 @@ def build_sequence_tracking(db: Session, *, prospect: Prospect) -> dict[str, Any
         )
         can_skip = can_execute
 
+        from app.services.sequence_touch_gmail import sequence_email_touch_uses_gmail
+
+        can_mark_sent = (
+            touch_status == TOUCH_GENERADO
+            and step.channel == "email"
+            and sequence_email_touch_uses_gmail(day=day, channel=step.channel)
+        )
+
         openai_last_error = entry.get("openai_last_error")
         generation_context = entry.get("generation_context")
+        error_message = entry.get("error")
+        validation_rejection = entry.get("validation_rejection")
+        if day == next_day and entry.get("status") == TOUCH_PENDIENTE:
+            error_message = None
+            validation_rejection = None
         step_data = {
             "day": day,
             "channel": step.channel,
@@ -901,21 +1244,26 @@ def build_sequence_tracking(db: Session, *, prospect: Prospect) -> dict[str, Any
             "message_body": body,
             "message_preview": _message_preview(body),
             "message_id": entry.get("message_id") or (msg.id if msg else None),
-            "error_message": entry.get("error"),
-            "validation_rejection": entry.get("validation_rejection"),
+            "error_message": error_message,
+            "validation_rejection": validation_rejection,
             "openai_last_error": openai_last_error,
             "generation_context": generation_context,
             "fallback_test": bool(entry.get("fallback_test")),
             "can_execute": can_execute,
             "can_skip": can_skip,
+            "can_mark_sent": can_mark_sent,
+            "gmail_draft_id": entry.get("gmail_draft_id"),
+            "gmail_web_link": entry.get("gmail_web_link"),
         }
         steps.append(step_data)
         if touch_status in (TOUCH_ENVIADO, TOUCH_RESPONDIDO, TOUCH_OMITIDO, TOUCH_FALLIDO):
             history.append(step_data)
 
-    next_at, next_label = compute_next_touch(prospect)
+    next_at, next_label = compute_next_touch(prospect, campaign)
     stored_next = prospect.next_touch_at or next_at
     current_day = next_day
+    completed = _completed_days(prospect, campaign)
+    last_completed_day = max(completed) if completed else None
 
     last_response_class: str | None = None
     last_response_class_label: str | None = None
@@ -984,6 +1332,8 @@ def build_sequence_tracking(db: Session, *, prospect: Prospect) -> dict[str, Any
         "prospect_status": getattr(prospect, "status", None),
         "current_day": current_day,
         "current_day_label": f"Día {current_day}" if current_day else None,
+        "last_completed_day": last_completed_day,
+        "last_completed_day_label": f"Día {last_completed_day}" if last_completed_day else None,
         "next_touch_at": stored_next,
         "next_touch_label": next_label,
         "last_response_class": last_response_class,
@@ -1028,6 +1378,8 @@ def list_active_sequences(db: Session, *, company_id: int, user: User) -> list[d
                 "ownership_status": status,
                 "current_day": tracking["current_day"],
                 "current_day_label": tracking["current_day_label"],
+                "last_completed_day": tracking.get("last_completed_day"),
+                "last_completed_day_label": tracking.get("last_completed_day_label"),
                 "next_touch_label": tracking["next_touch_label"],
                 "next_touch_at": tracking["next_touch_at"],
             }
@@ -1171,6 +1523,65 @@ def _template_body(step_day: int, channel: str, prospect: Prospect, product: Pro
     )
 
 
+def _build_preview_touch_body(
+    *,
+    step_day: int,
+    channel: str,
+    prospect: Prospect,
+    campaign: Campaign,
+    product: Product | None,
+    seller: User | None,
+    prior: list[dict[str, Any]],
+    step_objective: str,
+    education: str,
+) -> str:
+    p_dict = _prospect_dict(prospect)
+    c_dict = _campaign_dict(campaign, seller)
+    pr_dict = _product_dict(product)
+    if step_day == 1:
+        if openai_configured():
+            try:
+                subj, body, _reason = sdr_pb.generate_sdr_playbook_touch(
+                    channel=channel,
+                    prospect=p_dict,
+                    campaign=c_dict,
+                    product=pr_dict,
+                    education=education,
+                    step_day=step_day,
+                    step_objective=step_objective,
+                    prior_touches=prior,
+                    tone=campaign.tone or "",
+                )
+                if subj and channel == "email":
+                    return f"Asunto: {subj}\n\n{body}"
+                return body
+            except HTTPException:
+                raise
+            except Exception:
+                logger.warning(
+                    "generate_sequence_preview day1_openai_fallback prospect_id=%s",
+                    prospect.id,
+                    exc_info=True,
+                )
+        from app.services.openai_fallback import apply_fallback_marker_to_body, build_sdr_playbook_fallback_json
+
+        raw = build_sdr_playbook_fallback_json(
+            channel=channel,
+            prospect=p_dict,
+            campaign=c_dict,
+            product=pr_dict,
+            step_day=step_day,
+            step_objective=step_objective,
+            prior_touches=prior,
+        )
+        data = json.loads(raw)
+        body = apply_fallback_marker_to_body((data.get("body") or "").strip())
+        if channel == "email" and (data.get("subject") or "").strip():
+            return f"Asunto: {data['subject'].strip()}\n\n{body}"
+        return body
+    return _template_body(step_day, channel, prospect, product)
+
+
 def _is_placeholder_message(text: str | None) -> bool:
     if not text or not str(text).strip():
         return True
@@ -1189,9 +1600,15 @@ def _persist_touch_draft(prospect: Prospect, draft: dict[int, dict[str, Any]], c
         "body_preview": content.get("body_preview") or _message_preview(content.get("message_body")),
     }
     touches_list = []
-    for playbook_step in DEFAULT_MVP_PLAYBOOK:
+    campaign = getattr(prospect, "campaign", None)
+    for playbook_step in _playbook_steps(campaign):
         touch = draft.get(playbook_step.day)
         if touch:
+            touches_list.append(touch)
+    # Conservar toques del draft que no estén en el plan actual (no perder historial).
+    planned = {s.day for s in _playbook_steps(campaign)}
+    for d, touch in sorted(draft.items()):
+        if d not in planned and touch:
             touches_list.append(touch)
     prospect.sequence_playbook_draft = json.dumps(touches_list, ensure_ascii=False)
 
@@ -1266,34 +1683,102 @@ def _generate_real_touch_content(
     day: int,
     prior: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    step = _playbook_step(day)
+    step = _playbook_step(day, campaign)
     if step is None:
         raise HTTPException(status_code=400, detail="Toque inválido")
-    if not openai_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="OpenAI no está configurada. Definí OPENAI_API_KEY para generar mensajes reales.",
-        )
 
     seller = db.get(User, campaign.seller_id) if campaign.seller_id else None
     education = campaign_education_blob(db, campaign)
+    from app.services.linkedin_sequence_policy import linkedin_mention_context
+    from app.services.outreach_prospect_research import (
+        ensure_outreach_research,
+        extract_stored_research,
+        resolve_research_depth,
+    )
+
+    depth = resolve_research_depth(
+        day=day,
+        prior_touches=prior,
+        has_stored_brief=bool(extract_stored_research(prospect.notes)),
+        prospect=prospect,
+        campaign=campaign,
+    )
+    if depth != "skip":
+        try:
+            brief = ensure_outreach_research(
+                db,
+                prospect=prospect,
+                campaign=campaign,
+                product=product,
+                force=False,
+                depth=depth,
+                prior_touches=prior,
+                day=day,
+            )
+            if brief:
+                education = (
+                    f"{education}\n\n"
+                    "INVESTIGACIÓN PREVIA DEL PROSPECTO (personalizá el ángulo; no inventes):\n"
+                    f"{brief}"
+                ).strip()
+        except Exception:
+            logger.exception(
+                "outreach research failed prospect_id=%s day=%s",
+                prospect.id,
+                day,
+            )
+
+    mention = linkedin_mention_context(prospect, channel=step.channel)
+    if mention:
+        education = f"{education}\n\n{mention}".strip()
     fallback_used = False
-    try:
-        subj, body, _reason = sdr_pb.generate_sdr_playbook_touch(
+    subj: str | None = None
+    body = ""
+
+    if not openai_configured():
+        from app.services.openai_fallback import (
+            apply_fallback_marker_to_body,
+            build_sdr_playbook_fallback_json,
+            is_openai_fallback_enabled,
+        )
+
+        if not is_openai_fallback_enabled():
+            raise HTTPException(
+                status_code=503,
+                detail="OpenAI no está configurada. Definí OPENAI_API_KEY para generar mensajes reales.",
+            )
+        import json
+
+        raw = build_sdr_playbook_fallback_json(
             channel=step.channel,
             prospect=_prospect_dict(prospect),
             campaign=_campaign_dict(campaign, seller),
             product=_product_dict(product),
-            education=education,
             step_day=step.day,
             step_objective=step.objective,
             prior_touches=prior,
-            tone=campaign.tone or "",
         )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _raise_sdr_generation_error(exc)
+        data = json.loads(raw)
+        body = apply_fallback_marker_to_body((data.get("body") or "").strip())
+        subj = (data.get("subject") or "").strip() or None
+        fallback_used = True
+    else:
+        try:
+            subj, body, _reason = sdr_pb.generate_sdr_playbook_touch(
+                channel=step.channel,
+                prospect=_prospect_dict(prospect),
+                campaign=_campaign_dict(campaign, seller),
+                product=_product_dict(product),
+                education=education,
+                step_day=step.day,
+                step_objective=step.objective,
+                prior_touches=prior,
+                tone=campaign.tone or "",
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _raise_sdr_generation_error(exc)
 
     from app.services.openai_fallback import FALLBACK_MARKER
 
@@ -1338,13 +1823,15 @@ def generate_sequence_preview(
 ) -> dict[str, Any]:
     reconcile_sequence_state(db, prospect, commit=True)
     readiness = assess_outreach_readiness(db, prospect=prospect)
-    if force_regenerate and prospect.sequence_started_at is None and _has_playbook_draft(prospect):
-        prospect.sequence_playbook_draft = None
-        prospect.sequence_touch_log = None
-        prospect.playbook_name = None
-        db.commit()
-        db.refresh(prospect)
-    block = explain_generate_sequence_block(user, prospect, readiness=readiness)
+    if force_regenerate and (_has_playbook_draft(prospect) or prospect.sequence_started_at is not None):
+        _reset_sequence_for_regenerate(db, prospect=prospect)
+        readiness = assess_outreach_readiness(db, prospect=prospect)
+    block = explain_generate_sequence_block(
+        user,
+        prospect,
+        readiness=readiness,
+        force_regenerate=force_regenerate,
+    )
     if block:
         raise HTTPException(status_code=403, detail=block)
     campaign = readiness.get("campaign")
@@ -1354,38 +1841,35 @@ def generate_sequence_preview(
     if product is None:
         raise HTTPException(status_code=400, detail="La campaña debe tener un producto asociado")
     seller = db.get(User, campaign.seller_id) if campaign.seller_id else None
+    # Preferí el usuario que genera (login) sobre el seller seed "Director Test".
+    from app.services.outreach_display_names import sender_first_name
+
+    sender = sender_first_name(
+        user=user,
+        campaign_sender=getattr(campaign, "sender_name", None),
+        fallback="",
+    )
+    if not sender and seller is not None:
+        sender = sender_first_name(user=seller, fallback="")
+    if sender:
+        campaign.sender_name = sender
+    compose_as = user if sender_first_name(user=user, fallback="") else seller
     education = campaign_education_blob(db, campaign)
-    p_dict = _prospect_dict(prospect)
-    c_dict = _campaign_dict(campaign, seller)
-    pr_dict = _product_dict(product)
 
     touches: list[dict[str, Any]] = []
     prior: list[dict[str, Any]] = []
-    for step in DEFAULT_MVP_PLAYBOOK:
-        body = _template_body(step.day, step.channel, prospect, product)
-        if step.day == 1 and openai_configured():
-            try:
-                subj, body, _reason = sdr_pb.generate_sdr_playbook_touch(
-                    channel=step.channel,
-                    prospect=p_dict,
-                    campaign=c_dict,
-                    product=pr_dict,
-                    education=education,
-                    step_day=step.day,
-                    step_objective=step.objective,
-                    prior_touches=prior,
-                    tone=campaign.tone or "",
-                )
-                if subj and step.channel == "email":
-                    body = f"Asunto: {subj}\n\n{body}"
-            except HTTPException:
-                raise
-            except Exception:
-                logger.warning(
-                    "generate_sequence_preview day1_openai_fallback prospect_id=%s",
-                    prospect.id,
-                    exc_info=True,
-                )
+    for step in _playbook_steps(campaign):
+        body = _build_preview_touch_body(
+            step_day=step.day,
+            channel=step.channel,
+            prospect=prospect,
+            campaign=campaign,
+            product=product,
+            seller=compose_as,
+            prior=prior,
+            step_objective=step.objective,
+            education=education,
+        )
         touch = {
             "day": step.day,
             "channel": step.channel,
@@ -1398,9 +1882,47 @@ def generate_sequence_preview(
     draft_json = json.dumps(touches, ensure_ascii=False)
     prospect.sequence_playbook_draft = draft_json
     prospect.playbook_name = PLAYBOOK_NAME
-    _init_touch_log_generado(prospect)
+    _init_touch_log_generado(prospect, touches)
     db.commit()
     db.refresh(prospect)
+    return {
+        "prospect_id": prospect.id,
+        "playbook_name": PLAYBOOK_NAME,
+        "touches": touches,
+    }
+
+
+def bootstrap_sequence_scaffold_fast(
+    db: Session,
+    *,
+    prospect: Prospect,
+    campaign: Campaign,
+    product: Product | None = None,
+) -> dict[str, Any]:
+    """
+    Arma draft + log de toques SIN OpenAI / SIN copy real.
+
+    Contrato (mensajes bajo demanda): placeholders para el plan completo;
+    el mensaje real se genera una sola vez al ejecutar el toque debido
+    (kickoff día calendar-due, scheduler o execute manual). No pre-generar N toques.
+    """
+    if product is None and campaign.product_id:
+        product = db.get(Product, int(campaign.product_id))
+    touches: list[dict[str, Any]] = []
+    for step in _playbook_steps(campaign):
+        body = _template_body(step.day, step.channel, prospect, product)
+        touches.append(
+            {
+                "day": step.day,
+                "channel": step.channel,
+                "objective": step.objective,
+                "body_preview": body,
+            }
+        )
+    prospect.sequence_playbook_draft = json.dumps(touches, ensure_ascii=False)
+    prospect.playbook_name = PLAYBOOK_NAME
+    _init_touch_log_generado(prospect, touches)
+    db.flush()
     return {
         "prospect_id": prospect.id,
         "playbook_name": PLAYBOOK_NAME,
@@ -1435,21 +1957,32 @@ def start_prospect_sequence(db: Session, *, user: User, prospect: Prospect) -> P
     return prospect
 
 
-def _prior_sent_touches(prospect: Prospect, before_day: int) -> list[dict[str, Any]]:
+def _prior_sent_touches(
+    prospect: Prospect,
+    before_day: int,
+    campaign: Campaign | None = None,
+) -> list[dict[str, Any]]:
     draft = _draft_by_day(prospect)
     log = _touch_log(prospect)
     prior: list[dict[str, Any]] = []
-    for step in DEFAULT_MVP_PLAYBOOK:
+    for step in _playbook_steps(campaign):
         if step.day >= before_day:
             break
-        if step.day not in _completed_days(prospect):
+        if step.day not in _completed_days(prospect, campaign):
             continue
         touch = draft.get(step.day, {})
         entry = log.get(str(step.day), {})
+        if entry.get("status") == TOUCH_OMITIDO:
+            continue
+        channel = (
+            str(entry.get("channel") or touch.get("channel") or step.channel or "email")
+            .strip()
+            .lower()
+        )
         _, body = _resolve_step_message(entry=entry, draft_touch=touch, msg=None)
         if not body:
             continue
-        prior.append({"day": step.day, "channel": step.channel, "body": body})
+        prior.append({"day": step.day, "channel": channel, "body": body})
     return prior
 
 
@@ -1464,9 +1997,9 @@ def _mark_touch_failed(
         "status": TOUCH_FALLIDO,
         "error": error[:500],
         "message_id": None,
+        "validation_rejection": validation_rejection,
     }
-    if validation_rejection:
-        fields["validation_rejection"] = validation_rejection
+    _remove_fired(prospect, day)
     _set_touch_entry(prospect, day, **fields)
 
 
@@ -1538,9 +2071,47 @@ def _sync_sequence_completion(db: Session, *, prospect: Prospect) -> None:
         next_at, _ = compute_next_touch(prospect)
         prospect.next_touch_at = next_at
 
+        campaign = db.get(Campaign, prospect.campaign_id)
+        if campaign and getattr(campaign, "post_sequence_followup_enabled", True):
+            from app.services import followup_engine
 
-def execute_sequence_touch(db: Session, *, user: User, prospect: Prospect, day: int) -> dict[str, Any]:
-    if not can_manage_outreach(user, prospect):
+            followup_engine.schedule_followup_task(
+                db,
+                company_id=prospect.company_id,
+                campaign_id=campaign.id,
+                prospect_id=prospect.id,
+                title="Último follow-up opcional (despedida)",
+                campaign=campaign,
+            )
+
+
+def execute_sequence_touch(
+    db: Session,
+    *,
+    user: User,
+    prospect: Prospect,
+    day: int,
+    scheduled: bool = False,
+) -> dict[str, Any]:
+    campaign = _resolve_campaign(db, prospect)
+    advance_auto_skipped_linkedin_touches(db, prospect=prospect, campaign=campaign)
+    if scheduled:
+        if campaign is None or not campaign.seller_id or user.id != campaign.seller_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Automatización: vendedor asignado inválido para este prospecto",
+            )
+        if prospect.owner_user_id and prospect.owner_user_id != user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Automatización: el prospecto no pertenece al SDR de la campaña",
+            )
+        if not is_assisted_sequence_touch_due(prospect, day, campaign=campaign):
+            raise HTTPException(
+                status_code=400,
+                detail="Toque aún no corresponde por calendario de secuencia",
+            )
+    elif not can_manage_outreach(user, prospect):
         raise HTTPException(status_code=403, detail="No podés ejecutar toques en este prospecto")
     if prospect.sequence_started_at is None:
         raise HTTPException(status_code=400, detail="Iniciá la secuencia antes de ejecutar toques")
@@ -1549,27 +2120,149 @@ def execute_sequence_touch(db: Session, *, user: User, prospect: Prospect, day: 
             status_code=400,
             detail="La secuencia está pausada por respuesta del prospecto. Respondé antes de ejecutar más toques.",
         )
-    if day not in PLAYBOOK_DAYS:
+    if day not in _planned_days(prospect, campaign):
         raise HTTPException(status_code=400, detail="Día de secuencia inválido")
 
-    nxt = next_executable_day(prospect)
+    nxt = next_executable_day(prospect, campaign)
     if nxt != day:
         raise HTTPException(
             status_code=400,
             detail=f"El próximo toque ejecutable es Día {nxt}" if nxt else "La secuencia ya está completa",
         )
 
-    step = _playbook_step(day)
+    step = _playbook_step(day, campaign)
     if step is None:
         raise HTTPException(status_code=400, detail="Toque no encontrado en playbook")
-    if not _channel_ready(prospect, step.channel):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Canal {step.channel} no disponible para este prospecto",
+
+    # Expirar Contactar a los 3 días (deja de usar LinkedIn; sigue email/WhatsApp).
+    try:
+        from app.services.linkedin_sequence_policy import refresh_linkedin_sequence_state
+
+        if refresh_linkedin_sequence_state(prospect):
+            db.flush()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Si el canal del plan no está habilitado → omitir y seguir.
+    # WhatsApp asistido NO requiere Meta Cloud API.
+    if step.channel == "whatsapp":
+        allowed = coerce_allowed_channels(
+            getattr(campaign, "allowed_channels", None) if campaign else None
         )
+        if "whatsapp" not in allowed:
+            result = _auto_omit_sequence_touch(
+                db,
+                prospect=prospect,
+                day=day,
+                reason="whatsapp_pendiente",
+            )
+            db.commit()
+            return {
+                **result,
+                "omitted": True,
+                "channel": "whatsapp",
+                "summary": (
+                    "WhatsApp no está habilitado en esta campaña. "
+                    "Día omitido; la secuencia sigue con los canales habilitados."
+                ),
+            }
+    elif campaign is not None:
+        allowed = coerce_allowed_channels(getattr(campaign, "allowed_channels", None))
+        if allowed and step.channel not in allowed:
+            result = _auto_omit_sequence_touch(
+                db,
+                prospect=prospect,
+                day=day,
+                reason="canal_no_habilitado",
+            )
+            db.commit()
+            return {
+                **result,
+                "omitted": True,
+                "channel": step.channel,
+                "summary": f"Canal {step.channel} no habilitado en la campaña; toque omitido.",
+            }
+
+    if not _channel_ready(prospect, step.channel):
+        result = _auto_omit_sequence_touch(
+            db,
+            prospect=prospect,
+            day=day,
+            reason=f"{step.channel}_sin_dato",
+        )
+        db.commit()
+        tracking = build_sequence_tracking(db, prospect=prospect)
+        return {
+            **result,
+            "omitted": True,
+            "channel": step.channel,
+            "summary": (
+                f"Canal {step.channel} no disponible para este prospecto; "
+                "día omitido y la secuencia sigue."
+            ),
+            "tracking": tracking,
+        }
+
+    existing_entry = _touch_log(prospect).get(str(day), {})
+    # No resetear un WhatsApp ya marcado por el SDR (evita regenerar el frío).
+    wa_sdr_sent = (
+        step.channel == "whatsapp"
+        and bool(getattr(prospect, "whatsapp_sdr_marked_sent_at", None))
+        and not (prospect.whatsapp_assisted_draft or "").strip()
+    )
+    if not wa_sdr_sent:
+        _maybe_reset_retryable_touch(prospect, day)
+        existing_entry = _touch_log(prospect).get(str(day), {})
+
+    if step.channel == "linkedin" and existing_entry.get("status") == TOUCH_GENERADO:
+        has_queue_body = bool(
+            (prospect.linkedin_assisted_draft or "").strip()
+            or (existing_entry.get("message_body") or "").strip()
+            or (existing_entry.get("body") or "").strip()
+        )
+        if has_queue_body:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Este toque LinkedIn ya está en la cola. "
+                    "Usá «Enviar mensaje» en Centro de outreach y marcá como enviado."
+                ),
+            )
+
+    if step.channel == "whatsapp" and existing_entry.get("status") == TOUCH_GENERADO:
+        # Ya marcado enviado por el SDR pero el log quedó en generado → cerrar, no regenerar frío.
+        if getattr(prospect, "whatsapp_sdr_marked_sent_at", None) and not (
+            prospect.whatsapp_assisted_draft or ""
+        ).strip():
+            closed = complete_pending_whatsapp_sequence_touch(db, prospect=prospect)
+            db.commit()
+            tracking = build_sequence_tracking(db, prospect=prospect)
+            return {
+                "prospect_id": prospect.id,
+                "day": closed or day,
+                "channel": "whatsapp",
+                "whatsapp_assisted": True,
+                "skipped": True,
+                "already_sent": True,
+                "message": "Toque WhatsApp ya confirmado como enviado; no se regenera el frío.",
+                "tracking": tracking,
+            }
+        has_wa_body = bool(
+            (prospect.whatsapp_assisted_draft or "").strip()
+            or (existing_entry.get("message_body") or "").strip()
+            or (existing_entry.get("body") or "").strip()
+        )
+        if has_wa_body:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Este toque WhatsApp ya está en la cola. "
+                    "Usá «Enviar WhatsApp» en Centro de outreach y marcá como enviado."
+                ),
+            )
 
     readiness = assess_outreach_readiness(db, prospect=prospect)
-    campaign = readiness.get("campaign")
+    campaign = readiness.get("campaign") or campaign
     product = readiness.get("product")
     if campaign is None:
         raise HTTPException(status_code=400, detail="Campaña no configurada")
@@ -1579,6 +2272,158 @@ def execute_sequence_touch(db: Session, *, user: User, prospect: Prospect, day: 
     from app.services import outreach_simulation as sim
 
     now = _now()
+    had_linkedin_mention = (
+        getattr(prospect, "linkedin_mention_next_touch", False) and step.channel != "linkedin"
+    )
+
+    # LinkedIn: LI-SAFE = borrador a cola sin verify 1º. Legacy = verify primero.
+    if step.channel == "linkedin":
+        from app.services.linkedin_assisted_service import (
+            CONN_INVITE_PENDING,
+            CONN_INVITE_SENT,
+            LI_SAFE_NO_PROFILE_PROBE,
+            is_real_linkedin_profile_url,
+            mark_connection_check_pending,
+            read_connection_status,
+        )
+        from app.services.linkedin_sequence_policy import (
+            is_linkedin_connected,
+            linkedin_connect_failed,
+        )
+
+        if not is_real_linkedin_profile_url(prospect.linkedin_url):
+            raise HTTPException(
+                status_code=400,
+                detail="LinkedIn personal real requerido (linkedin.com/in/...).",
+            )
+        if linkedin_connect_failed(prospect):
+            result = _auto_omit_sequence_touch(
+                db,
+                prospect=prospect,
+                day=day,
+                reason="linkedin_sin_conexion",
+            )
+            db.commit()
+            tracking = build_sequence_tracking(db, prospect=prospect)
+            return {
+                "prospect_id": prospect.id,
+                "day": day,
+                "channel": step.channel,
+                "linkedin_assisted": False,
+                "skipped": True,
+                "omitted": True,
+                "message": result["message"],
+                "tracking": tracking,
+            }
+        if not LI_SAFE_NO_PROFILE_PROBE:
+            conn = read_connection_status(prospect)
+            if conn in ("checking", "check_queued"):
+                # Ya en checking o en cola lenta: no re-marcar.
+                # Si aún no hay texto, lo generamos ahora para que el SDR lo vea armado.
+                if not (prospect.linkedin_assisted_draft or "").strip():
+                    try:
+                        content = _generate_real_touch_content(
+                            db,
+                            prospect=prospect,
+                            campaign=campaign,
+                            product=product,
+                            day=day,
+                            prior=_prior_sent_touches(prospect, day, campaign),
+                        )
+                        draft_body = (content.get("message_body") or content.get("body") or "").strip()
+                        if draft_body:
+                            prospect.linkedin_assisted_draft = draft_body
+                            _persist_touch_draft(prospect, _draft_by_day(prospect), content)
+                            log = _touch_log(prospect)
+                            entry = dict(log.get(str(day)) or {})
+                            entry.update(
+                                {
+                                    "status": TOUCH_GENERADO,
+                                    "message_body": draft_body,
+                                    "body": content.get("body"),
+                                    "subject": content.get("subject"),
+                                    "awaiting_connection_check": True,
+                                    "error": None,
+                                }
+                            )
+                            log[str(day)] = entry
+                            _save_touch_log(prospect, log)
+                            db.commit()
+                    except Exception:
+                        pass
+                tracking = build_sequence_tracking(db, prospect=prospect)
+                return {
+                    "prospect_id": prospect.id,
+                    "day": day,
+                    "channel": "linkedin",
+                    "linkedin_assisted": True,
+                    "pending_verify": True,
+                    "message": (
+                        "Verificando si ya es contacto en LinkedIn…"
+                        if conn == "checking"
+                        else "En cola de verificación LinkedIn (de a uno)…"
+                    ),
+                    "tracking": tracking,
+                }
+            if (
+                not is_linkedin_connected(prospect)
+                and conn not in (CONN_INVITE_PENDING, CONN_INVITE_SENT)
+            ):
+                # Armar el mensaje YA (antes de verificar 1º grado) para que la cola
+                # tenga texto listo: Conectar o Enviar mensaje.
+                draft_body = (prospect.linkedin_assisted_draft or "").strip() or None
+                content_preview: dict[str, Any] | None = None
+                if not draft_body:
+                    content_preview = _generate_real_touch_content(
+                        db,
+                        prospect=prospect,
+                        campaign=campaign,
+                        product=product,
+                        day=day,
+                        prior=_prior_sent_touches(prospect, day, campaign),
+                    )
+                    draft_body = (
+                        content_preview.get("message_body")
+                        or content_preview.get("body")
+                        or ""
+                    ).strip() or None
+                    if content_preview:
+                        _persist_touch_draft(prospect, _draft_by_day(prospect), content_preview)
+                mark_connection_check_pending(
+                    db,
+                    prospect,
+                    campaign,
+                    log_event=True,
+                    pending_draft=draft_body,
+                )
+                log = _touch_log(prospect)
+                log[str(day)] = {
+                    **(log.get(str(day)) or {}),
+                    "status": TOUCH_GENERADO,
+                    "sent_at": None,
+                    "message_id": None,
+                    "subject": (content_preview or {}).get("subject") if content_preview else None,
+                    "message_body": draft_body,
+                    "body": (content_preview or {}).get("body") if content_preview else draft_body,
+                    "error": None,
+                    "awaiting_connection_check": True,
+                }
+                _save_touch_log(prospect, log)
+                db.commit()
+                tracking = build_sequence_tracking(db, prospect=prospect)
+                return {
+                    "prospect_id": prospect.id,
+                    "day": day,
+                    "channel": "linkedin",
+                    "linkedin_assisted": True,
+                    "pending_verify": True,
+                    "message": (
+                        "Mensaje LinkedIn armado. Verificando si ya son contacto… "
+                        "En segundos aparece Enviar mensaje o Enviar Contactar."
+                    ),
+                    "tracking": tracking,
+                }
+
     try:
         content = _generate_real_touch_content(
             db,
@@ -1586,7 +2431,7 @@ def execute_sequence_touch(db: Session, *, user: User, prospect: Prospect, day: 
             campaign=campaign,
             product=product,
             day=day,
-            prior=_prior_sent_touches(prospect, day),
+            prior=_prior_sent_touches(prospect, day, campaign),
         )
     except HTTPException as exc:
         from app.services.openai_service import is_retryable_openai_http_detail
@@ -1598,7 +2443,7 @@ def execute_sequence_touch(db: Session, *, user: User, prospect: Prospect, day: 
                 "day": day,
                 "channel": step.channel,
                 "objective": step.objective,
-                "prior_touch_count": len(_prior_sent_touches(prospect, day)),
+                "prior_touch_count": len(_prior_sent_touches(prospect, day, campaign)),
                 "saved_at": now.isoformat(),
             }
             _mark_touch_openai_pending(
@@ -1634,67 +2479,1063 @@ def execute_sequence_touch(db: Session, *, user: User, prospect: Prospect, day: 
         db.commit()
         raise
 
+    from app.services import outreach_metrics as om
+    from app.services.sequence_touch_gmail import (
+        deliver_sequence_email_touch_via_gmail,
+        sequence_email_touch_uses_gmail,
+    )
+
     message_body = content["message_body"]
+    if had_linkedin_mention:
+        from app.services.linkedin_sequence_policy import consume_linkedin_mention_flag
+
+        consume_linkedin_mention_flag(prospect)
     _persist_touch_draft(prospect, draft, content)
 
-    try:
-        msg = sim.make_message(
-            prospect_id=prospect.id,
-            campaign_id=campaign.id,
-            sender_type="ai",
-            message=message_body,
-            channel=step.channel,
-            direction="outbound",
-            is_testing=True,
+    if content.get("fallback_test") and om.is_real_mode() and sequence_email_touch_uses_gmail(
+        day=day, channel=step.channel
+    ):
+        _mark_touch_failed(
+            prospect,
+            day,
+            "OpenAI devolvió mensaje de prueba (FALLBACK TEST). No se envió por el canal real. Reintentá.",
         )
-        db.add(msg)
-        db.flush()
+        db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "OpenAI en modo fallback — no se envió el toque real.",
+                "summary": "Reintentá en unos segundos para generar y enviar el mensaje real.",
+                "retryable": True,
+            },
+        )
+
+    gmail_delivery: dict[str, Any] | None = None
+    if sequence_email_touch_uses_gmail(day=day, channel=step.channel):
+        gmail_delivery = deliver_sequence_email_touch_via_gmail(
+            db,
+            user=user,
+            campaign=campaign,
+            prospect=prospect,
+            day=day,
+            subject=str(content.get("subject") or ""),
+            body=str(content.get("body") or ""),
+        )
+
+    whatsapp_delivery: dict[str, Any] | None = None
+    linkedin_assisted = False
+    whatsapp_assisted = False
+    call_assisted = False
+    gmail_assisted = False  # borrador Gmail pendiente de envío manual
+    gmail_sent_now = False  # auto_send: ya salió por Gmail API
+    msg = None
+    try:
+        if gmail_delivery is not None:
+            msg_id = int(gmail_delivery["message_id"])
+            msg = db.get(OutreachMessage, msg_id)
+            if msg is None:
+                raise RuntimeError("No se encontró el mensaje outbound tras crear borrador Gmail")
+            if gmail_delivery.get("sent"):
+                gmail_sent_now = True
+            else:
+                gmail_assisted = True
+        elif step.channel == "linkedin":
+            from app.services.linkedin_assisted_service import (
+                is_real_linkedin_profile_url,
+                queue_linkedin_sequence_touch,
+            )
+
+            if not is_real_linkedin_profile_url(prospect.linkedin_url):
+                raise HTTPException(
+                    status_code=400,
+                    detail="LinkedIn personal real requerido (linkedin.com/in/...).",
+                )
+            li_action = queue_linkedin_sequence_touch(
+                db, prospect, campaign, message_body, log_event=True
+            )
+            if li_action == "skip":
+                result = _auto_omit_sequence_touch(
+                    db,
+                    prospect=prospect,
+                    day=day,
+                    reason="linkedin_sin_conexion",
+                )
+                db.commit()
+                tracking = build_sequence_tracking(db, prospect=prospect)
+                return {
+                    "prospect_id": prospect.id,
+                    "day": day,
+                    "channel": step.channel,
+                    "linkedin_assisted": False,
+                    "skipped": True,
+                    "message": result["message"],
+                    "tracking": tracking,
+                }
+            if li_action == "hold":
+                # Compat: ya no debería ocurrir (invite_sent → message).
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Mensaje LinkedIn en cola: envialo cuando el contacto acepte. "
+                        "Si ya pasó el plazo, la secuencia sigue por otros canales."
+                    ),
+                )
+            # connect | message | checking: toque en cola (verificación o envío manual).
+            linkedin_assisted = True
+        elif step.channel == "whatsapp":
+            from app.services.whatsapp_assisted_service import (
+                prospect_whatsapp_digits,
+                queue_whatsapp_sequence_touch,
+            )
+
+            wa_action = queue_whatsapp_sequence_touch(
+                db, prospect, campaign, message_body, log_event=True
+            )
+            if wa_action == "skip":
+                if not prospect_whatsapp_digits(prospect):
+                    result = _auto_omit_sequence_touch(
+                        db,
+                        prospect=prospect,
+                        day=day,
+                        reason="whatsapp_sin_dato",
+                    )
+                    db.commit()
+                    tracking = build_sequence_tracking(db, prospect=prospect)
+                    return {
+                        "prospect_id": prospect.id,
+                        "day": day,
+                        "channel": step.channel,
+                        "whatsapp_assisted": False,
+                        "skipped": True,
+                        "omitted": True,
+                        "message": result["message"],
+                        "tracking": tracking,
+                    }
+                raise HTTPException(
+                    status_code=400,
+                    detail="No se pudo generar el borrador de WhatsApp. Reintentá el toque.",
+                )
+            whatsapp_assisted = True
+        elif step.channel == "call":
+            from app.services.call_assisted_service import (
+                prospect_has_callable_number,
+                queue_call_sequence_touch,
+            )
+
+            call_action = queue_call_sequence_touch(
+                db, prospect, campaign, message_body, log_event=True
+            )
+            if call_action == "skip":
+                if not prospect_has_callable_number(prospect):
+                    result = _auto_omit_sequence_touch(
+                        db,
+                        prospect=prospect,
+                        day=day,
+                        reason="call_sin_dato",
+                    )
+                    db.commit()
+                    tracking = build_sequence_tracking(db, prospect=prospect)
+                    return {
+                        "prospect_id": prospect.id,
+                        "day": day,
+                        "channel": step.channel,
+                        "call_assisted": False,
+                        "skipped": True,
+                        "omitted": True,
+                        "message": result["message"],
+                        "tracking": tracking,
+                    }
+                raise HTTPException(
+                    status_code=400,
+                    detail="No se pudo preparar el guion de llamada. Reintentá el toque.",
+                )
+            call_assisted = True
+        else:
+            msg = sim.make_message(
+                prospect_id=prospect.id,
+                campaign_id=campaign.id,
+                sender_type="ai",
+                message=message_body,
+                channel=step.channel,
+                direction="outbound",
+                is_testing=True,
+            )
+            db.add(msg)
+            db.flush()
+            followup_engine.record_ai_outbound(
+                db,
+                prospect,
+                campaign_calendar_link=campaign.calendar_link or "",
+                outbound_text=message_body,
+            )
+        if linkedin_assisted or gmail_assisted or whatsapp_assisted or call_assisted:
+            prev_touch = _touch_entry(prospect, day)
+            touch_fields: dict[str, Any] = {
+                "status": TOUCH_GENERADO,
+                "sent_at": None,
+                "message_id": msg.id if msg is not None else None,
+                "subject": content.get("subject"),
+                "message_body": message_body,
+                "body": content.get("body"),
+                "error": None,
+                "openai_last_error": None,
+                "generation_context": None,
+                "fallback_test": bool(content.get("fallback_test")),
+            }
+            if linkedin_assisted or whatsapp_assisted or call_assisted:
+                touch_fields["generated_at"] = prev_touch.get("generated_at") or now.isoformat()
+                touch_fields["channel"] = step.channel
+            if gmail_assisted:
+                touch_fields["gmail_draft_id"] = (gmail_delivery or {}).get("gmail_draft_id")
+                touch_fields["gmail_message_id"] = (gmail_delivery or {}).get("gmail_message_id")
+                touch_fields["gmail_web_link"] = (gmail_delivery or {}).get("gmail_web_link")
+            _set_touch_entry(prospect, day, **touch_fields)
+        else:
+            _append_fired(prospect, day)
+            _set_touch_entry(
+                prospect,
+                day,
+                status=TOUCH_ENVIADO,
+                sent_at=now.isoformat(),
+                message_id=msg.id if msg is not None else None,
+                subject=content.get("subject"),
+                message_body=message_body,
+                body=content.get("body"),
+                error=None,
+                openai_last_error=None,
+                generation_context=None,
+                fallback_test=bool(content.get("fallback_test")),
+                whatsapp_message_id=(whatsapp_delivery or {}).get("whatsapp_message_id"),
+                gmail_message_id=(gmail_delivery or {}).get("gmail_message_id"),
+            )
+            try:
+                from app.services.crm import sync as crm_sync
+
+                crm_sync.sync_touch_sent(
+                    db,
+                    prospect=prospect,
+                    day=day,
+                    channel=step.channel,
+                    message_body=message_body,
+                )
+            except Exception:
+                pass
+        next_at, next_label = compute_next_touch(prospect)
+        prospect.next_touch_at = next_at
+        _sync_sequence_completion(db, prospect=prospect)
+        db.commit()
+        db.refresh(prospect)
+    except HTTPException:
+        # Control de flujo intencional (p. ej. 409 "esperando aceptación de conexión",
+        # 429 límite diario): no marcar el toque como fallido.
+        db.rollback()
+        raise
+    except Exception as exc:
+        _mark_touch_failed(prospect, day, f"No se pudo registrar el borrador: {exc}")
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"No se pudo preparar el toque: {exc}") from exc
+
+    tracking = build_sequence_tracking(db, prospect=prospect)
+    if linkedin_assisted:
+        touch_message = (
+            f"Día {day} listo en cola LinkedIn. En Centro de outreach: "
+            "si hace falta, primero «Conectar»; después el mensaje preparado "
+            "(el texto ya está compuesto según el orden del toque)."
+        )
+        return {
+            "prospect_id": prospect.id,
+            "day": day,
+            "channel": step.channel,
+            "touch_status": TOUCH_GENERADO,
+            "status_label": "Listo en LinkedIn",
+            "fallback_test": bool(content.get("fallback_test")),
+            "gmail_sent": False,
+            "gmail_draft_created": False,
+            "gmail_message_id": None,
+            "linkedin_assisted": True,
+            "whatsapp_assisted": False,
+            "message": touch_message,
+            "tracking": tracking,
+        }
+
+    if whatsapp_assisted:
+        phone = (prospect.whatsapp or prospect.phone or "").strip()
+        touch_message = (
+            f"Día {day} listo en cola WhatsApp ({phone}). "
+            "En Centro de outreach → Notificaciones WhatsApp: "
+            "abrí el chat, enviá manualmente y confirmá el envío."
+        )
+        return {
+            "prospect_id": prospect.id,
+            "day": day,
+            "channel": step.channel,
+            "touch_status": TOUCH_GENERADO,
+            "status_label": "Listo en WhatsApp",
+            "fallback_test": bool(content.get("fallback_test")),
+            "gmail_sent": False,
+            "gmail_draft_created": False,
+            "gmail_message_id": None,
+            "linkedin_assisted": False,
+            "whatsapp_assisted": True,
+            "call_assisted": False,
+            "message": touch_message,
+            "tracking": tracking,
+        }
+
+    if call_assisted:
+        from app.services.call_assisted_service import prospect_call_target
+
+        _, call_kind, call_display = prospect_call_target(prospect)
+        kind_label = "fijo" if call_kind == "landline" else "celular"
+        touch_message = (
+            f"Día {day} — tenés que llamar hoy al {kind_label} {call_display}. "
+            "En Centro de outreach → Llamadas: seguí el guion y marcá como hecha."
+        )
+        return {
+            "prospect_id": prospect.id,
+            "day": day,
+            "channel": step.channel,
+            "touch_status": TOUCH_GENERADO,
+            "status_label": "Llamada pendiente",
+            "fallback_test": bool(content.get("fallback_test")),
+            "gmail_sent": False,
+            "gmail_draft_created": False,
+            "gmail_message_id": None,
+            "linkedin_assisted": False,
+            "whatsapp_assisted": False,
+            "call_assisted": True,
+            "message": touch_message,
+            "tracking": tracking,
+        }
+
+    if gmail_assisted:
+        touch_message = (
+            f"Día {day} — borrador creado en Gmail para {(prospect.email or '').strip()}. "
+            "Revisá Borradores, enviá manualmente y marcá como enviado en Nexus."
+        )
+        return {
+            "prospect_id": prospect.id,
+            "day": day,
+            "channel": step.channel,
+            "touch_status": TOUCH_GENERADO,
+            "status_label": "Borrador en Gmail",
+            "fallback_test": bool(content.get("fallback_test")),
+            "gmail_sent": False,
+            "gmail_draft_created": True,
+            "gmail_message_id": (gmail_delivery or {}).get("gmail_message_id"),
+            "gmail_draft_id": (gmail_delivery or {}).get("gmail_draft_id"),
+            "gmail_web_link": (gmail_delivery or {}).get("gmail_web_link"),
+            "linkedin_assisted": False,
+            "message": touch_message,
+            "tracking": tracking,
+        }
+
+    sent_label = "FALLBACK TEST" if content.get("fallback_test") else TOUCH_STATUS_LABELS[TOUCH_ENVIADO]
+    if gmail_sent_now:
+        to_email = (prospect.email or "").strip()
+        touch_message = f"Día {day} — email enviado por Gmail a {to_email}."
+    elif whatsapp_delivery is not None:
+        phone = (prospect.whatsapp or prospect.phone or "").strip()
+        if whatsapp_delivery.get("whatsapp_dry_run"):
+            touch_message = (
+                f"Día {day} — WhatsApp simulado (WHATSAPP_DRY_RUN) a {phone}. "
+                "Listo para Meta real."
+            )
+        else:
+            touch_message = f"Día {day} enviado por WhatsApp real a {phone}"
+    elif content.get("fallback_test"):
+        touch_message = (
+            f"Día {day} enviado con mensaje mock (FALLBACK TEST) — OpenAI en rate limit"
+        )
+    else:
+        touch_message = f"Día {day} enviado por {step.channel} (simulado en Nexus)"
+    return {
+        "prospect_id": prospect.id,
+        "day": day,
+        "channel": step.channel,
+        "touch_status": TOUCH_ENVIADO,
+        "status_label": sent_label,
+        "fallback_test": bool(content.get("fallback_test")),
+        "gmail_sent": bool(gmail_sent_now),
+        "gmail_draft_created": False,
+        "gmail_message_id": (gmail_delivery or {}).get("gmail_message_id") if gmail_sent_now else None,
+        "gmail_web_link": (gmail_delivery or {}).get("gmail_web_link") if gmail_sent_now else None,
+        "whatsapp_sent": whatsapp_delivery is not None,
+        "whatsapp_dry_run": bool((whatsapp_delivery or {}).get("whatsapp_dry_run")),
+        "whatsapp_message_id": (whatsapp_delivery or {}).get("whatsapp_message_id"),
+        "message": touch_message,
+        "tracking": tracking,
+    }
+
+
+def complete_pending_linkedin_sequence_touch(
+    db: Session,
+    *,
+    prospect: Prospect,
+    sent_at: datetime | None = None,
+) -> int | None:
+    """Tras confirmar envío manual en LinkedIn, avanza el toque de secuencia pendiente."""
+    log = _touch_log(prospect)
+    when = sent_at or _now()
+    campaign = _resolve_campaign(db, prospect)
+    chosen_day: int | None = None
+    for day in _planned_days(prospect, campaign):
+        entry = log.get(str(day), {})
+        if entry.get("status") != TOUCH_GENERADO:
+            continue
+        step = _playbook_step(day, campaign)
+        if step is None or step.channel != "linkedin":
+            continue
+        chosen_day = day
+        break
+    if chosen_day is None:
+        return None
+    _append_fired(prospect, chosen_day)
+    _set_touch_entry(
+        prospect,
+        chosen_day,
+        status=TOUCH_ENVIADO,
+        sent_at=when.isoformat(),
+        error=None,
+    )
+    entry = log.get(str(chosen_day), {})
+    try:
+        from app.services.crm import sync as crm_sync
+
+        crm_sync.sync_touch_sent(
+            db,
+            prospect=prospect,
+            day=chosen_day,
+            channel="linkedin",
+            message_body=entry.get("message_body") or entry.get("body"),
+        )
+    except Exception:
+        pass
+    next_at, _ = compute_next_touch(prospect)
+    prospect.next_touch_at = next_at
+    _sync_sequence_completion(db, prospect=prospect)
+    return chosen_day
+
+
+def complete_pending_whatsapp_sequence_touch(
+    db: Session,
+    *,
+    prospect: Prospect,
+    sent_at: datetime | None = None,
+) -> int | None:
+    """Tras confirmar envío manual en WhatsApp Web, avanza el toque de secuencia pendiente."""
+    log = _touch_log(prospect)
+    when = sent_at or _now()
+    campaign = _resolve_campaign(db, prospect)
+    chosen_day: int | None = None
+    for day in _planned_days(prospect, campaign):
+        entry = log.get(str(day), {})
+        if entry.get("status") != TOUCH_GENERADO:
+            continue
+        step = _playbook_step(day, campaign)
+        if step is None or step.channel != "whatsapp":
+            continue
+        chosen_day = day
+        break
+    if chosen_day is None:
+        return None
+    _append_fired(prospect, chosen_day)
+    _set_touch_entry(
+        prospect,
+        chosen_day,
+        status=TOUCH_ENVIADO,
+        sent_at=when.isoformat(),
+        error=None,
+        whatsapp_assisted_sent=True,
+        sdr_marked_sent=True,
+    )
+    entry = log.get(str(chosen_day), {})
+    try:
+        from app.services.crm import sync as crm_sync
+
+        crm_sync.sync_touch_sent(
+            db,
+            prospect=prospect,
+            day=chosen_day,
+            channel="whatsapp",
+            message_body=entry.get("message_body") or entry.get("body"),
+        )
+    except Exception:
+        pass
+    next_at, _ = compute_next_touch(prospect)
+    prospect.next_touch_at = next_at
+    _sync_sequence_completion(db, prospect=prospect)
+    return chosen_day
+
+
+def complete_pending_call_sequence_touch(
+    db: Session,
+    *,
+    prospect: Prospect,
+    sent_at: datetime | None = None,
+) -> int | None:
+    """Tras confirmar llamada manual, avanza el toque de secuencia pendiente."""
+    log = _touch_log(prospect)
+    when = sent_at or _now()
+    campaign = _resolve_campaign(db, prospect)
+    chosen_day: int | None = None
+    for day in _planned_days(prospect, campaign):
+        entry = log.get(str(day), {})
+        if entry.get("status") != TOUCH_GENERADO:
+            continue
+        step = _playbook_step(day, campaign)
+        ch = str(entry.get("channel") or (getattr(step, "channel", None) if step else "") or "").strip().lower()
+        if ch != "call":
+            continue
+        chosen_day = day
+        break
+    if chosen_day is None:
+        return None
+    _append_fired(prospect, chosen_day)
+    _set_touch_entry(
+        prospect,
+        chosen_day,
+        status=TOUCH_ENVIADO,
+        sent_at=when.isoformat(),
+        error=None,
+        call_assisted_sent=True,
+        sdr_marked_sent=True,
+    )
+    entry = log.get(str(chosen_day), {})
+    try:
+        from app.services.crm import sync as crm_sync
+
+        crm_sync.sync_touch_sent(
+            db,
+            prospect=prospect,
+            day=chosen_day,
+            channel="call",
+            message_body=entry.get("message_body") or entry.get("body"),
+        )
+    except Exception:
+        pass
+    next_at, _ = compute_next_touch(prospect)
+    prospect.next_touch_at = next_at
+    _sync_sequence_completion(db, prospect=prospect)
+    return chosen_day
+
+
+def mark_sequence_gmail_touch_sent(
+    db: Session,
+    *,
+    user: User,
+    prospect: Prospect,
+    day: int,
+    auto_detected: bool = False,
+) -> dict[str, Any]:
+    """Confirma envío del borrador Gmail del toque (manual o detectado por sync)."""
+    if not auto_detected and not can_manage_outreach(user, prospect):
+        raise HTTPException(status_code=403, detail="No podés marcar toques en este prospecto")
+    if day not in _planned_days(prospect):
+        raise HTTPException(status_code=400, detail="Día de secuencia inválido")
+
+    campaign = _resolve_campaign(db, prospect)
+    step = _playbook_step(day, campaign)
+    if step is None or step.channel != "email":
+        raise HTTPException(status_code=400, detail="Este toque no es un email de secuencia")
+
+    from app.services.sequence_touch_gmail import sequence_email_touch_uses_gmail
+
+    if not sequence_email_touch_uses_gmail(day=day, channel=step.channel):
+        raise HTTPException(status_code=400, detail="Este toque no usa borrador Gmail")
+
+    entry = _touch_entry(prospect, day)
+    if entry.get("status") != TOUCH_GENERADO:
+        raise HTTPException(
+            status_code=400,
+            detail="No hay borrador Gmail pendiente para este toque.",
+        )
+
+    message_body = str(entry.get("message_body") or entry.get("body") or "").strip()
+    if not message_body and not entry.get("gmail_draft_id"):
+        raise HTTPException(
+            status_code=400,
+            detail="Ejecutá el toque primero para crear el borrador en Gmail.",
+        )
+
+    now = _now()
+    _append_fired(prospect, day)
+    sent_fields: dict[str, Any] = {
+        "status": TOUCH_ENVIADO,
+        "sent_at": now.isoformat(),
+        "error": None,
+    }
+    if auto_detected:
+        sent_fields["gmail_auto_detected"] = True
+    else:
+        sent_fields["gmail_manually_sent"] = True
+    _set_touch_entry(prospect, day, **sent_fields)
+
+    from app.services import followup_engine
+
+    readiness = assess_outreach_readiness(db, prospect=prospect)
+    campaign = readiness.get("campaign")
+    if campaign is not None and message_body:
         followup_engine.record_ai_outbound(
             db,
             prospect,
             campaign_calendar_link=campaign.calendar_link or "",
             outbound_text=message_body,
         )
-        _append_fired(prospect, day)
-        _set_touch_entry(
-            prospect,
-            day,
-            status=TOUCH_ENVIADO,
-            sent_at=now.isoformat(),
-            message_id=msg.id,
-            subject=content.get("subject"),
-            message_body=message_body,
-            body=content.get("body"),
-            error=None,
-            openai_last_error=None,
-            generation_context=None,
-            fallback_test=bool(content.get("fallback_test")),
-        )
-        next_at, next_label = compute_next_touch(prospect)
-        prospect.next_touch_at = next_at
-        _sync_sequence_completion(db, prospect=prospect)
-        db.commit()
-        db.refresh(prospect)
-    except Exception as exc:
-        _mark_touch_failed(prospect, day, f"No se pudo registrar el envío: {exc}")
-        db.commit()
-        raise HTTPException(status_code=502, detail=f"No se pudo enviar el toque: {exc}") from exc
+        try:
+            from app.services.crm import sync as crm_sync
 
+            crm_sync.sync_touch_sent(
+                db,
+                prospect=prospect,
+                day=day,
+                channel="email",
+                message_body=message_body,
+            )
+        except Exception:
+            pass
+
+    next_at, _ = compute_next_touch(prospect)
+    prospect.next_touch_at = next_at
+    _sync_sequence_completion(db, prospect=prospect)
+    db.commit()
+    db.refresh(prospect)
     tracking = build_sequence_tracking(db, prospect=prospect)
-    sent_label = "FALLBACK TEST" if content.get("fallback_test") else TOUCH_STATUS_LABELS[TOUCH_ENVIADO]
     return {
         "prospect_id": prospect.id,
         "day": day,
         "touch_status": TOUCH_ENVIADO,
-        "status_label": sent_label,
-        "fallback_test": bool(content.get("fallback_test")),
+        "status_label": TOUCH_STATUS_LABELS[TOUCH_ENVIADO],
         "message": (
-            f"Día {day} enviado con mensaje mock (FALLBACK TEST) — OpenAI en rate limit"
-            if content.get("fallback_test")
-            else f"Día {day} enviado por {step.channel}"
+            f"Día {day} detectado como enviado en Gmail."
+            if auto_detected
+            else f"Día {day} marcado como enviado. Podés continuar con el próximo toque."
         ),
+        "fallback_test": bool(entry.get("fallback_test")),
+        "gmail_sent": False,
+        "gmail_draft_created": False,
+        "gmail_message_id": entry.get("gmail_message_id"),
         "tracking": tracking,
     }
+
+
+def _auto_omit_sequence_touch(
+    db: Session,
+    *,
+    prospect: Prospect,
+    day: int,
+    reason: str,
+) -> dict[str, Any]:
+    """Omite un toque sin chequeo de permisos (mantenimiento automático de secuencia)."""
+    now = _now()
+    _set_touch_entry(
+        prospect,
+        day,
+        status=TOUCH_OMITIDO,
+        skipped_at=now.isoformat(),
+        skip_reason=reason,
+    )
+    next_at, _ = compute_next_touch(prospect)
+    prospect.next_touch_at = next_at
+    _sync_sequence_completion(db, prospect=prospect)
+    return {
+        "prospect_id": prospect.id,
+        "day": day,
+        "touch_status": TOUCH_OMITIDO,
+        "message": f"Día {day} omitido automáticamente ({reason})",
+    }
+
+
+def _assisted_touch_was_sent(prospect: Prospect, channel: str, entry: dict[str, Any]) -> bool:
+    if entry.get("sdr_marked_sent") or entry.get("whatsapp_assisted_sent") or entry.get("call_assisted_sent"):
+        return True
+    if channel == "linkedin" and getattr(prospect, "linkedin_sdr_marked_sent_at", None):
+        return True
+    if channel == "whatsapp" and getattr(prospect, "whatsapp_sdr_marked_sent_at", None):
+        return True
+    if channel == "call" and getattr(prospect, "call_sdr_marked_done_at", None):
+        return True
+    return False
+
+
+def _clear_assisted_live_queue(prospect: Prospect, channel: str) -> None:
+    """Saca el toque de la bandeja; el texto queda en el touch log (historial)."""
+    if channel == "linkedin":
+        prospect.linkedin_assisted_draft = None
+        prospect.linkedin_assist_session_id = None
+        if (getattr(prospect, "linkedin_assist_status", None) or "").strip().lower() != "sent":
+            prospect.linkedin_assist_status = None
+        return
+    if channel == "whatsapp":
+        prospect.whatsapp_assisted_draft = None
+        prospect.whatsapp_assist_session_id = None
+        if (getattr(prospect, "whatsapp_assist_status", None) or "").strip().lower() != "sent":
+            prospect.whatsapp_assist_status = None
+        return
+    if channel == "call":
+        prospect.call_assisted_brief = None
+        from app.services.call_assisted_service import read_assist_status
+
+        if read_assist_status(prospect) != "done":
+            prospect.call_assist_status = None
+
+
+def _assisted_queue_is_live(prospect: Prospect, channel: str) -> bool:
+    """True si el SDR todavía tiene el toque asistido en bandeja."""
+    ch = (channel or "").strip().lower()
+    if ch == "linkedin":
+        draft = (getattr(prospect, "linkedin_assisted_draft", None) or "").strip()
+        if not draft:
+            return False
+        status = (getattr(prospect, "linkedin_assist_status", None) or "").strip().lower()
+        return status in {"", "none", "suggested", "prepared", "opened", "checking"}
+    if ch == "whatsapp":
+        draft = (getattr(prospect, "whatsapp_assisted_draft", None) or "").strip()
+        if not draft:
+            return False
+        status = (getattr(prospect, "whatsapp_assist_status", None) or "").strip().lower()
+        return status in {"", "none", "suggested", "prepared", "opened"}
+    if ch == "call":
+        brief = (getattr(prospect, "call_assisted_brief", None) or "").strip()
+        if not brief:
+            return False
+        from app.services.call_assisted_service import read_assist_status
+
+        return read_assist_status(prospect) in {"", "none", "suggested"}
+    return False
+
+
+_CONVERSATION_HOLD_GROUPS = frozenset({"encajonado", "postergado", "reuniones"})
+
+
+def _sequence_held_for_conversation(prospect: Prospect) -> bool:
+    if bool(getattr(prospect, "sequence_paused", False)):
+        return True
+    group = str(getattr(prospect, "sequence_group", None) or "").strip().lower()
+    return group in _CONVERSATION_HOLD_GROUPS
+
+
+def _assisted_queue_started_at(
+    prospect: Prospect, entry: dict[str, Any], channel: str
+) -> datetime | None:
+    generated = _parse_dt(entry.get("generated_at"))
+    if generated is not None:
+        return generated
+    if channel == "linkedin":
+        assisted = _parse_dt(getattr(prospect, "linkedin_last_assisted_at", None))
+        if assisted is not None:
+            return assisted
+    if channel == "whatsapp":
+        assisted = _parse_dt(getattr(prospect, "whatsapp_last_assisted_at", None))
+        if assisted is not None:
+            return assisted
+    return None
+
+
+def assisted_next_touch_due_at(
+    prospect: Prospect,
+    day: int,
+    campaign: Campaign | None = None,
+) -> datetime | None:
+    """
+    Momento exacto en que el toque `day` puede generarse / el anterior debe salir.
+
+    - Primer toque del plan: sequence_started_at + (day-1) días (misma hora).
+      Ej. inicio vie 17:00 → día 4 el lun 17:00.
+    - Toques siguientes: generated_at del toque anterior + 3 días (misma hora).
+    """
+    from app.services.linkedin_sequence_policy import ASSISTED_QUEUE_TTL_DAYS
+
+    started = prospect.sequence_started_at
+    if started is None:
+        return None
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+
+    planned = list(_planned_days(prospect, campaign))
+    if day not in planned:
+        planned = sorted(set(planned) | {day})
+    prev = max((d for d in planned if d < day), default=None)
+    if prev is None:
+        return started + timedelta(days=max(0, day - 1))
+
+    log = _touch_log(prospect)
+    prev_entry = log.get(str(prev), {}) if isinstance(log.get(str(prev)), dict) else {}
+    step = _playbook_step(prev, campaign)
+    prev_channel = str(
+        prev_entry.get("channel")
+        or (getattr(step, "channel", None) if step else "")
+        or ""
+    ).strip().lower()
+    anchor = _assisted_queue_started_at(prospect, prev_entry, prev_channel)
+    if anchor is None:
+        anchor = (
+            _parse_dt(prev_entry.get("sent_at"))
+            or _parse_dt(prev_entry.get("skipped_at"))
+            or started
+        )
+    first = min(planned) if planned else prev
+    if prev == first:
+        # Primer tramo: ancla = inicio de secuencia (no generated_at tardío).
+        return started + timedelta(days=ASSISTED_QUEUE_TTL_DAYS)
+    return anchor + timedelta(days=ASSISTED_QUEUE_TTL_DAYS)
+
+
+def is_assisted_sequence_touch_due(
+    prospect: Prospect,
+    day: int,
+    *,
+    campaign: Campaign | None = None,
+    now: datetime | None = None,
+) -> bool:
+    now = now or _now()
+    due_at = assisted_next_touch_due_at(prospect, day, campaign)
+    if due_at is None:
+        return False
+    return due_at <= now
+
+
+def ensure_single_assisted_live_queue(
+    prospect: Prospect,
+    campaign: Campaign | None = None,
+) -> bool:
+    """
+    Nunca LI y WA juntos en bandeja.
+    Conversación (paused/reuniones):
+      - solo borrador WA → se conserva (Responder tras inbound WhatsApp);
+      - hay borrador LI → WhatsApp frío sale (conversación LinkedIn).
+    Si no: solo el canal del próximo toque ejecutable.
+    """
+    li_draft = (getattr(prospect, "linkedin_assisted_draft", None) or "").strip()
+    wa_draft = (getattr(prospect, "whatsapp_assisted_draft", None) or "").strip()
+    call_brief = (getattr(prospect, "call_assisted_brief", None) or "").strip()
+    changed = False
+
+    if _sequence_held_for_conversation(prospect):
+        if wa_draft and li_draft:
+            _clear_assisted_live_queue(prospect, "whatsapp")
+            changed = True
+        return changed
+
+    nxt = next_executable_day(prospect, campaign)
+    step = _playbook_step(nxt, campaign) if nxt is not None else None
+    channel = str(getattr(step, "channel", None) or "").strip().lower() if step else ""
+
+    if channel == "whatsapp":
+        if li_draft:
+            _clear_assisted_live_queue(prospect, "linkedin")
+            changed = True
+        if call_brief:
+            _clear_assisted_live_queue(prospect, "call")
+            changed = True
+    elif channel == "linkedin":
+        if wa_draft:
+            _clear_assisted_live_queue(prospect, "whatsapp")
+            changed = True
+        if call_brief:
+            _clear_assisted_live_queue(prospect, "call")
+            changed = True
+    elif channel == "call":
+        if li_draft:
+            _clear_assisted_live_queue(prospect, "linkedin")
+            changed = True
+        if wa_draft:
+            _clear_assisted_live_queue(prospect, "whatsapp")
+            changed = True
+    else:
+        # Email u otro: las colas asistidas LI/WA/Call no deben mostrar cards.
+        if li_draft:
+            _clear_assisted_live_queue(prospect, "linkedin")
+            changed = True
+        if wa_draft:
+            _clear_assisted_live_queue(prospect, "whatsapp")
+            changed = True
+        if call_brief:
+            _clear_assisted_live_queue(prospect, "call")
+            changed = True
+    return changed
+
+
+def expire_unsent_assisted_touches_for_calendar(
+    db: Session,
+    *,
+    prospect: Prospect,
+    campaign: Campaign | None,
+    now: datetime | None = None,
+) -> list[int]:
+    """
+    Omite LI/WA no enviados cuando llega la hora exacta del siguiente toque
+    (+3 días desde inicio de secuencia en el 1er tramo; +3 desde generated_at
+    del anterior en el resto). El toque anterior SALE de bandeja y el siguiente
+    puede generarse. No avanza si hay conversación (paused / reuniones).
+    """
+    now = now or _now()
+    started = prospect.sequence_started_at
+    if started is None:
+        return []
+    if _sequence_held_for_conversation(prospect):
+        return []
+
+    planned = list(_planned_days(prospect, campaign))
+    log = _touch_log(prospect)
+    omitted: list[int] = []
+
+    def _later_assisted_live(day: int) -> bool:
+        for d in planned:
+            if d <= day:
+                continue
+            entry = log.get(str(d), {})
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("status") != TOUCH_GENERADO:
+                continue
+            step = _playbook_step(d, campaign)
+            ch = str(
+                entry.get("channel")
+                or (getattr(step, "channel", None) if step else "")
+                or ""
+            ).strip().lower()
+            if ch in ("linkedin", "whatsapp", "call"):
+                return True
+        return False
+
+    def _should_leave_unsent(day: int) -> bool:
+        following = next((d for d in planned if d > day), None)
+        if following is not None:
+            return is_assisted_sequence_touch_due(
+                prospect, following, campaign=campaign, now=now
+            )
+        # Último toque asistido: 3 días desde que se generó.
+        entry = log.get(str(day), {})
+        if not isinstance(entry, dict):
+            return False
+        step = _playbook_step(day, campaign)
+        ch = str(
+            entry.get("channel")
+            or (getattr(step, "channel", None) if step else "")
+            or ""
+        ).strip().lower()
+        age = _assisted_queue_started_at(prospect, entry, ch)
+        if age is None:
+            return False
+        from app.services.linkedin_sequence_policy import ASSISTED_QUEUE_TTL_DAYS
+
+        return (now - age) >= timedelta(days=ASSISTED_QUEUE_TTL_DAYS)
+
+    for day in planned:
+        entry = log.get(str(day), {})
+        if not isinstance(entry, dict):
+            continue
+        step = _playbook_step(day, campaign)
+        channel = str(
+            entry.get("channel")
+            or (getattr(step, "channel", None) if step else "")
+            or ""
+        ).strip().lower()
+        status = entry.get("status")
+
+        if status == TOUCH_OMITIDO:
+            if channel in ("linkedin", "whatsapp", "call") and not _assisted_touch_was_sent(
+                prospect, channel, entry
+            ):
+                live = _assisted_queue_is_live(prospect, channel)
+                if not live:
+                    continue
+                # Ya hay un toque asistido posterior en cola → este no vuelve a bandeja.
+                if _later_assisted_live(day) or _should_leave_unsent(day):
+                    _clear_assisted_live_queue(prospect, channel)
+                    omitted.append(day)
+                else:
+                    body = (
+                        (entry.get("message_body") or entry.get("body") or "").strip()
+                        or (
+                            (getattr(prospect, "linkedin_assisted_draft", None) or "").strip()
+                            if channel == "linkedin"
+                            else (
+                                (getattr(prospect, "whatsapp_assisted_draft", None) or "").strip()
+                                if channel == "whatsapp"
+                                else (getattr(prospect, "call_assisted_brief", None) or "").strip()
+                            )
+                        )
+                    )
+                    _set_touch_entry(
+                        prospect,
+                        day,
+                        status=TOUCH_GENERADO,
+                        channel=channel,
+                        generated_at=entry.get("generated_at") or now.isoformat(),
+                        message_body=body or None,
+                        body=body or None,
+                        skip_reason=None,
+                        skipped_at=None,
+                        error=None,
+                    )
+                    omitted.append(day)
+                    log = _touch_log(prospect)
+            continue
+        if status != TOUCH_GENERADO:
+            continue
+        if channel not in ("linkedin", "whatsapp", "call"):
+            continue
+        if _assisted_touch_was_sent(prospect, channel, entry):
+            continue
+
+        if not _should_leave_unsent(day):
+            if _assisted_queue_started_at(prospect, entry, channel) is None:
+                _set_touch_entry(prospect, day, generated_at=now.isoformat(), channel=channel)
+                log = _touch_log(prospect)
+            continue
+
+        _auto_omit_sequence_touch(
+            db,
+            prospect=prospect,
+            day=day,
+            reason="asistido_sin_envio_3d",
+        )
+        _clear_assisted_live_queue(prospect, channel)
+        other = "whatsapp" if channel == "linkedin" else "linkedin"
+        _clear_assisted_live_queue(prospect, other)
+        omitted.append(day)
+        log = _touch_log(prospect)
+        ensure_single_assisted_live_queue(prospect, campaign)
+    return omitted
+
+
+def advance_auto_skipped_linkedin_touches(
+    db: Session,
+    *,
+    prospect: Prospect,
+    campaign: Campaign | None,
+    now: datetime | None = None,
+) -> list[int]:
+    """Omite toques LinkedIn vencidos cuando la conexión falló."""
+    from app.services.linkedin_sequence_policy import (
+        refresh_linkedin_sequence_state,
+        should_auto_omit_linkedin_touch,
+    )
+
+    now = now or _now()
+    refresh_linkedin_sequence_state(prospect, now=now)
+    omitted: list[int] = []
+    for _ in range(len(PLAYBOOK_DAYS)):
+        nxt = next_executable_day(prospect, campaign)
+        if nxt is None:
+            break
+        if not should_auto_omit_linkedin_touch(prospect, campaign, nxt, now=now):
+            break
+        _auto_omit_sequence_touch(
+            db,
+            prospect=prospect,
+            day=nxt,
+            reason="linkedin_sin_conexion",
+        )
+        omitted.append(nxt)
+    omitted.extend(
+        expire_unsent_assisted_touches_for_calendar(
+            db, prospect=prospect, campaign=campaign, now=now
+        )
+    )
+    return omitted
 
 
 def skip_sequence_touch(db: Session, *, user: User, prospect: Prospect, day: int) -> dict[str, Any]:
@@ -1819,7 +3660,7 @@ def simulate_sequence_response(
     campaign = db.scalars(
         select(Campaign)
         .where(Campaign.id == campaign.id)
-        .options(selectinload(Campaign.product))
+        .options(selectinload(Campaign.product), selectinload(Campaign.company))
     ).first() or campaign
 
     if not prospect.campaign_id:
@@ -1827,7 +3668,7 @@ def simulate_sequence_response(
 
     step = _playbook_step(affected_day)
     touch_channel = channel or (step.channel if step else "email")
-    if touch_channel not in ("email", "linkedin", "whatsapp"):
+    if touch_channel not in ("email", "linkedin", "whatsapp", "call"):
         raise HTTPException(status_code=400, detail="Canal inválido")
 
     inbound_text = message.strip()
@@ -2123,6 +3964,7 @@ def enrich_prospect_contact(db: Session, *, user: User, prospect: Prospect) -> d
         raise HTTPException(status_code=403, detail="No podés enriquecer este prospecto")
     from app.schemas.lead_sourcing import LeadCandidateRead
     from app.services.lead_sourcing.providers.registry import get_contact_enrichment_provider
+    from app.services.whatsapp_cloud_service import sanitize_stored_phone
 
     provider = get_contact_enrichment_provider()
     if not provider.is_configured():
@@ -2158,6 +4000,7 @@ def enrich_prospect_contact(db: Session, *, user: User, prospect: Prospect) -> d
         prospect.linkedin_url = enriched.linkedin_url
         changed = True
     phone_val = enriched.phone or enriched.whatsapp
+    phone_val = sanitize_stored_phone(phone_val)
     if phone_val and phone_val != prospect.phone:
         prospect.phone = phone_val
         changed = True

@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Modal } from '../Modal.jsx'
 import { AlertBanner } from '../AlertBanner.jsx'
 import { createCampaign, updateCampaign } from '../../utils/api.js'
+import { useAuth } from '../../context/AuthContext.jsx'
 import {
   SUGGEST_AVAILABLE_HOURS,
+  SUGGEST_AREA,
+  SUGGEST_B2C_PROFILE,
+  SUGGEST_B2C_SITUATION,
   SUGGEST_COMPANY_SIZE,
-  SUGGEST_COUNTRY,
+  SUGGEST_REGION,
   SUGGEST_INDUSTRY,
+  SUGGEST_INTERESTS,
   SUGGEST_LANGUAGE,
   SUGGEST_ROLE,
-  SUGGEST_TIMEZONE,
   SUGGEST_TONE,
 } from '../../data/campaignFormSuggestions.js'
 import {
@@ -18,16 +22,33 @@ import {
   icpLooksEmpty,
 } from '../../utils/icp.js'
 import { DEFAULT_ALLOWED_CHANNELS } from '../../utils/campaignChannels.js'
+import { isCampaignAssignableUser } from '../../utils/campaignUsers.js'
+import { ROLES, normalizeRole } from '../../data/navigation.js'
 import { CampaignChannelsField } from './CampaignChannelsField.jsx'
+import { SequenceTemplatePicker } from './SequenceTemplatePicker.jsx'
+import { TimezoneSelect } from './TimezoneSelect.jsx'
+import { SuggestSelect } from './SuggestSelect.jsx'
+import { resolveTimezoneQuery, buildTimezoneOptions } from '../../utils/timezones.js'
+import { formatContactCredits } from '../../utils/format.js'
+import { notifyCreditsChanged, useMyCredits } from '../../hooks/useMyCredits.js'
 
 const inputClass =
-  'mt-1 w-full rounded-lg border border-[#e5e7eb] bg-white px-3 py-2.5 text-sm text-[#111827] shadow-sm placeholder:text-[#9ca3af] focus:border-[#9ca3af] focus:outline-none focus:ring-2 focus:ring-[#9ca3af]/25'
+  'mt-1 w-full rounded-md border border-nx-border bg-white px-2.5 py-1.5 text-sm text-nx-ink shadow-none placeholder:text-nx-subtle focus:border-nx-brand/50 focus:outline-none focus:ring-1 focus:ring-nx-brand/20'
+
+const inputClassError =
+  'mt-1 w-full rounded-md border border-red-300 bg-white px-2.5 py-1.5 text-sm text-nx-ink shadow-none placeholder:text-nx-subtle focus:border-red-400 focus:outline-none focus:ring-1 focus:ring-red-400/20'
 
 const sectionTitle =
-  'text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9ca3af]'
+  'text-xs font-bold uppercase tracking-[0.1em] text-nx-ink'
 
 const sectionBox =
-  'rounded-xl border border-[#e5e7eb] bg-[#f8fafc]/90 p-4 shadow-sm space-y-3'
+  'rounded-xl border-2 border-nx-brand/55 bg-nx-card-muted/90 p-4 shadow-sm space-y-3'
+
+function currentUserId(user) {
+  const raw = user?.user_id ?? user?.id
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
 
 function toApiIcp(value) {
   const v = String(value ?? '').trim()
@@ -37,55 +58,27 @@ function toApiIcp(value) {
   return v
 }
 
-function DatalistInput({ id, listId, label, value, onChange, suggestions, type = 'text', required }) {
-  return (
-    <div>
-      <label htmlFor={id} className="text-xs font-medium text-[#374151]">
-        {label}
-      </label>
-      <input
-        id={id}
-        name={id}
-        type={type}
-        required={required}
-        className={inputClass}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        list={listId}
-        autoComplete="off"
-      />
-      <datalist id={listId}>
-        {suggestions.map((s) => (
-          <option key={s} value={s} />
-        ))}
-      </datalist>
-    </div>
-  )
-}
-
 const defaultForm = () => ({
   name: '',
   productQuery: '',
   seller_id: '',
+  outreach_mode: 'b2b',
   target_company_size: '',
   target_industry: '',
   target_country: '',
   target_language: '',
   target_role: '',
-  prospect_count: '120',
-  calendar_link: '',
+  target_area: '',
+  target_interests: '',
+  prospect_count: '30',
   timezone: '',
   available_hours: '',
   tone: '',
   allowed_channels: [...DEFAULT_ALLOWED_CHANNELS],
+  sequence_plan: null,
   autopilot_status: 'off',
-  sender_name: '',
-  sender_email: '',
-  ai_context: '',
+  post_sequence_followup_enabled: 'yes',
   followup_delay_days: '',
-  max_auto_followups: '',
-  inbound_reply_mode: 'draft_only',
-  inbound_reply_delay_minutes: '2',
 })
 
 function formFromCampaign(c) {
@@ -93,53 +86,67 @@ function formFromCampaign(c) {
     name: c.name ?? '',
     productQuery: c.product_name ?? '',
     seller_id: c.seller_id != null ? String(c.seller_id) : '',
+    outreach_mode: c.outreach_mode === 'b2c' ? 'b2c' : 'b2b',
     target_company_size: c.target_company_size ?? '',
     target_industry: c.target_industry ?? '',
     target_country: c.target_country ?? '',
     target_language: c.target_language ?? '',
     target_role: c.target_role ?? '',
+    target_area: c.target_area ?? '',
+    target_interests: c.target_interests ?? '',
     prospect_count: String(c.prospect_count ?? 120),
-    calendar_link: c.calendar_link ?? '',
     timezone: c.timezone ?? '',
     available_hours: c.available_hours ?? '',
     tone: c.tone ?? '',
     allowed_channels: Array.isArray(c.allowed_channels) ? [...c.allowed_channels] : [...DEFAULT_ALLOWED_CHANNELS],
     autopilot_status: c.autopilot_status ?? 'off',
-    sender_name: c.sender_name ?? '',
-    sender_email: c.sender_email ?? '',
-    ai_context: c.ai_context ?? '',
+    post_sequence_followup_enabled:
+      c.post_sequence_followup_enabled === false ? 'no' : 'yes',
     followup_delay_days: c.followup_delay_days != null ? String(c.followup_delay_days) : '',
-    max_auto_followups: c.max_auto_followups != null ? String(c.max_auto_followups) : '',
-    inbound_reply_mode: c.inbound_reply_mode ?? 'draft_only',
-    inbound_reply_delay_minutes: String(c.inbound_reply_delay_minutes ?? 2),
+    sequence_plan: c.sequence_plan ?? null,
   }
 }
 
 /**
- * sellers: solo para asignar internamente el primer SDR/AE (simulación de “usuario actual”).
- * No se muestra en UI.
+ * La campaña se asigna al usuario logueado (SDR/Manager). Créditos de equipo se gestionan en /creditos.
  */
 export function CampaignFormModal({
   open,
   onClose,
   companyId,
   products,
-  sellers,
   onCreated,
   mode = 'create',
   campaignId = null,
   initialCampaign = null,
   onSaved,
+  sellerCreditAvailable = null,
+  prospectsImported = 0,
 }) {
   const isEdit = mode === 'edit'
+  const { user } = useAuth()
+  const isSdrUser = normalizeRole(user?.role) === ROLES.sdr
+  const { available: myCreditsAvailable } = useMyCredits()
   const [form, setForm] = useState(defaultForm())
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  const errorRef = useRef(null)
 
-  const simulatedSellerId = useMemo(() => {
-    const first = sellers?.find((u) => u.role === 'seller')
-    return first?.id ?? null
-  }, [sellers])
+  useEffect(() => {
+    if (error && errorRef.current) {
+      errorRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [error])
+
+  const currentSellerId = useMemo(() => {
+    if (isEdit && initialCampaign?.seller_id) {
+      return Number(initialCampaign.seller_id)
+    }
+    if (user && isCampaignAssignableUser(user)) {
+      return currentUserId(user)
+    }
+    return null
+  }, [isEdit, initialCampaign?.seller_id, user])
 
   useEffect(() => {
     if (!open) {
@@ -156,6 +163,26 @@ export function CampaignFormModal({
   const productDatalistId = 'dl-campaign-products'
   const prospectParsed = Number(form.prospect_count)
 
+  const creditCap = useMemo(() => {
+    const base =
+      sellerCreditAvailable != null ? Number(sellerCreditAvailable) : Number(myCreditsAvailable) || 0
+    const reserved =
+      isEdit && initialCampaign?.prospect_count
+        ? Number(initialCampaign.prospect_count) || 0
+        : 0
+    return Math.max(0, base + reserved)
+  }, [sellerCreditAvailable, myCreditsAvailable, isEdit, initialCampaign?.prospect_count])
+
+  const prospectExceedsCredits = useMemo(() => {
+    if (!Number.isFinite(prospectParsed) || prospectParsed < 1) return false
+    return prospectParsed > creditCap
+  }, [creditCap, prospectParsed])
+
+  const minProspections = useMemo(() => {
+    if (!isEdit) return 1
+    return Math.max(1, Number(prospectsImported) || 0)
+  }, [isEdit, prospectsImported])
+
   function resolveProductId() {
     const q = form.productQuery.trim().toLowerCase()
     if (!q) {
@@ -169,9 +196,40 @@ export function CampaignFormModal({
     return partial?.id ?? null
   }
 
+  const selectedProduct = useMemo(() => {
+    const id = (() => {
+      const q = form.productQuery.trim().toLowerCase()
+      if (!q) return null
+      const exact = products.find((p) => p.name.trim().toLowerCase() === q)
+      if (exact) return exact
+      return products.find((p) => p.name.toLowerCase().includes(q)) ?? null
+    })()
+    return id
+  }, [form.productQuery, products])
+
+  const productScope = selectedProduct?.market_scope || 'b2b'
+  const productAllowsBoth = productScope === 'both'
+  const effectiveOutreachMode = useMemo(() => {
+    if (productScope === 'b2c') return 'b2c'
+    if (productScope === 'b2b') return 'b2b'
+    return form.outreach_mode === 'b2c' ? 'b2c' : 'b2b'
+  }, [productScope, form.outreach_mode])
+
+  const isB2cCampaign = effectiveOutreachMode === 'b2c'
+
+  useEffect(() => {
+    if (!open || !selectedProduct) return
+    if (productScope === 'b2c' && form.outreach_mode !== 'b2c') {
+      setForm((f) => ({ ...f, outreach_mode: 'b2c' }))
+    } else if (productScope === 'b2b' && form.outreach_mode !== 'b2b') {
+      setForm((f) => ({ ...f, outreach_mode: 'b2b' }))
+    }
+  }, [open, selectedProduct, productScope, form.outreach_mode])
+
   async function handleSubmit(ev) {
     ev.preventDefault()
     if (!companyId) {
+      setError('No hay empresa seleccionada.')
       return
     }
     if (isEdit && (!campaignId || campaignId < 1)) {
@@ -179,28 +237,56 @@ export function CampaignFormModal({
       return
     }
 
-    const icpOk = icpHasMinimumSignal({
-      target_company_size: form.target_company_size,
-      target_industry: form.target_industry,
-      target_country: form.target_country,
-      target_language: form.target_language,
-      target_role: form.target_role,
-    })
-    if (!icpOk) {
-      setError(ICP_MISSING_MESSAGE)
+    if (!form.name.trim()) {
+      setError('Indicá un nombre para la campaña.')
       return
     }
 
-    const sellerIdForCreate = simulatedSellerId
-    const sellerIdParsed = Number(form.seller_id)
-    if (isEdit) {
-      if (!Number.isFinite(sellerIdParsed) || sellerIdParsed < 1) {
-        setError('Seleccioná el SDR/AE asignado a la campaña.')
-        return
-      }
-    } else if (!sellerIdForCreate) {
+    let timezone = form.timezone.trim()
+    if (!timezone) {
+      timezone = resolveTimezoneQuery(
+        document.getElementById('camp-tz')?.value,
+        buildTimezoneOptions(),
+      )
+    }
+    if (!timezone) {
+      setError('Elegí una región de la lista (ej. LATAM, Brasil, Argentina).')
+      return
+    }
+
+    if (!form.available_hours.trim()) {
+      setError('Indicá los horarios disponibles.')
+      return
+    }
+
+    if (!form.tone.trim()) {
+      setError('Indicá el tono de comunicación.')
+      return
+    }
+
+    const icpOk = isB2cCampaign
+      ? !icpLooksEmpty(form.target_country) &&
+        (!icpLooksEmpty(form.target_role) || !icpLooksEmpty(form.target_interests))
+      : icpHasMinimumSignal({
+          target_company_size: form.target_company_size,
+          target_industry: form.target_industry,
+          target_country: form.target_country,
+          target_language: form.target_language,
+          target_role: form.target_role,
+          target_area: form.target_area,
+        })
+    if (!icpOk) {
       setError(
-        'No hay SDR/AE en la empresa para asignar la campaña (simulación). Agregá un usuario con rol seller.',
+        isB2cCampaign
+          ? 'ICP B2C: completá región y quién buscamos o keywords (LinkedIn).'
+          : ICP_MISSING_MESSAGE,
+      )
+      return
+    }
+
+    if (!currentSellerId || !Number.isFinite(currentSellerId) || currentSellerId < 1) {
+      setError(
+        'No se pudo identificar tu usuario para crear la campaña. Cerrá sesión y volvé a entrar, o pedí créditos en Créditos.',
       )
       return
     }
@@ -213,57 +299,67 @@ export function CampaignFormModal({
       return
     }
 
-    if (!Number.isFinite(prospectParsed) || prospectParsed < 1) {
-      setError('Indicá una cantidad válida de prospectos a contactar (mínimo 1).')
+    if (!Number.isFinite(prospectParsed) || prospectParsed < minProspections) {
+      setError(
+        minProspections > 1
+          ? `Indicá al menos ${minProspections} prospecciones (contactos ya importados en esta campaña).`
+          : 'Indicá una cantidad válida de prospecciones (mínimo 1).',
+      )
+      return
+    }
+
+    if (prospectExceedsCredits) {
+      setError(
+        `Solo tenés ${formatContactCredits(creditCap)} disponibles. No podés planificar ${prospectParsed} prospecciones.`,
+      )
       return
     }
 
     let followup_delay_days = null
-    if (form.followup_delay_days.trim()) {
+    const postSequenceFollowupEnabled = form.post_sequence_followup_enabled === 'yes'
+
+    if (postSequenceFollowupEnabled && form.followup_delay_days.trim()) {
       const n = Number(form.followup_delay_days)
-      if (!Number.isFinite(n) || n < 1 || n > 90) {
-        setError('Días entre follow-ups: entre 1 y 90, o vacío para default del servidor.')
+      if (!Number.isFinite(n) || n < 1 || n > 365) {
+        setError('Cuántos días hasta el follow-up: entre 1 y 365, o vacío para 30 días (default).')
         return
       }
       followup_delay_days = n
     }
 
-    let max_auto_followups = null
-    if (form.max_auto_followups.trim()) {
-      const n = Number(form.max_auto_followups)
-      if (!Number.isFinite(n) || n < 1 || n > 50) {
-        setError('Máx. follow-ups automáticos: entre 1 y 50, o vacío para default del servidor.')
-        return
-      }
-      max_auto_followups = n
-    }
-
-    const delayMin = Number(form.inbound_reply_delay_minutes)
-    if (![1, 2, 5].includes(delayMin)) {
-      setError('Responder después de: elige 1, 2 o 5 minutos.')
-      return
-    }
+    const sequencePlan = form.sequence_plan
+      ? {
+          ...form.sequence_plan,
+          follow_up: {
+            enabled: postSequenceFollowupEnabled,
+            channel: postSequenceFollowupEnabled
+              ? form.sequence_plan.follow_up?.channel || 'auto'
+              : 'auto',
+          },
+        }
+      : null
 
     const common = {
       name: form.name.trim(),
-      target_company_size: toApiIcp(form.target_company_size),
-      target_industry: toApiIcp(form.target_industry),
+      outreach_mode: effectiveOutreachMode,
+      target_company_size: isB2cCampaign ? null : toApiIcp(form.target_company_size),
+      target_industry: isB2cCampaign ? null : toApiIcp(form.target_industry),
       target_country: toApiIcp(form.target_country),
       target_language: toApiIcp(form.target_language),
       target_role: toApiIcp(form.target_role),
+      target_area: toApiIcp(form.target_area),
+      target_interests: toApiIcp(form.target_interests),
       prospect_count: prospectParsed,
-      calendar_link: form.calendar_link.trim(),
-      timezone: form.timezone.trim(),
+      timezone,
       available_hours: form.available_hours.trim(),
       tone: form.tone.trim(),
       allowed_channels: form.allowed_channels,
-      sender_name: form.sender_name.trim() || null,
-      sender_email: form.sender_email.trim() || null,
-      ai_context: form.ai_context.trim() || null,
-      followup_delay_days,
-      max_auto_followups,
-      inbound_reply_mode: form.inbound_reply_mode,
-      inbound_reply_delay_minutes: delayMin,
+      post_sequence_followup_enabled: postSequenceFollowupEnabled,
+      followup_delay_days: postSequenceFollowupEnabled ? followup_delay_days : null,
+      max_auto_followups: postSequenceFollowupEnabled ? 1 : null,
+      outreach_email_mode: 'auto_send',
+      inbound_reply_mode: 'auto_send',
+      sequence_plan: sequencePlan,
     }
 
     setSaving(true)
@@ -272,7 +368,7 @@ export function CampaignFormModal({
       if (isEdit) {
         await updateCampaign(campaignId, {
           ...common,
-          seller_id: sellerIdParsed,
+          seller_id: currentSellerId,
           product_id: productId,
           autopilot_status: form.autopilot_status,
         })
@@ -280,11 +376,14 @@ export function CampaignFormModal({
       } else {
         await createCampaign(companyId, {
           ...common,
-          seller_id: sellerIdForCreate,
+          // Calendar: la IA usa la conexión Google; no se pide link manual.
+          calendar_link: '',
+          seller_id: currentSellerId,
           product_id: productId,
         })
         onCreated?.()
       }
+      notifyCreditsChanged()
       onClose()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -297,41 +396,56 @@ export function CampaignFormModal({
     return null
   }
 
-  const btnPrimary =
-    'rounded-lg bg-nx-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-nx-brand-hover disabled:opacity-50'
+  const btnPrimary = 'nx-btn nx-btn-primary px-4 py-2.5 text-sm'
   const btnGhost =
-    'rounded-lg border border-[#e5e7eb] bg-white px-4 py-2.5 text-sm font-medium text-[#374151] hover:bg-[#f8fafc]'
+    'rounded-lg border border-nx-border bg-white px-4 py-2.5 text-sm font-medium text-nx-ink hover:bg-nx-card-muted'
 
   return (
     <Modal
       title={isEdit ? 'Editar campaña' : 'Nueva campaña'}
       onClose={onClose}
       footer={
-        <>
-          <button type="button" className={btnGhost} onClick={onClose}>
-            Cancelar
-          </button>
-          <button
-            type="submit"
-            form="campaign-form"
-            disabled={
-              saving || !companyId || (isEdit && (!campaignId || !initialCampaign))
-            }
-            className={btnPrimary}
-          >
-            {saving ? 'Guardando…' : isEdit ? 'Guardar cambios' : 'Guardar campaña'}
-          </button>
-        </>
+        <div className="flex w-full flex-col gap-3">
+          {error ? (
+            <AlertBanner message={error} onDismiss={() => setError(null)} />
+          ) : null}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button type="button" className={btnGhost} onClick={onClose}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              disabled={
+                saving ||
+                !companyId ||
+                prospectExceedsCredits ||
+                (isEdit && (!campaignId || !initialCampaign))
+              }
+              className={btnPrimary}
+              onClick={(e) => handleSubmit(e)}
+            >
+              {saving ? 'Guardando…' : isEdit ? 'Guardar cambios' : 'Guardar campaña'}
+            </button>
+          </div>
+        </div>
       }
     >
-      <form id="campaign-form" onSubmit={handleSubmit} className="flex min-h-0 flex-col">
+      <form id="campaign-form" noValidate onSubmit={handleSubmit} className="flex min-h-0 flex-col">
         <div className="space-y-6 pr-1">
-          <AlertBanner message={error} onDismiss={() => setError(null)} />
+          <div ref={errorRef}>
+            <AlertBanner message={error} onDismiss={() => setError(null)} />
+          </div>
 
           <section className={sectionBox}>
             <h3 className={sectionTitle}>Datos de campaña</h3>
+            {isSdrUser && !isEdit ? (
+              <p className="rounded-lg border border-nx-brand/25 bg-nx-brand/5 px-3 py-2 text-[11px] leading-relaxed text-nx-ink">
+                Modo SDR: elegí producto, ICP básico y la plantilla{' '}
+                <strong>LinkedIn → Email → WhatsApp</strong>. Nexus busca contactos al iniciar la secuencia.
+              </p>
+            ) : null}
             <div>
-              <label htmlFor="camp-name" className="text-xs font-medium text-[#374151]">
+              <label htmlFor="camp-name" className="text-xs font-medium text-nx-ink">
                 Nombre de campaña
               </label>
               <input
@@ -344,8 +458,8 @@ export function CampaignFormModal({
               />
             </div>
             <div>
-              <label htmlFor="camp-product" className="text-xs font-medium text-[#374151]">
-                Producto a vender
+              <label htmlFor="camp-product" className="text-xs font-medium text-nx-ink">
+                Producto/servicio a vender
               </label>
               <input
                 id="camp-product"
@@ -362,128 +476,264 @@ export function CampaignFormModal({
                   <option key={p.id} value={p.name} />
                 ))}
               </datalist>
-              <p className="mt-1 text-[11px] text-[#9ca3af]">
+              <p className="mt-1 text-[11px] text-nx-subtle">
                 Podés escribir libremente; si coincide con un producto activo, se usará al guardar.
               </p>
             </div>
-            {isEdit ? (
+            {selectedProduct ? (
               <div>
-                <label htmlFor="camp-seller" className="text-xs font-medium text-[#374151]">
-                  SDR/AE asignado
-                </label>
-                <select
-                  id="camp-seller"
-                  required
-                  className={inputClass}
-                  value={form.seller_id}
-                  onChange={(e) => setForm((f) => ({ ...f, seller_id: e.target.value }))}
-                >
-                  <option value="">Elegir…</option>
-                  {(sellers ?? []).map((u) => (
-                    <option key={u.id} value={String(u.id)}>
-                      {u.name || `Usuario ${u.id}`}
-                    </option>
-                  ))}
-                </select>
+                <p className="text-xs font-medium text-nx-ink">Tipo de campaña</p>
+                {productAllowsBoth ? (
+                  <>
+                    <p className="mt-0.5 text-[11px] text-nx-subtle">
+                      Este producto admite B2B y B2C. Elegí el modo de esta campaña (no se mezclan).
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {[
+                        { value: 'b2b', label: 'B2B', hint: 'Empresas → contactos' },
+                        { value: 'b2c', label: 'B2C', hint: 'Personas directas' },
+                      ].map((opt) => {
+                        const active = effectiveOutreachMode === opt.value
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            className={[
+                              'rounded-lg border px-3 py-2 text-left transition',
+                              active
+                                ? 'border-nx-brand bg-nx-brand/10 text-nx-ink ring-1 ring-nx-brand/30'
+                                : 'border-nx-border bg-white text-nx-muted hover:bg-nx-card-muted',
+                            ].join(' ')}
+                            onClick={() => setForm((f) => ({ ...f, outreach_mode: opt.value }))}
+                          >
+                            <span className="block text-sm font-semibold">{opt.label}</span>
+                            <span className="block text-[10px] opacity-80">{opt.hint}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </>
+                ) : (
+                  <p className="mt-1 text-[11px] text-nx-subtle">
+                    Modo fijo del producto:{' '}
+                    <strong className="text-nx-ink">
+                      {effectiveOutreachMode === 'b2c' ? 'B2C' : 'B2B'}
+                    </strong>
+                    . Misma secuencia; cambia el perfil y la búsqueda.
+                  </p>
+                )}
               </div>
             ) : null}
           </section>
 
           <section className={sectionBox}>
-            <h3 className={sectionTitle}>ICP objetivo</h3>
-            <p className="mb-2 text-[11px] text-[#9ca3af]">
-              Completá al menos un criterio; en el detalle de la campaña verás el bloque <strong>ICP objetivo</strong>{' '}
-              y lo podés ajustar cuando quieras.
-            </p>
+            <h3 className={sectionTitle}>
+              {isB2cCampaign ? 'Perfil de persona (B2C)' : 'Perfil objetivo'}
+            </h3>
             <div className="grid gap-3 sm:grid-cols-2">
-              <DatalistInput
-                id="icp-size"
-                listId="dl-company-size"
-                label="Tamaño de empresa objetivo"
-                value={form.target_company_size}
-                onChange={(v) => setForm((f) => ({ ...f, target_company_size: v }))}
-                suggestions={SUGGEST_COMPANY_SIZE}
+              <SuggestSelect
+                id="icp-role"
+                label={isB2cCampaign ? 'Quién buscamos' : 'Rol objetivo'}
+                value={form.target_role}
+                onChange={(v) => setForm((f) => ({ ...f, target_role: v }))}
+                suggestions={isB2cCampaign ? SUGGEST_B2C_PROFILE : SUGGEST_ROLE}
+                hint="Podés escribir cualquier cargo. Eso es lo que Nexus busca; la lista es atajo."
+                placeholder="Ej. Gerente de planta, Director médico…"
               />
-              <DatalistInput
-                id="icp-industry"
-                listId="dl-industry"
-                label="Industria / sector"
-                value={form.target_industry}
-                onChange={(v) => setForm((f) => ({ ...f, target_industry: v }))}
-                suggestions={SUGGEST_INDUSTRY}
-              />
-              <DatalistInput
-                id="icp-country"
-                listId="dl-country"
-                label="País"
-                value={form.target_country}
-                onChange={(v) => setForm((f) => ({ ...f, target_country: v }))}
-                suggestions={SUGGEST_COUNTRY}
-              />
-              <DatalistInput
-                id="icp-lang"
-                listId="dl-language"
-                label="Idioma"
-                value={form.target_language}
-                onChange={(v) => setForm((f) => ({ ...f, target_language: v }))}
-                suggestions={SUGGEST_LANGUAGE}
-              />
-              <div className="sm:col-span-2">
-                <DatalistInput
-                  id="icp-role"
-                  listId="dl-role"
-                  label="Rol objetivo"
-                  value={form.target_role}
-                  onChange={(v) => setForm((f) => ({ ...f, target_role: v }))}
-                  suggestions={SUGGEST_ROLE}
+              <div>
+                <SuggestSelect
+                  id="icp-area"
+                  label={isB2cCampaign ? 'Situación / momento' : 'Área objetivo'}
+                  value={form.target_area}
+                  onChange={(v) => setForm((f) => ({ ...f, target_area: v }))}
+                  suggestions={isB2cCampaign ? SUGGEST_B2C_SITUATION : SUGGEST_AREA}
                 />
+                {isB2cCampaign ? (
+                  <p className="mt-1 text-[11px] text-nx-subtle">
+                    Solo para redactar mensajes. No filtra leads en Prospeo.
+                  </p>
+                ) : null}
               </div>
             </div>
-            <p className="text-[11px] leading-relaxed text-[#9ca3af]">
-              Al menos un campo del ICP debe tener criterio (no puede quedar todo vacío o solo “No
-              importante”).
+            {isB2cCampaign ? (
+              <p className="mt-2 text-[11px] text-nx-subtle">
+                Tipo de persona (no un cargo B2B). Ej.: comprador de vivienda, inversor particular,
+                freelancer.
+              </p>
+            ) : null}
+          </section>
+
+          <section className={sectionBox}>
+            <h3 className={sectionTitle}>
+              {isB2cCampaign ? 'ICP B2C — criterios' : 'ICP — criterios adicionales'}
+            </h3>
+            <p className="mb-2 text-[11px] text-nx-subtle">
+              {isB2cCampaign
+                ? 'Completá región + quién buscamos o keywords. Nexus busca personas (Prospeo), no empresas.'
+                : 'Completá al menos un criterio (incluido rol o área arriba); en el detalle verás el bloque ICP objetivo.'}
             </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {isB2cCampaign ? (
+                <>
+                  <div>
+                    <SuggestSelect
+                      id="icp-interests"
+                      label="Señales / keywords (LinkedIn)"
+                      value={form.target_interests}
+                      onChange={(v) => setForm((f) => ({ ...f, target_interests: v }))}
+                      suggestions={SUGGEST_INTERESTS}
+                    />
+                    <p className="mt-1 text-[11px] text-nx-subtle">
+                      Palabras que suelen aparecer en perfil o titular. Prospeo las usa para buscar.
+                    </p>
+                  </div>
+                  <div>
+                    <SuggestSelect
+                      id="icp-region"
+                      label="Región / país"
+                      value={form.target_country}
+                      onChange={(v) => setForm((f) => ({ ...f, target_country: v }))}
+                      suggestions={SUGGEST_REGION}
+                    />
+                    <p className="mt-1 text-[11px] text-nx-subtle">
+                      LATAM - Brasil = Hispanoamérica sin Brasil · LATAM + Brasil = toda Latinoamérica
+                    </p>
+                  </div>
+                  <div>
+                    <SuggestSelect
+                      id="icp-lang"
+                      label="Idioma"
+                      value={form.target_language}
+                      onChange={(v) => setForm((f) => ({ ...f, target_language: v }))}
+                      suggestions={SUGGEST_LANGUAGE}
+                    />
+                    <p className="mt-1 text-[11px] text-nx-subtle">
+                      Se usa en los mensajes. No filtra la búsqueda en Prospeo.
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <SuggestSelect
+                    id="icp-size"
+                    label="Tamaño de empresa objetivo"
+                    value={form.target_company_size}
+                    onChange={(v) => setForm((f) => ({ ...f, target_company_size: v }))}
+                    suggestions={SUGGEST_COMPANY_SIZE}
+                  />
+                  <SuggestSelect
+                    id="icp-industry"
+                    label="Industria / sector"
+                    value={form.target_industry}
+                    onChange={(v) => setForm((f) => ({ ...f, target_industry: v }))}
+                    suggestions={SUGGEST_INDUSTRY}
+                    hint="Podés escribir el sector exacto si no está en la lista."
+                    placeholder="Ej. Clínicas, Agro, Construcción…"
+                  />
+                  <div>
+                    <SuggestSelect
+                      id="icp-region"
+                      label="Región"
+                      value={form.target_country}
+                      onChange={(v) => setForm((f) => ({ ...f, target_country: v }))}
+                      suggestions={SUGGEST_REGION}
+                    />
+                    <p className="mt-1 text-[11px] text-nx-subtle">
+                      LATAM - Brasil = Hispanoamérica sin Brasil · LATAM + Brasil = toda Latinoamérica incluido Brasil
+                    </p>
+                  </div>
+                  <SuggestSelect
+                    id="icp-lang"
+                    label="Idioma"
+                    value={form.target_language}
+                    onChange={(v) => setForm((f) => ({ ...f, target_language: v }))}
+                    suggestions={SUGGEST_LANGUAGE}
+                  />
+                </>
+              )}
+            </div>
+            <p className="text-[11px] leading-relaxed text-nx-subtle">
+              Al menos un campo del ICP debe tener criterio (no puede quedar todo vacío o solo “No
+              importante”). Lo que escribas (rol, industria, etc.) es lo que se busca; la lista es
+              ayuda, no un menú cerrado.
+            </p>
+            <div className="mt-4 space-y-3 border-t border-nx-border pt-4">
+              <div>
+                <p className="text-xs font-medium text-nx-ink">
+                  ¿Generar follow-up después de la secuencia?
+                </p>
+                <p className="mt-0.5 text-[11px] text-nx-subtle">
+                  Tras la secuencia inicial, Nexus puede recontactar automáticamente una vez si el
+                  prospecto no respondió.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-4">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-nx-ink">
+                    <input
+                      type="radio"
+                      name="post-sequence-followup"
+                      checked={form.post_sequence_followup_enabled === 'yes'}
+                      onChange={() =>
+                        setForm((f) => ({ ...f, post_sequence_followup_enabled: 'yes' }))
+                      }
+                    />
+                    Sí
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-nx-ink">
+                    <input
+                      type="radio"
+                      name="post-sequence-followup"
+                      checked={form.post_sequence_followup_enabled === 'no'}
+                      onChange={() =>
+                        setForm((f) => ({
+                          ...f,
+                          post_sequence_followup_enabled: 'no',
+                          followup_delay_days: '',
+                        }))
+                      }
+                    />
+                    No
+                  </label>
+                </div>
+              </div>
+              {form.post_sequence_followup_enabled === 'yes' ? (
+                <div>
+                  <label htmlFor="camp-fu-days" className="text-xs font-medium text-nx-ink">
+                    Cuántos días hasta el follow-up
+                  </label>
+                  <p className="mt-0.5 text-[11px] text-nx-subtle">
+                    Tiempo después de terminar la secuencia inicial antes del primer recontacto automático.
+                  </p>
+                  <input
+                    id="camp-fu-days"
+                    inputMode="numeric"
+                    className={inputClass}
+                    value={form.followup_delay_days}
+                    onChange={(e) => setForm((f) => ({ ...f, followup_delay_days: e.target.value }))}
+                    placeholder="Vacío = 30 días (1 mes)"
+                  />
+                </div>
+              ) : null}
+            </div>
           </section>
 
           <section className={sectionBox}>
             <h3 className={sectionTitle}>Configuración de contacto</h3>
-            <div>
-              <label htmlFor="camp-cal" className="text-xs font-medium text-[#374151]">
-                Link de Calendar
-              </label>
-              <input
-                id="camp-cal"
-                required
-                type="text"
-                className={inputClass}
-                value={form.calendar_link}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, calendar_link: e.target.value }))
-                }
-                placeholder="https://…"
-              />
-            </div>
-            <DatalistInput
+            <TimezoneSelect
               id="camp-tz"
-              listId="dl-tz"
-              label="Zona horaria"
               value={form.timezone}
               onChange={(v) => setForm((f) => ({ ...f, timezone: v }))}
-              suggestions={SUGGEST_TIMEZONE}
               required
             />
-            <DatalistInput
+            <SuggestSelect
               id="camp-hours"
-              listId="dl-hours"
               label="Horarios disponibles"
               value={form.available_hours}
               onChange={(v) => setForm((f) => ({ ...f, available_hours: v }))}
               suggestions={SUGGEST_AVAILABLE_HOURS}
               required
             />
-            <DatalistInput
+            <SuggestSelect
               id="camp-tone"
-              listId="dl-tone"
               label="Tono de comunicación"
               value={form.tone}
               onChange={(v) => setForm((f) => ({ ...f, tone: v }))}
@@ -495,145 +745,57 @@ export function CampaignFormModal({
               onChange={(channels) =>
                 setForm((f) => ({ ...f, allowed_channels: channels }))
               }
+              companyId={companyId}
+              sellerId={currentSellerId}
+            />
+            <SequenceTemplatePicker
+              companyId={companyId}
+              value={form.sequence_plan}
+              onChange={(plan) => setForm((f) => ({ ...f, sequence_plan: plan }))}
+              allowedChannels={form.allowed_channels}
+              campaignFollowupEnabled={form.post_sequence_followup_enabled === 'yes'}
             />
             <div>
-              <label htmlFor="camp-prospects" className="text-xs font-medium text-[#374151]">
-                Prospectos a contactar
+              <label htmlFor="camp-prospects" className="text-xs font-medium text-nx-ink">
+                Prospecciones (créditos)
               </label>
               <input
                 id="camp-prospects"
                 required
                 inputMode="numeric"
-                min={1}
-                className={inputClass}
+                min={minProspections}
+                max={creditCap > 0 ? creditCap : undefined}
+                aria-invalid={prospectExceedsCredits}
+                aria-describedby={prospectExceedsCredits ? 'camp-prospects-error' : undefined}
+                className={prospectExceedsCredits ? inputClassError : inputClass}
                 value={form.prospect_count}
                 onChange={(e) =>
                   setForm((f) => ({ ...f, prospect_count: e.target.value }))
                 }
               />
+              {prospectExceedsCredits ? (
+                <p id="camp-prospects-error" className="mt-1 text-xs font-medium text-red-600">
+                  Superás tu saldo: tenés {formatContactCredits(creditCap)} disponibles. Bajá las
+                  prospecciones o pedí más créditos a tu manager.
+                </p>
+              ) : (
+                <p className="mt-1 text-[11px] text-nx-subtle">
+                  1 crédito = 1 persona en secuencia completa (búsqueda → toques + follow-up
+                  opcional). Al crear la campaña se comprometen esos créditos.
+                  {` Máximo según tu saldo: ${formatContactCredits(creditCap)}.`}
+                  {isEdit && minProspections > 1
+                    ? ` Mínimo ${minProspections} (ya importados).`
+                    : ''}
+                </p>
+              )}
             </div>
           </section>
 
+          {isEdit ? (
           <section className={sectionBox}>
-            <h3 className={sectionTitle}>Remitente, IA y seguimiento</h3>
-            <p className="text-[11px] text-[#9ca3af]">
-              El link de calendario y el contexto de IA impactan mensajes y sugerencias futuras sin borrar
-              prospectos ni timeline.
-            </p>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <h3 className={sectionTitle}>Autopilot</h3>
               <div>
-                <label htmlFor="camp-sender-name" className="text-xs font-medium text-[#374151]">
-                  Nombre remitente (firma / tono)
-                </label>
-                <input
-                  id="camp-sender-name"
-                  className={inputClass}
-                  value={form.sender_name}
-                  onChange={(e) => setForm((f) => ({ ...f, sender_name: e.target.value }))}
-                  placeholder="Opcional"
-                  autoComplete="off"
-                />
-              </div>
-              <div>
-                <label htmlFor="camp-sender-email" className="text-xs font-medium text-[#374151]">
-                  Email remitente
-                </label>
-                <input
-                  id="camp-sender-email"
-                  type="email"
-                  className={inputClass}
-                  value={form.sender_email}
-                  onChange={(e) => setForm((f) => ({ ...f, sender_email: e.target.value }))}
-                  placeholder="Opcional"
-                  autoComplete="off"
-                />
-              </div>
-            </div>
-            <div>
-              <label htmlFor="camp-ai-ctx" className="text-xs font-medium text-[#374151]">
-                Contexto / instrucciones IA (esta campaña)
-              </label>
-              <textarea
-                id="camp-ai-ctx"
-                rows={4}
-                className={inputClass}
-                value={form.ai_context}
-                onChange={(e) => setForm((f) => ({ ...f, ai_context: e.target.value }))}
-                placeholder="Mensajes clave, objeciones, límites, estilo… Se suma a las instrucciones globales de la empresa."
-              />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <label htmlFor="camp-fu-days" className="text-xs font-medium text-[#374151]">
-                  Días hasta próximo follow-up automático
-                </label>
-                <input
-                  id="camp-fu-days"
-                  inputMode="numeric"
-                  className={inputClass}
-                  value={form.followup_delay_days}
-                  onChange={(e) => setForm((f) => ({ ...f, followup_delay_days: e.target.value }))}
-                  placeholder="Vacío = default servidor"
-                />
-              </div>
-              <div>
-                <label htmlFor="camp-fu-max" className="text-xs font-medium text-[#374151]">
-                  Máx. follow-ups automáticos por prospecto
-                </label>
-                <input
-                  id="camp-fu-max"
-                  inputMode="numeric"
-                  className={inputClass}
-                  value={form.max_auto_followups}
-                  onChange={(e) => setForm((f) => ({ ...f, max_auto_followups: e.target.value }))}
-                  placeholder="Vacío = default servidor"
-                />
-              </div>
-            </div>
-            <div className="rounded-lg border border-[#e5e7eb] bg-white p-3">
-              <p className="text-xs font-semibold text-[#374151]">Modo de respuesta (inbound Gmail)</p>
-              <p className="mt-1 text-[11px] text-[#9ca3af]">
-                Cuando un prospecto responde por email, Nexus clasifica y responde solo. Borrador automático es el
-                modo seguro; envío automático manda el mail tras el delay configurado.
-              </p>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label htmlFor="camp-inbound-mode" className="text-xs font-medium text-[#374151]">
-                    Modo de respuesta
-                  </label>
-                  <select
-                    id="camp-inbound-mode"
-                    className={inputClass}
-                    value={form.inbound_reply_mode}
-                    onChange={(e) => setForm((f) => ({ ...f, inbound_reply_mode: e.target.value }))}
-                  >
-                    <option value="draft_only">Borrador automático</option>
-                    <option value="auto_send">Envío automático</option>
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="camp-inbound-delay" className="text-xs font-medium text-[#374151]">
-                    Responder después de
-                  </label>
-                  <select
-                    id="camp-inbound-delay"
-                    className={inputClass}
-                    value={form.inbound_reply_delay_minutes}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, inbound_reply_delay_minutes: e.target.value }))
-                    }
-                    disabled={form.inbound_reply_mode !== 'auto_send'}
-                  >
-                    <option value="1">1 minuto</option>
-                    <option value="2">2 minutos</option>
-                    <option value="5">5 minutos</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-            {isEdit ? (
-              <div>
-                <label htmlFor="camp-autopilot" className="text-xs font-medium text-[#374151]">
+                <label htmlFor="camp-autopilot" className="text-xs font-medium text-nx-ink">
                   Modo autopilot (simulado)
                 </label>
                 <select
@@ -647,13 +809,13 @@ export function CampaignFormModal({
                   <option value="paused">Automático en pausa</option>
                   <option value="completed">Ciclo autopilot completado</option>
                 </select>
-                <p className="mt-1 text-[11px] text-[#9ca3af]">
+                <p className="mt-1 text-[11px] text-nx-subtle">
                   No detiene la secuencia de prospectos salvo que uses el flujo de outreach; solo afecta el autopilot
                   por campaña.
                 </p>
               </div>
-            ) : null}
           </section>
+          ) : null}
         </div>
       </form>
     </Modal>

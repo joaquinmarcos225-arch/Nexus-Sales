@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+import unicodedata
+from urllib.parse import unquote, urlparse
 
 _DEMO_SLUG_RE = re.compile(
     r"demo[-_]|test[-_]|fake[-_]|mock[-_]|sample[-_]|example",
@@ -28,6 +29,40 @@ def normalize_linkedin_url(raw: str | None) -> str | None:
     if not path.startswith("/in/") and not path.startswith("/sales/people/"):
         return None
     return f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
+
+
+def linkedin_profile_slug(raw: str | None) -> str | None:
+    """Slug de /in/{slug} o /sales/people/{slug}, o None."""
+    url = (raw or "").strip()
+    if not url:
+        return None
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None
+    path = (parsed.path or "").lower()
+    if path.startswith("/sales/people/"):
+        slug = path.removeprefix("/sales/people/").split("/")[0].strip()
+        return unquote(slug) if slug else None
+    if not path.startswith("/in/"):
+        return None
+    slug = path.removeprefix("/in/").split("/")[0].strip()
+    return unquote(slug) if slug else None
+
+
+def linkedin_slug_key(raw: str | None) -> str | None:
+    """Clave comparable: slug lower + sin acentos (www, query y encoding no importan)."""
+    slug = linkedin_profile_slug(raw)
+    if not slug:
+        return None
+    s = unquote(str(slug)).strip().lower()
+    try:
+        s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+    except Exception:
+        pass
+    return s or None
 
 
 def is_personal_linkedin_url(raw: str | None) -> bool:

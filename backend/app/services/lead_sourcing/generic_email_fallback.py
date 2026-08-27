@@ -57,7 +57,7 @@ def build_generic_email_leads(
                 external_id=f"generic-{campaign.id}-{key[:16]}-{local}",
                 provider="pattern_fallback",
                 name=f"{local}@{domain}",
-                company_name=(company.name or "Empresa")[:255],
+                company_name=(company.name or "")[:255],
                 role=GENERIC_ROLE_LABELS.get(local, "Email genérico"),
                 industry=company.industry,
                 country=company.country,

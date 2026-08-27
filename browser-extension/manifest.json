@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "Nexus Sales — Outreach Assist",
+  "version": "0.18.74",
+  "description": "WA paste full draft (no ?text= truncate) + watch many.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["tabs", "storage", "scripting", "alarms", "cookies"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://web.whatsapp.com/*",
+    "http://127.0.0.1:8002/*",
+    "http://localhost:8002/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["content-linkedin.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": [
+        "linkedin-outbound-utils.js",
+        "linkedin-inbound-utils.js",
+        "content-linkedin-inbound.js",
+        "content-linkedin-outbound.js",
+        "content-linkedin-connect.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["content-whatsapp.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://127.0.0.1/*", "http://localhost/*", "http://*/*"],
+      "js": ["page-bridge.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["http://127.0.0.1/*", "http://localhost/*", "http://*/*"],
+      "js": ["content-nexus.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

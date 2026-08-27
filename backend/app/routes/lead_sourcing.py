@@ -1,4 +1,4 @@
-"""Lead Sourcing Engine — pipeline Web Search → Company Extraction → PhantomBuster → Prospeo."""
+"""Lead Sourcing Engine — pipeline Web Search → Prospeo → Nexus Outreach."""
 
 import logging
 import time

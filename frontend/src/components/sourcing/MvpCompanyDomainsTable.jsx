@@ -25,10 +25,10 @@ export function MvpCompanyDomainsTable({ companies = [], metrics }) {
   const rate = m.domain_resolution_rate_pct ?? (found ? Math.round((100 * verifiedCount) / found) : 0)
 
   return (
-    <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50/40 p-3">
+    <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs font-semibold text-sky-950">Dominios corporativos (antes de Prospeo)</p>
-        <p className="text-[10px] font-medium text-sky-900">
+        <p className="text-xs font-semibold text-zinc-950">Dominios corporativos (antes de Prospeo)</p>
+        <p className="text-[10px] font-medium text-zinc-900">
           {verifiedCount}/{found} verificados
           {doubtfulCount > 0 ? ` · ${doubtfulCount} dudosos` : ''} · {rate}%
         </p>
@@ -41,7 +41,7 @@ export function MvpCompanyDomainsTable({ companies = [], metrics }) {
       <div className="mt-2 overflow-x-auto">
         <table className="w-full min-w-[680px] text-left text-[11px]">
           <thead>
-            <tr className="border-b border-sky-200 text-[10px] font-bold uppercase text-zinc-500">
+            <tr className="border-b border-zinc-200 text-[10px] font-bold uppercase text-zinc-500">
               <th className="px-2 py-1.5">Empresa</th>
               <th className="px-2 py-1.5">Website</th>
               <th className="px-2 py-1.5">Dominio</th>
@@ -54,7 +54,7 @@ export function MvpCompanyDomainsTable({ companies = [], metrics }) {
               const ok = trust === 'verified'
               const doubtful = trust === 'doubtful'
               return (
-                <tr key={c.external_id} className="border-b border-sky-100/80">
+                <tr key={c.external_id} className="border-b border-zinc-100/80">
                   <td className="px-2 py-1.5 font-medium text-zinc-900">{c.name}</td>
                   <td className="max-w-[200px] truncate px-2 py-1.5 text-zinc-700">
                     {c.website_url ? (
@@ -62,7 +62,7 @@ export function MvpCompanyDomainsTable({ companies = [], metrics }) {
                         href={c.website_url}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-sky-800 hover:underline"
+                        className="text-zinc-800 hover:underline"
                       >
                         {c.website_url.replace(/^https?:\/\//, '')}
                       </a>
@@ -70,7 +70,7 @@ export function MvpCompanyDomainsTable({ companies = [], metrics }) {
                       '—'
                     )}
                     {c.source_directory_url ? (
-                      <span className="mt-0.5 block text-[9px] text-amber-800">
+                      <span className="mt-0.5 block text-[9px] text-zinc-800">
                         Dir: {c.source_directory_url.replace(/^https?:\/\//, '').slice(0, 48)}
                       </span>
                     ) : null}
@@ -80,24 +80,24 @@ export function MvpCompanyDomainsTable({ companies = [], metrics }) {
                       <span
                         className={
                           doubtful
-                            ? 'font-semibold text-rose-800 line-through'
-                            : 'font-semibold text-emerald-800'
+                            ? 'font-semibold text-red-800 line-through'
+                            : 'font-semibold text-red-800'
                         }
                       >
                         {c.company_domain}
                       </span>
                     ) : (
-                      <span className="font-medium text-amber-800">Sin dominio</span>
+                      <span className="font-medium text-zinc-800">Sin dominio</span>
                     )}
                   </td>
                   <td className="px-2 py-1.5">
                     <span
                       className={
                         ok
-                          ? 'rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-900'
+                          ? 'rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-900'
                           : doubtful
-                            ? 'rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-900'
-                            : 'rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900'
+                            ? 'rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-900'
+                            : 'rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-900'
                       }
                     >
                       {sourceLabel(c.domain_source)}
@@ -110,7 +110,7 @@ export function MvpCompanyDomainsTable({ companies = [], metrics }) {
         </table>
       </div>
       {verifiedCount < found ? (
-        <p className="mt-2 text-[10px] text-amber-900">
+        <p className="mt-2 text-[10px] text-zinc-900">
           Sin dominio corporativo no se ejecuta Prospeo. Usá «Enriquecer contactos (Prospeo)» para
           resolver hasta 5 dominios por corrida (8s c/u). Requiere BRAVE_SEARCH_API_KEY.
         </p>
@@ -123,7 +123,7 @@ function MiniMetric({ label, value }) {
   return (
     <div className="rounded-lg border border-white bg-white px-2 py-1.5 text-center shadow-sm">
       <p className="text-[10px] font-medium text-zinc-500">{label}</p>
-      <p className="text-sm font-bold text-sky-900">{value}</p>
+      <p className="text-sm font-bold text-zinc-900">{value}</p>
     </div>
   )
 }

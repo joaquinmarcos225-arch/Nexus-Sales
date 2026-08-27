@@ -29,14 +29,18 @@ export default defineConfig(({ mode }) => {
     appType: 'spa',
     plugins: [react(), tailwindcss()],
     server: {
+      // Bind IPv4 so Google OAuth redirect (NEXUS_FRONTEND_URL=http://127.0.0.1:5173) works.
+      host: '0.0.0.0',
       port: 5173,
       strictPort: false,
       open: false,
       proxy: {
-        '^/(companies|campaigns|prospects|products|analytics|health|users|gmail|google-calendar|assistant|auth|lead-sourcing)(/|$|\\?)':
+        '^/(companies|campaigns|prospects|products|analytics|health|users|gmail|google-calendar|assistant|auth|lead-sourcing|support|notifications)(/|$|\\?)':
           {
             target: proxyTarget,
             changeOrigin: true,
+            timeout: 180_000,
+            proxyTimeout: 180_000,
           },
       },
     },

@@ -1,9 +1,8 @@
 """
-Motor de secuencia multicanal 21 días + descanso + reactivación (día 42).
+Motor de secuencia multicanal — simulación demo + grupos operativos.
 
-Sin conectores reales: genera mensajes simulados, drafts LinkedIn y tareas SDR.
-Los estados `sequence_group` / `sequence_state` son la UX operativa; `ProspectStatus`
-se mantiene para analytics (interesados, etc.).
+Los toques siguen `app/core/sequence_playbook.py` (7 toques + reactivación día 42).
+En `NEXUS_REAL_MODE=1`, `process_due_milestones` no corre; la ejecución real es vía playbook SDR.
 """
 
 from __future__ import annotations
@@ -27,9 +26,16 @@ from app.services import outreach_metrics as om
 from app.services import pipeline_sync
 from app.schemas.campaign_channels import coerce_allowed_channels
 
-TOUCH_DAYS_MAIN = (1, 4, 7, 10, 14, 18, 21)
-REACTIVATION_DAY = 42
-COOLDOWN_AFTER_BREAKUP_DAYS = 20  # días 22–41 sin tocar; día 42 reactivación
+from app.core.sequence_playbook import (
+    COOLDOWN_START_DAY,
+    PLAYBOOK_DAYS,
+    PLAYBOOK_LAST_TOUCH_DAY,
+    PLAYBOOK_LINKEDIN_DAYS,
+    REACTIVATION_DAY,
+    normalize_fired_milestones,
+    normalize_milestone_day,
+    resolve_touch_channel,
+)
 
 SEQUENCE_GROUP_CONTACTADO = "contactado"
 SEQUENCE_GROUP_PROXIMO_FU = "proximo_follow_up"
@@ -48,11 +54,13 @@ STATE_AGENDADO = "agendado"
 def _fired_list(p: Prospect) -> list[int]:
     raw = getattr(p, "sequence_fired_milestones", None) or "[]"
     if isinstance(raw, list):
-        return [int(x) for x in raw if str(x).isdigit()]
-    try:
-        return [int(x) for x in json.loads(str(raw)) if str(x).isdigit()]
-    except Exception:
-        return []
+        parsed = [int(x) for x in raw if str(x).isdigit()]
+    else:
+        try:
+            parsed = [int(x) for x in json.loads(str(raw)) if str(x).isdigit()]
+        except Exception:
+            parsed = []
+    return normalize_fired_milestones(parsed)
 
 
 def _set_fired(p: Prospect, days: list[int]) -> None:
@@ -73,23 +81,33 @@ def _append_log(campaign: Campaign, line: str, *, kind: str = "info") -> None:
 
 
 def _campaign_payload(campaign: Campaign) -> dict[str, str]:
+    from app.services.campaign_market import normalize_outreach_mode
+    from app.services.campaign_outreach_context import company_brand_name
+
     ch = coerce_allowed_channels(getattr(campaign, "allowed_channels", None))
+    brand = company_brand_name(campaign)
     return {
+        "id": str(getattr(campaign, "id", "") or ""),
         "name": campaign.name,
         "tone": campaign.tone,
+        "outreach_mode": normalize_outreach_mode(getattr(campaign, "outreach_mode", None)),
         "target_role": campaign.target_role or "",
         "target_industry": campaign.target_industry or "",
         "target_country": campaign.target_country or "",
+        "target_interests": getattr(campaign, "target_interests", None) or "",
         "preferred_channel_hint": " → ".join(ch),
         "allowed_channels_csv": ",".join(ch),
         "calendar_link": campaign.calendar_link or "",
+        "brand_name": brand,
+        "company_name": brand,
+        "seller_company_name": brand,
     }
 
 
 def _product_payload(campaign: Campaign) -> dict[str, str]:
     p = campaign.product
     return {
-        "name": p.name if p else "Nexus Sales",
+        "name": (p.name if p else "") or "",
         "value_proposition": p.value_proposition if p and p.value_proposition else "",
         "description": p.description if p and p.description else "",
     }
@@ -97,6 +115,7 @@ def _product_payload(campaign: Campaign) -> dict[str, str]:
 
 def _prospect_payload(prospect: Prospect) -> dict[str, str]:
     return {
+        "id": str(getattr(prospect, "id", "") or ""),
         "name": prospect.name,
         "company_name": prospect.company_name,
         "role": prospect.role or "",
@@ -168,7 +187,7 @@ def _update_group_for_prospect(p: Prospect, day: int, has_pending_fu: bool) -> N
     if getattr(p, "sequence_paused", False):
         p.sequence_group = SEQUENCE_GROUP_CONTACTADO
         return
-    if day > 21 and day < REACTIVATION_DAY:
+    if day >= COOLDOWN_START_DAY and day < REACTIVATION_DAY:
         p.sequence_group = SEQUENCE_GROUP_DESCANSO
         return
     if has_pending_fu:
@@ -207,13 +226,39 @@ def bootstrap_on_start(
                 "used_gmail": False,
             }
         if use_gmail:
-            batch = int(os.getenv("NEXUS_INITIAL_OUTREACH_BATCH_SIZE", "25"))
+            batch = int(os.getenv("NEXUS_INITIAL_OUTREACH_BATCH_SIZE", "500"))
+            batch = max(1, min(batch, 500))
             out = process_campaign_initial_outreach(
                 db, campaign, education_blob, max_batch=batch
             )
             out["used_gmail"] = True
             return out
     now = datetime.now(UTC)
+
+    from app.core import sequence_templates as _seqt
+
+    _seq_plan = getattr(campaign, "sequence_plan", None)
+    _use_ia = _seqt.plan_is_ia(_seq_plan)
+    _channel_plan_day1 = _seqt.plan_channel_map(_seq_plan)
+
+    def _day1_channel(prospect: Prospect) -> str | None:
+        kw = dict(
+            email=prospect.email,
+            linkedin_url=prospect.linkedin_url,
+            phone=prospect.phone,
+            whatsapp_number=getattr(prospect, "whatsapp_number", None),
+            allowed_channels=channels_allowed,
+        )
+        if _use_ia:
+            if not _seqt.prospect_has_min_channels(**kw):
+                return None
+            return _seqt.resolve_ia_touch_channel(1, prior_channels=[], **kw)
+        if _channel_plan_day1:
+            from app.core.sequence_playbook import resolve_touch_channel as _rtc
+
+            return _rtc(1, channel_plan=_channel_plan_day1, **kw)
+        return _channel_day1(channels_allowed)
+
     eligible = db.scalars(
         select(Prospect).where(
             Prospect.campaign_id == campaign.id,
@@ -254,7 +299,16 @@ def bootstrap_on_start(
             _set_fired(prospect, fired + [1])
             continue
 
-        ch = _channel_day1(channels_allowed)
+        ch = _day1_channel(prospect)
+        if not ch:
+            continue
+        from app.services import daily_send_limits as _dsl
+
+        _kind = {"email": _dsl.KIND_EMAIL, "whatsapp": _dsl.KIND_WHATSAPP}.get(ch)
+        if _kind and not _dsl.can_send(db, int(campaign.seller_id or 0), _kind):
+            continue
+        if ch == "whatsapp" and not _dsl.whatsapp_qualified(db, prospect):
+            continue
         body = _touch_body(day=1, channel=ch, prospect=prospect, campaign=campaign, education=education_blob)
         db.add(
             sim.make_message(
@@ -272,14 +326,6 @@ def bootstrap_on_start(
             campaign_calendar_link=campaign.calendar_link or "",
             outbound_text=body,
         )
-        followup_engine.schedule_followup_task(
-            db,
-            company_id=campaign.company_id,
-            campaign_id=campaign.id,
-            prospect_id=prospect.id,
-            title="Seguimiento secuencia (Nexus)",
-            campaign=campaign,
-        )
         if (campaign.calendar_link or "") in body:
             prospect.sequence_state = STATE_LINK
         prospect.status = ProspectStatus.contacted.value
@@ -288,7 +334,7 @@ def bootstrap_on_start(
         day1 += 1
 
     if day1:
-        _append_log(campaign, f"Nexus inició secuencia 21 días: {day1} emails / toques día 1.", kind="sequence")
+        _append_log(campaign, f"Nexus inició secuencia ({len(PLAYBOOK_DAYS)} toques): {day1} emails / toques día 1.", kind="sequence")
     return {"day1_sent": day1, "simulated": True, "used_gmail": False}
 
 
@@ -304,6 +350,41 @@ def process_due_milestones(
         return {"touches": 0, "linkedin_drafts": 0, "tasks": 0, "reactivations": 0, "skipped_real_mode": True}
     now = datetime.now(UTC)
     stats = {"touches": 0, "linkedin_drafts": 0, "tasks": 0, "reactivations": 0}
+
+    from app.core import sequence_templates as _seqt
+
+    _seq_plan = getattr(campaign, "sequence_plan", None)
+    _use_ia = _seqt.plan_is_ia(_seq_plan)
+    channel_plan = _seqt.plan_channel_map(_seq_plan)  # None en modo IA
+    if channel_plan is not None:
+        _fu = _seqt.followup_channel(_seq_plan)
+        if _fu != "auto":
+            channel_plan = {**channel_plan, REACTIVATION_DAY: _fu}
+
+    def _prior_channels(prospect_id: int) -> list[str]:
+        rows = db.scalars(
+            select(OutreachMessage.channel)
+            .where(
+                OutreachMessage.prospect_id == prospect_id,
+                OutreachMessage.direction == "outbound",
+            )
+            .order_by(OutreachMessage.created_at.asc())
+        ).all()
+        return [str(r).lower() for r in rows if r]
+
+    def _channel_for_milestone(m: int, prospect: Prospect) -> str | None:
+        kw = dict(
+            email=prospect.email,
+            linkedin_url=prospect.linkedin_url,
+            phone=prospect.phone,
+            whatsapp_number=getattr(prospect, "whatsapp_number", None),
+            allowed_channels=channels_allowed,
+        )
+        if _use_ia:
+            return _seqt.resolve_ia_touch_channel(
+                m, prior_channels=_prior_channels(prospect.id), **kw
+            )
+        return resolve_touch_channel(m, channel_plan=channel_plan, **kw)
 
     prospects = db.scalars(
         select(Prospect).where(
@@ -324,6 +405,15 @@ def process_due_milestones(
         if getattr(prospect, "sequence_group", None) == SEQUENCE_GROUP_REUNIONES:
             continue
 
+        if _use_ia and not _seqt.prospect_has_min_channels(
+            email=prospect.email,
+            linkedin_url=prospect.linkedin_url,
+            phone=prospect.phone,
+            whatsapp_number=getattr(prospect, "whatsapp_number", None),
+            allowed_channels=channels_allowed,
+        ):
+            continue
+
         day = _day_index_one_based(prospect.sequence_started_at, now)
         fired = _fired_list(prospect)
 
@@ -338,12 +428,10 @@ def process_due_milestones(
         )
         _update_group_for_prospect(prospect, day, pending_fu)
 
-        if day > 21 and day < REACTIVATION_DAY and 21 in fired:
-            if getattr(prospect, "sequence_group", None) != SEQUENCE_GROUP_REUNIONES:
-                prospect.sequence_group = SEQUENCE_GROUP_DESCANSO
-
         milestones: list[int] = []
-        for d in TOUCH_DAYS_MAIN:
+        touch_days = _seqt.plan_touch_days(_seq_plan)
+        last_touch = _seqt.plan_last_touch_day(_seq_plan)
+        for d in touch_days:
             if d > 1 and d not in fired and day >= d:
                 milestones.append(d)
                 break
@@ -351,9 +439,13 @@ def process_due_milestones(
             not milestones
             and REACTIVATION_DAY not in fired
             and day >= REACTIVATION_DAY
-            and 21 in fired
+            and last_touch in fired
         ):
             milestones.append(REACTIVATION_DAY)
+
+        if day >= (last_touch + 1) and day < REACTIVATION_DAY and last_touch in fired:
+            if getattr(prospect, "sequence_group", None) != SEQUENCE_GROUP_REUNIONES:
+                prospect.sequence_group = SEQUENCE_GROUP_DESCANSO
 
         for m in milestones:
             if m == REACTIVATION_DAY:
@@ -368,7 +460,9 @@ def process_due_milestones(
                     tone=campaign.tone,
                     education_blob=education_blob,
                 )
-                ch = _channel_whatsapp_or_mail(prospect, channels_allowed)
+                ch = _channel_for_milestone(REACTIVATION_DAY, prospect)
+                if not ch:
+                    continue
                 db.add(
                     sim.make_message(
                         prospect_id=prospect.id,
@@ -392,30 +486,51 @@ def process_due_milestones(
                 stats["touches"] += 1
                 continue
 
-            ch = "email"
-            if m == 4:
-                ch = _channel_day4(prospect, channels_allowed)
-            elif m in (7, 14):
-                ch = _channel_whatsapp_or_mail(prospect, channels_allowed)
-            elif m in (10, 18):
-                ch = "linkedin" if prospect.linkedin_url and "linkedin" in channels_allowed else "email"
-            elif m == 21:
-                ch = "email"
+            ch = _channel_for_milestone(m, prospect)
+            if not ch:
+                continue
+
+            if ch in ("email", "whatsapp"):
+                from app.services import daily_send_limits as _dsl
+
+                _kind = _dsl.KIND_EMAIL if ch == "email" else _dsl.KIND_WHATSAPP
+                if not _dsl.can_send(db, int(campaign.seller_id or 0), _kind):
+                    continue
+                if ch == "whatsapp" and not _dsl.whatsapp_qualified(db, prospect):
+                    continue
 
             body = _touch_body(day=m, channel=ch, prospect=prospect, campaign=campaign, education=education_blob)
 
-            if m in (4, 18) and ch == "linkedin" and prospect.linkedin_url:
+            if m in PLAYBOOK_LINKEDIN_DAYS and ch == "linkedin" and prospect.linkedin_url:
                 from app.services.linkedin_assisted_service import is_real_linkedin_profile_url
 
                 if is_real_linkedin_profile_url(prospect.linkedin_url):
-                    from app.services.linkedin_assisted_service import mark_draft_suggested
-
-                    mark_draft_suggested(db, prospect, campaign, body, log_event=True)
-                    stats["linkedin_drafts"] += 1
-                    inner = (
-                        f"[Nexus — día {m}] Mensaje listo para enviar por LinkedIn al abrir el perfil. "
-                        "Revisá el borrador en Notificaciones."
+                    from app.services.linkedin_assisted_service import (
+                        queue_linkedin_sequence_touch,
                     )
+
+                    li_action = queue_linkedin_sequence_touch(
+                        db, prospect, campaign, body, log_event=True
+                    )
+                    if li_action == "hold":
+                        # Esperando aceptación de la conexión: se difiere.
+                        continue
+                    if li_action == "skip":
+                        # Sin conexión: se omite el toque LinkedIn (sin InMail).
+                        _append_fired(prospect, m)
+                        stats["touches"] += 1
+                        continue
+                    stats["linkedin_drafts"] += 1
+                    if li_action == "connect":
+                        inner = (
+                            f"[Nexus — día {m}] Enviá la solicitud de conexión en LinkedIn desde "
+                            "Notificaciones. Al aceptarte, se prepara el mensaje."
+                        )
+                    else:
+                        inner = (
+                            f"[Nexus — día {m}] Mensaje listo para enviar por LinkedIn al abrir el perfil. "
+                            "Revisá el borrador en Notificaciones."
+                        )
                 else:
                     inner = (
                         f"[Nexus — día {m}] Sin LinkedIn real en este prospecto (URL demo). "
@@ -449,7 +564,7 @@ def process_due_milestones(
                     outbound_text=body,
                 )
 
-            if m == 10:
+            if m == 13:
                 db.add(
                     OutreachTask(
                         company_id=campaign.company_id,
@@ -467,20 +582,21 @@ def process_due_milestones(
             if (campaign.calendar_link or "") in body:
                 prospect.sequence_state = STATE_LINK
 
-            followup_engine.schedule_followup_task(
-                db,
-                company_id=campaign.company_id,
-                campaign_id=campaign.id,
-                prospect_id=prospect.id,
-                title=f"Seguimiento post-hito día {m}",
-                campaign=campaign,
-            )
+            if m == PLAYBOOK_LAST_TOUCH_DAY:
+                followup_engine.schedule_followup_task(
+                    db,
+                    company_id=campaign.company_id,
+                    campaign_id=campaign.id,
+                    prospect_id=prospect.id,
+                    title=f"Follow-up post-secuencia (día {PLAYBOOK_LAST_TOUCH_DAY})",
+                    campaign=campaign,
+                )
 
             fired = _fired_list(prospect)
             _set_fired(prospect, fired + [m])
             stats["touches"] += 1
 
-            if m == 21:
+            if m == PLAYBOOK_LAST_TOUCH_DAY:
                 prospect.sequence_group = SEQUENCE_GROUP_DESCANSO
 
     if stats["touches"] or stats["linkedin_drafts"] or stats["reactivations"]:

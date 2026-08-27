@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth.deps import get_current_user, get_company_for_user
-from app.core.permissions import normalize_role
+from app.core.permissions import is_company_admin, normalize_role
 from app.database.session import get_db
 from app.deps import get_prospect
 from app.models.enums import UserRole
@@ -108,7 +108,7 @@ def get_sequence_tracking(
     allowed = seq.can_view_sequence(user, prospect) or (
         status == "en_secuencia" and seq.can_manage_outreach(user, prospect)
     )
-    if not allowed and normalize_role(user.role) not in (UserRole.manager, UserRole.gerente):
+    if not allowed and normalize_role(user.role) != UserRole.manager and not is_company_admin(user.role):
         raise HTTPException(status_code=403, detail="No podés ver el seguimiento de este prospecto")
     seq.reconcile_sequence_state(db, prospect, commit=True)
     data = seq.build_sequence_tracking(db, prospect=prospect)
@@ -137,9 +137,23 @@ def start_prospect_sequence(
     prospect: Prospect = Depends(get_prospect),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    consume_credit: bool = False,
 ) -> StartSequenceRead:
     if user.company_id != prospect.company_id:
         raise HTTPException(status_code=403, detail="No tenés acceso a este prospecto")
+    if consume_credit:
+        from app.services.credits import CreditError, consume_sequence_individual_credit
+
+        try:
+            consume_sequence_individual_credit(
+                db,
+                int(prospect.company_id),
+                int(user.id),
+                actor_user_id=int(user.id),
+            )
+        except CreditError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # start_prospect_sequence hace commit (incluye el crédito si se consumió arriba)
     seq.start_prospect_sequence(db, user=user, prospect=prospect)
     next_at, next_label = seq.compute_next_touch(prospect)
     return StartSequenceRead(
@@ -177,6 +191,23 @@ def skip_sequence_touch(
     if user.company_id != prospect.company_id:
         raise HTTPException(status_code=403, detail="No tenés acceso a este prospecto")
     data = seq.skip_sequence_touch(db, user=user, prospect=prospect, day=day)
+    return ExecuteTouchRead.model_validate(data)
+
+
+@router.post(
+    "/prospects/{prospect_id}/sequence/touches/{day}/mark-sent",
+    response_model=ExecuteTouchRead,
+)
+def mark_sequence_gmail_touch_sent(
+    prospect_id: int,
+    day: int,
+    prospect: Prospect = Depends(get_prospect),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ExecuteTouchRead:
+    if user.company_id != prospect.company_id:
+        raise HTTPException(status_code=403, detail="No tenés acceso a este prospecto")
+    data = seq.mark_sequence_gmail_touch_sent(db, user=user, prospect=prospect, day=day)
     return ExecuteTouchRead.model_validate(data)
 
 

@@ -7,6 +7,7 @@ import {
   resetLeadProfileOutreachSequence,
 } from '../../utils/api.js'
 import { linkedInOpenUrl } from '../../utils/linkedinAssist.js'
+import { showOpsDebug } from '../../utils/opsDebug.js'
 
 const CHANNEL_LABELS = {
   email: 'Email',
@@ -21,43 +22,43 @@ function IcpScoreBreakdownPanel({ breakdown, title = 'Score ICP — auditoría' 
     ['Industria', breakdown.industry_score],
     ['Cargo', breakdown.role_score],
     ['Tamaño empresa', breakdown.company_size_score],
-    ['País', breakdown.country_score],
+    ['Región', breakdown.country_score],
     ['Señales adicionales', breakdown.additional_signals_score],
   ]
 
   return (
-    <div className="rounded-lg border border-sky-200 bg-sky-50/60 p-3 text-[11px] text-sky-950">
-      <p className="font-semibold text-sky-900">{title}</p>
+    <div className="rounded-lg border border-zinc-200 bg-zinc-50/60 p-3 text-[11px] text-zinc-950">
+      <p className="font-semibold text-zinc-900">{title}</p>
       {breakdown.formula_explanation ? (
-        <p className="mt-0.5 text-[10px] text-sky-800">Fórmula: {breakdown.formula_explanation}</p>
+        <p className="mt-0.5 text-[10px] text-zinc-800">Fórmula: {breakdown.formula_explanation}</p>
       ) : null}
       <dl className="mt-2 space-y-1">
         {rows.map(([label, value]) => (
           <div key={label} className="flex items-center justify-between gap-2">
-            <dt className="text-sky-800">{label}</dt>
+            <dt className="text-zinc-800">{label}</dt>
             <dd className="font-semibold tabular-nums">{value ?? 0}%</dd>
           </div>
         ))}
-        <div className="flex items-center justify-between gap-2 border-t border-sky-200 pt-1.5">
-          <dt className="font-bold text-sky-900">Score final (contacto)</dt>
-          <dd className="text-sm font-bold tabular-nums text-sky-950">{breakdown.final_score}%</dd>
+        <div className="flex items-center justify-between gap-2 border-t border-zinc-200 pt-1.5">
+          <dt className="font-bold text-zinc-900">Score final (contacto)</dt>
+          <dd className="text-sm font-bold tabular-nums text-zinc-950">{breakdown.final_score}%</dd>
         </div>
       </dl>
       {breakdown.company_only_score != null ? (
-        <p className="mt-2 text-[10px] text-amber-900">
+        <p className="mt-2 text-[10px] text-zinc-900">
           Score solo empresa (sin cargo): {breakdown.company_only_score}% — explica scores altos con rol
           incorrecto.
         </p>
       ) : null}
       {breakdown.legacy_compatibility_score != null &&
       breakdown.legacy_compatibility_score > (breakdown.final_score ?? 0) + 10 ? (
-        <p className="mt-1 text-[10px] font-medium text-rose-800">
+        <p className="mt-1 text-[10px] font-medium text-red-800">
           Score legacy del pipeline: {breakdown.legacy_compatibility_score}% (sobrevaloraba sin considerar
           cargo).
         </p>
       ) : null}
       {breakdown.role_mismatch_cap_applied ? (
-        <p className="mt-1 text-[10px] font-medium text-amber-950">
+        <p className="mt-1 text-[10px] font-medium text-zinc-950">
           Se aplicó tope por mismatch de cargo ICP vs contacto.
         </p>
       ) : null}
@@ -103,16 +104,18 @@ function ContactDetailPanel({ profile, extra }) {
         {alignment?.selling_to_role ? (
           <div>
             <dt className="font-medium text-zinc-500">Rol al que vende el mensaje</dt>
-            <dd className="font-semibold text-violet-900">{alignment.selling_to_role}</dd>
+            <dd className="font-semibold text-zinc-900">{alignment.selling_to_role}</dd>
           </div>
         ) : null}
         {alignment?.warning ? (
-          <div className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-amber-950">
-            <dt className="font-semibold text-amber-900">Advertencia de rol</dt>
+          <div className="rounded-md border border-zinc-300 bg-zinc-50 px-2 py-1.5 text-zinc-950">
+            <dt className="font-semibold text-zinc-900">Advertencia de rol</dt>
             <dd className="mt-0.5">{alignment.warning}</dd>
           </div>
         ) : null}
-        <IcpScoreBreakdownPanel breakdown={profile?.icp_score_breakdown} />
+        {showOpsDebug ? (
+          <IcpScoreBreakdownPanel breakdown={profile?.icp_score_breakdown} />
+        ) : null}
         <div>
           <dt className="font-medium text-zinc-500">Email</dt>
           <dd className="break-all">{person.email || '—'}</dd>
@@ -121,7 +124,7 @@ function ContactDetailPanel({ profile, extra }) {
           <dt className="font-medium text-zinc-500">LinkedIn</dt>
           <dd className="break-all">
             {li ? (
-              <a href={li} target="_blank" rel="noreferrer" className="font-medium text-sky-800 hover:underline">
+              <a href={li} target="_blank" rel="noreferrer" className="font-medium text-zinc-800 hover:underline">
                 {li}
               </a>
             ) : (
@@ -159,39 +162,39 @@ function SdrReasoningPanel({ reasoning }) {
   if (!hasContent) return null
 
   return (
-    <details className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/50 px-3 py-2 text-[11px] text-emerald-950">
-      <summary className="cursor-pointer font-semibold text-emerald-900">
+    <details className="mt-3 rounded-lg border border-red-200 bg-red-50/50 px-3 py-2 text-[11px] text-red-950">
+      <summary className="cursor-pointer font-semibold text-red-900">
         Razonamiento SDR (antes del mensaje)
       </summary>
       <dl className="mt-2 grid gap-2">
         {reasoning.selling_to_role ? (
           <div>
-            <dt className="font-medium text-emerald-800">Rol al que vende</dt>
-            <dd className="mt-0.5 font-semibold text-emerald-950">{reasoning.selling_to_role}</dd>
+            <dt className="font-medium text-red-800">Rol al que vende</dt>
+            <dd className="mt-0.5 font-semibold text-red-950">{reasoning.selling_to_role}</dd>
           </div>
         ) : null}
         {reasoning.probable_problem ? (
           <div>
-            <dt className="font-medium text-emerald-800">Problema probable</dt>
-            <dd className="mt-0.5 text-emerald-950">{reasoning.probable_problem}</dd>
+            <dt className="font-medium text-red-800">Problema probable</dt>
+            <dd className="mt-0.5 text-red-950">{reasoning.probable_problem}</dd>
           </div>
         ) : null}
         {reasoning.why_it_matters ? (
           <div>
-            <dt className="font-medium text-emerald-800">Por qué importa</dt>
-            <dd className="mt-0.5 text-emerald-950">{reasoning.why_it_matters}</dd>
+            <dt className="font-medium text-red-800">Por qué importa</dt>
+            <dd className="mt-0.5 text-red-950">{reasoning.why_it_matters}</dd>
           </div>
         ) : null}
         {reasoning.hypothesis ? (
           <div>
-            <dt className="font-medium text-emerald-800">Hipótesis</dt>
-            <dd className="mt-0.5 text-emerald-950">{reasoning.hypothesis}</dd>
+            <dt className="font-medium text-red-800">Hipótesis</dt>
+            <dd className="mt-0.5 text-red-950">{reasoning.hypothesis}</dd>
           </div>
         ) : null}
         {reasoning.response_question ? (
           <div>
-            <dt className="font-medium text-emerald-800">Pregunta que busca respuesta</dt>
-            <dd className="mt-0.5 text-emerald-950">{reasoning.response_question}</dd>
+            <dt className="font-medium text-red-800">Pregunta que busca respuesta</dt>
+            <dd className="mt-0.5 text-red-950">{reasoning.response_question}</dd>
           </div>
         ) : null}
       </dl>
@@ -209,45 +212,45 @@ function OpenAIGenerationDebugSection({ generationDebug }) {
   ].filter(Boolean)
 
   return (
-    <details className="mt-2 rounded border border-violet-300 bg-violet-50/80">
-      <summary className="cursor-pointer px-2 py-1.5 font-semibold text-violet-950">
+    <details className="mt-2 rounded border border-zinc-300 bg-zinc-50/80">
+      <summary className="cursor-pointer px-2 py-1.5 font-semibold text-zinc-950">
         Generación OpenAI — depuración completa
       </summary>
-      <div className="space-y-2 border-t border-violet-200 px-2 py-2 text-[10px] text-violet-950">
+      <div className="space-y-2 border-t border-zinc-200 px-2 py-2 text-[10px] text-zinc-950">
         <dl className="grid gap-1">
           {generationDebug.channel ? (
             <div className="flex gap-2">
-              <dt className="font-medium text-violet-800">Canal</dt>
+              <dt className="font-medium text-zinc-800">Canal</dt>
               <dd>{generationDebug.channel}</dd>
             </div>
           ) : null}
           {generationDebug.step_day != null ? (
             <div className="flex gap-2">
-              <dt className="font-medium text-violet-800">Día playbook</dt>
+              <dt className="font-medium text-zinc-800">Día playbook</dt>
               <dd>{generationDebug.step_day}</dd>
             </div>
           ) : null}
           {generationDebug.model ? (
             <div className="flex gap-2">
-              <dt className="font-medium text-violet-800">Modelo</dt>
+              <dt className="font-medium text-zinc-800">Modelo</dt>
               <dd>{generationDebug.model}</dd>
             </div>
           ) : null}
           {tokenParts.length ? (
             <div className="flex gap-2">
-              <dt className="font-medium text-violet-800">Tokens</dt>
+              <dt className="font-medium text-zinc-800">Tokens</dt>
               <dd>{tokenParts.join(' · ')}</dd>
             </div>
           ) : null}
           {generationDebug.temperature != null ? (
             <div className="flex gap-2">
-              <dt className="font-medium text-violet-800">Temperature</dt>
+              <dt className="font-medium text-zinc-800">Temperature</dt>
               <dd>{generationDebug.temperature}</dd>
             </div>
           ) : null}
           {generationDebug.max_output_tokens != null ? (
             <div className="flex gap-2">
-              <dt className="font-medium text-violet-800">Max output tokens</dt>
+              <dt className="font-medium text-zinc-800">Max output tokens</dt>
               <dd>{generationDebug.max_output_tokens}</dd>
             </div>
           ) : null}
@@ -264,8 +267,8 @@ function OpenAIGenerationDebugSection({ generationDebug }) {
 
         {generationDebug.stacktrace ? (
           <details>
-            <summary className="cursor-pointer font-medium text-violet-900">Stacktrace</summary>
-            <pre className="mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-violet-200 bg-white px-2 py-1 font-mono text-[9px] leading-relaxed">
+            <summary className="cursor-pointer font-medium text-zinc-900">Stacktrace</summary>
+            <pre className="mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-zinc-200 bg-white px-2 py-1 font-mono text-[9px] leading-relaxed">
               {generationDebug.stacktrace}
             </pre>
           </details>
@@ -273,8 +276,8 @@ function OpenAIGenerationDebugSection({ generationDebug }) {
 
         {generationDebug.expected_json_schema ? (
           <details>
-            <summary className="cursor-pointer font-medium text-violet-900">JSON esperado por el parser</summary>
-            <pre className="mt-0.5 max-h-24 overflow-auto whitespace-pre-wrap rounded border border-violet-200 bg-white px-2 py-1 font-mono">
+            <summary className="cursor-pointer font-medium text-zinc-900">JSON esperado por el parser</summary>
+            <pre className="mt-0.5 max-h-24 overflow-auto whitespace-pre-wrap rounded border border-zinc-200 bg-white px-2 py-1 font-mono">
               {generationDebug.expected_json_schema}
             </pre>
           </details>
@@ -282,8 +285,8 @@ function OpenAIGenerationDebugSection({ generationDebug }) {
 
         {generationDebug.prompt_system ? (
           <details>
-            <summary className="cursor-pointer font-medium text-violet-900">Prompt system (completo)</summary>
-            <pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-violet-200 bg-white px-2 py-1 font-mono leading-relaxed">
+            <summary className="cursor-pointer font-medium text-zinc-900">Prompt system (completo)</summary>
+            <pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-zinc-200 bg-white px-2 py-1 font-mono leading-relaxed">
               {generationDebug.prompt_system}
             </pre>
           </details>
@@ -291,8 +294,8 @@ function OpenAIGenerationDebugSection({ generationDebug }) {
 
         {generationDebug.prompt_user ? (
           <details open>
-            <summary className="cursor-pointer font-medium text-violet-900">Prompt user (completo)</summary>
-            <pre className="mt-0.5 max-h-64 overflow-auto whitespace-pre-wrap rounded border border-violet-200 bg-white px-2 py-1 font-mono leading-relaxed">
+            <summary className="cursor-pointer font-medium text-zinc-900">Prompt user (completo)</summary>
+            <pre className="mt-0.5 max-h-64 overflow-auto whitespace-pre-wrap rounded border border-zinc-200 bg-white px-2 py-1 font-mono leading-relaxed">
               {generationDebug.prompt_user}
             </pre>
           </details>
@@ -300,8 +303,8 @@ function OpenAIGenerationDebugSection({ generationDebug }) {
 
         {generationDebug.raw_response ? (
           <details open>
-            <summary className="cursor-pointer font-medium text-violet-900">Respuesta RAW de OpenAI</summary>
-            <pre className="mt-0.5 max-h-72 overflow-auto whitespace-pre-wrap rounded border border-amber-300 bg-amber-50/50 px-2 py-1 font-mono leading-relaxed text-zinc-900">
+            <summary className="cursor-pointer font-medium text-zinc-900">Respuesta RAW de OpenAI</summary>
+            <pre className="mt-0.5 max-h-72 overflow-auto whitespace-pre-wrap rounded border border-zinc-300 bg-zinc-50/50 px-2 py-1 font-mono leading-relaxed text-zinc-900">
               {generationDebug.raw_response}
             </pre>
           </details>
@@ -310,8 +313,8 @@ function OpenAIGenerationDebugSection({ generationDebug }) {
         {generationDebug.stripped_response &&
         generationDebug.stripped_response !== generationDebug.raw_response ? (
           <details>
-            <summary className="cursor-pointer font-medium text-violet-900">Respuesta tras quitar fences markdown</summary>
-            <pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-violet-200 bg-white px-2 py-1 font-mono leading-relaxed">
+            <summary className="cursor-pointer font-medium text-zinc-900">Respuesta tras quitar fences markdown</summary>
+            <pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-zinc-200 bg-white px-2 py-1 font-mono leading-relaxed">
               {generationDebug.stripped_response}
             </pre>
           </details>
@@ -331,11 +334,11 @@ function ValidationDebugPanel({ validation }) {
     validation.rejected_body?.length >= 20
 
   const panelClass = isParseWarning
-    ? 'mt-2 rounded-lg border border-amber-300 bg-amber-50/80 px-3 py-2 text-[11px] text-amber-950'
-    : 'mt-2 rounded-lg border border-rose-300 bg-rose-50/80 px-3 py-2 text-[11px] text-rose-950'
+    ? 'mt-2 rounded-lg border border-zinc-300 bg-zinc-50/80 px-3 py-2 text-[11px] text-zinc-950'
+    : 'mt-2 rounded-lg border border-red-300 bg-red-50/80 px-3 py-2 text-[11px] text-red-950'
 
-  const titleClass = isParseWarning ? 'font-semibold text-amber-900' : 'font-semibold text-rose-900'
-  const summaryClass = isParseWarning ? 'mt-1 text-amber-800' : 'mt-1 text-rose-800'
+  const titleClass = isParseWarning ? 'font-semibold text-zinc-900' : 'font-semibold text-red-900'
+  const summaryClass = isParseWarning ? 'mt-1 text-zinc-800' : 'mt-1 text-red-800'
 
   return (
     <div className={panelClass}>
@@ -351,19 +354,19 @@ function ValidationDebugPanel({ validation }) {
       <dl className="mt-2 grid gap-1">
         {validation.word_count != null ? (
           <div className="flex gap-2">
-            <dt className="font-medium text-rose-700">Palabras</dt>
+            <dt className="font-medium text-red-700">Palabras</dt>
             <dd>{validation.word_count}</dd>
           </div>
         ) : null}
         {validation.char_count != null ? (
           <div className="flex gap-2">
-            <dt className="font-medium text-rose-700">Caracteres</dt>
+            <dt className="font-medium text-red-700">Caracteres</dt>
             <dd>{validation.char_count}</dd>
           </div>
         ) : null}
         {validation.attempts ? (
           <div className="flex gap-2">
-            <dt className="font-medium text-rose-700">Intentos</dt>
+            <dt className="font-medium text-red-700">Intentos</dt>
             <dd>{validation.attempts}</dd>
           </div>
         ) : null}
@@ -371,8 +374,8 @@ function ValidationDebugPanel({ validation }) {
 
       {validation.issues?.length ? (
         <div className="mt-2">
-          <p className="font-medium text-rose-800">Reglas incumplidas ({validation.issues.length})</p>
-          <ul className="mt-1 list-inside list-disc space-y-0.5 text-rose-900">
+          <p className="font-medium text-red-800">Reglas incumplidas ({validation.issues.length})</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5 text-red-900">
             {validation.issues.map((issue, i) => (
               <li key={`issue-${i}`}>{issue}</li>
             ))}
@@ -382,10 +385,10 @@ function ValidationDebugPanel({ validation }) {
 
       {validation.banned_matches?.length ? (
         <div className="mt-2">
-          <p className="font-medium text-rose-800">Pitch / frases detectadas</p>
+          <p className="font-medium text-red-800">Pitch / frases detectadas</p>
           <ul className="mt-1 space-y-1">
             {validation.banned_matches.map((m, i) => (
-              <li key={`ban-${i}`} className="rounded bg-white/70 px-2 py-1 text-rose-900">
+              <li key={`ban-${i}`} className="rounded bg-white/70 px-2 py-1 text-red-900">
                 <span className="font-medium">{m.field}</span> · {m.rule}:{' '}
                 <span className="font-semibold">&quot;{m.phrase}&quot;</span>
               </li>
@@ -396,11 +399,11 @@ function ValidationDebugPanel({ validation }) {
 
       {validation.rejected_sections ? (
         <details className="mt-2">
-          <summary className="cursor-pointer font-medium text-rose-800">Bloques generados (sections)</summary>
+          <summary className="cursor-pointer font-medium text-red-800">Bloques generados (sections)</summary>
           <dl className="mt-1 space-y-2">
             {Object.entries(validation.rejected_sections).map(([key, text]) => (
               <div key={key}>
-                <dt className="font-medium capitalize text-rose-700">{key}</dt>
+                <dt className="font-medium capitalize text-red-700">{key}</dt>
                 <dd className="mt-0.5 whitespace-pre-wrap rounded bg-white/70 px-2 py-1">{text}</dd>
               </div>
             ))}
@@ -410,19 +413,19 @@ function ValidationDebugPanel({ validation }) {
 
       {validation.rejected_subject ? (
         <div className="mt-2">
-          <p className="font-medium text-rose-800">Asunto generado</p>
+          <p className="font-medium text-red-800">Asunto generado</p>
           <p className="mt-0.5 rounded bg-white/70 px-2 py-1">{validation.rejected_subject}</p>
         </div>
       ) : null}
 
       {validation.rejected_body ? (
         <div className="mt-2">
-          <p className={`font-medium ${isParseWarning ? 'text-amber-900' : 'text-rose-800'}`}>
+          <p className={`font-medium ${isParseWarning ? 'text-zinc-900' : 'text-red-800'}`}>
             {isParseWarning ? 'Texto recuperado (sin JSON válido)' : 'Borrador completo rechazado'}
           </p>
           <pre
             className={`mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap rounded border px-2 py-1.5 text-[10px] leading-relaxed text-zinc-800 ${
-              isParseWarning ? 'border-amber-200 bg-amber-50/70' : 'border-rose-200 bg-white'
+              isParseWarning ? 'border-zinc-200 bg-zinc-50/70' : 'border-red-200 bg-white'
             }`}
           >
             {validation.rejected_body}
@@ -434,9 +437,9 @@ function ValidationDebugPanel({ validation }) {
 }
 
 const VALIDATION_STATUS_LABELS = {
-  valid: { text: 'Válido', className: 'bg-emerald-100 text-emerald-900' },
-  warning: { text: 'Advertencia', className: 'bg-amber-100 text-amber-950' },
-  rejected: { text: 'Rechazado', className: 'bg-rose-100 text-rose-900' },
+  valid: { text: 'Válido', className: 'bg-red-100 text-red-900' },
+  warning: { text: 'Advertencia', className: 'bg-zinc-100 text-zinc-950' },
+  rejected: { text: 'Rechazado', className: 'bg-red-100 text-red-900' },
 }
 
 function PlaybookFullPreviewPanel({ preview, onClose }) {
@@ -445,18 +448,18 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
   const audit = preview.audit
 
   return (
-    <div className="mt-3 space-y-3 rounded-xl border border-indigo-300 bg-indigo-50/40 p-3 shadow-sm">
+    <div className="mt-3 space-y-3 rounded-xl border border-zinc-300 bg-zinc-50/40 p-3 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="text-xs font-semibold text-indigo-950">Vista previa completa del playbook</p>
-          <p className="mt-0.5 text-[10px] text-indigo-900/80">
+          <p className="text-xs font-semibold text-zinc-950">Vista previa completa del playbook</p>
+          <p className="mt-0.5 text-[10px] text-zinc-900/80">
             {preview.lead_name} · {preview.company_name} — simulación sin respuesta (no modifica producción)
           </p>
         </div>
         {onClose ? (
           <button
             type="button"
-            className="text-[10px] font-medium text-indigo-800 underline"
+            className="text-[10px] font-medium text-zinc-800 underline"
             onClick={onClose}
           >
             Cerrar vista previa
@@ -469,9 +472,9 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
           className={`text-[11px] font-medium ${
             preview.ok
               ? preview.rejected_count > 0
-                ? 'text-amber-900'
-                : 'text-emerald-800'
-              : 'text-amber-900'
+                ? 'text-zinc-900'
+                : 'text-red-800'
+              : 'text-zinc-900'
           }`}
         >
           {preview.message}
@@ -479,7 +482,7 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
       ) : null}
 
       {preview.valid_count != null || preview.rejected_count != null ? (
-        <p className="text-[10px] text-indigo-800">
+        <p className="text-[10px] text-zinc-800">
           Resumen: {preview.valid_count ?? 0} válidos · {preview.rejected_count ?? 0} rechazados ·{' '}
           {preview.warning_count ?? 0} advertencias
           {preview.skipped_count ? ` · ${preview.skipped_count} omitidos` : ''}
@@ -487,11 +490,11 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
       ) : null}
 
       {audit ? (
-        <div className="rounded-lg border border-indigo-200 bg-white/80 p-3 text-[11px] text-zinc-800">
-          <p className="font-semibold text-indigo-950">Contexto de auditoría</p>
+        <div className="rounded-lg border border-zinc-200 bg-white/80 p-3 text-[11px] text-zinc-800">
+          <p className="font-semibold text-zinc-950">Contexto de auditoría</p>
           <dl className="mt-2 grid gap-2">
             <div>
-              <dt className="font-medium text-indigo-800">Producto — auditoría completa</dt>
+              <dt className="font-medium text-zinc-800">Producto — auditoría completa</dt>
               <dd className="mt-1 space-y-2">
                 {audit.product?.name ? (
                   <p>
@@ -501,7 +504,7 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
                 {audit.product?.original_description ? (
                   <div>
                     <p className="font-medium">Descripción original</p>
-                    <pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-indigo-100 bg-white/80 px-2 py-1 text-[10px]">
+                    <pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-zinc-100 bg-white/80 px-2 py-1 text-[10px]">
                       {audit.product.original_description}
                     </pre>
                   </div>
@@ -509,7 +512,7 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
                 {audit.product?.interpreted_summary ? (
                   <div>
                     <p className="font-medium">Resumen interpretado</p>
-                    <pre className="mt-0.5 whitespace-pre-wrap rounded border border-indigo-100 bg-white/80 px-2 py-1 text-[10px]">
+                    <pre className="mt-0.5 whitespace-pre-wrap rounded border border-zinc-100 bg-white/80 px-2 py-1 text-[10px]">
                       {audit.product.interpreted_summary}
                     </pre>
                   </div>
@@ -517,7 +520,7 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
                 {audit.product?.extracted_problems ? (
                   <div>
                     <p className="font-medium">Problemas que cree resolver</p>
-                    <pre className="mt-0.5 whitespace-pre-wrap rounded border border-indigo-100 bg-white/80 px-2 py-1 text-[10px]">
+                    <pre className="mt-0.5 whitespace-pre-wrap rounded border border-zinc-100 bg-white/80 px-2 py-1 text-[10px]">
                       {audit.product.extracted_problems}
                     </pre>
                   </div>
@@ -525,7 +528,7 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
                 {audit.product?.extracted_benefits ? (
                   <div>
                     <p className="font-medium">Beneficios extraídos</p>
-                    <pre className="mt-0.5 whitespace-pre-wrap rounded border border-indigo-100 bg-white/80 px-2 py-1 text-[10px]">
+                    <pre className="mt-0.5 whitespace-pre-wrap rounded border border-zinc-100 bg-white/80 px-2 py-1 text-[10px]">
                       {audit.product.extracted_benefits}
                     </pre>
                   </div>
@@ -533,7 +536,7 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
               </dd>
             </div>
             <div>
-              <dt className="font-medium text-indigo-800">Perfil / ICP</dt>
+              <dt className="font-medium text-zinc-800">Perfil / ICP</dt>
               <dd className="mt-0.5 space-y-1">
                 <p>Industria ICP: {audit.icp_industry || '—'}</p>
                 <p>
@@ -555,7 +558,7 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
                   {audit.icp_score != null ? ` · ICP score contacto ${audit.icp_score}%` : ''}
                 </p>
                 {audit.role_alignment?.match_score != null ? (
-                  <p className="text-[10px] text-indigo-700">
+                  <p className="text-[10px] text-zinc-700">
                     Coincidencia rol: {audit.role_alignment.match_score}% (
                     {audit.role_alignment.alignment_level})
                   </p>
@@ -563,7 +566,7 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
               </dd>
             </div>
             {audit.role_alignment?.warning ? (
-              <div className="rounded-md border border-amber-400 bg-amber-50 px-2 py-1.5 text-amber-950">
+              <div className="rounded-md border border-zinc-400 bg-zinc-50 px-2 py-1.5 text-zinc-950">
                 <dt className="font-semibold">Advertencia de rol</dt>
                 <dd className="mt-0.5">{audit.role_alignment.warning}</dd>
               </div>
@@ -574,13 +577,13 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
             />
             {audit.identified_pain ? (
               <div>
-                <dt className="font-medium text-indigo-800">Resultado principal (Día 1)</dt>
+                <dt className="font-medium text-zinc-800">Resultado principal (Día 1)</dt>
                 <dd className="mt-0.5 whitespace-pre-wrap">{audit.identified_pain}</dd>
               </div>
             ) : null}
             {audit.identified_benefit ? (
               <div>
-                <dt className="font-medium text-indigo-800">Beneficio identificado (Día 1)</dt>
+                <dt className="font-medium text-zinc-800">Beneficio identificado (Día 1)</dt>
                 <dd className="mt-0.5 whitespace-pre-wrap">{audit.identified_benefit}</dd>
               </div>
             ) : null}
@@ -598,14 +601,14 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
               t.skipped
                 ? 'border-zinc-200 bg-zinc-50'
                 : t.validation_status === 'rejected'
-                  ? 'border-rose-300 bg-rose-50/60'
+                  ? 'border-red-300 bg-red-50/60'
                   : t.validation_status === 'warning'
-                    ? 'border-amber-300 bg-amber-50/60'
-                    : 'border-indigo-200 bg-white'
+                    ? 'border-zinc-300 bg-zinc-50/60'
+                    : 'border-zinc-200 bg-white'
             }`}
           >
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-900">
+              <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-bold text-zinc-900">
                 Día {t.day}
               </span>
               <span className="font-semibold text-zinc-900">
@@ -629,12 +632,12 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
               ) : null}
             </div>
 
-            <p className="mt-1.5 text-[10px] font-medium text-indigo-800">Objetivo</p>
+            <p className="mt-1.5 text-[10px] font-medium text-zinc-800">Objetivo</p>
             <p className="text-zinc-700">{t.objective}</p>
 
             {t.prior_context?.length > 0 ? (
               <details className="mt-2">
-                <summary className="cursor-pointer font-medium text-indigo-900">
+                <summary className="cursor-pointer font-medium text-zinc-900">
                   Contexto previo utilizado ({t.prior_context.length} toque
                   {t.prior_context.length === 1 ? '' : 's'})
                 </summary>
@@ -642,9 +645,9 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
                   {t.prior_context.map((p, i) => (
                     <li
                       key={`prior-${t.day}-${p.day}-${p.channel}-${i}`}
-                      className="rounded border border-indigo-100 bg-indigo-50/50 px-2 py-1.5"
+                      className="rounded border border-zinc-100 bg-zinc-50/50 px-2 py-1.5"
                     >
-                      <p className="font-medium text-indigo-900">
+                      <p className="font-medium text-zinc-900">
                         Día {p.day} · {CHANNEL_LABELS[p.channel] || p.channel}
                         {p.subject ? ` · Asunto: ${p.subject}` : ''}
                       </p>
@@ -660,7 +663,7 @@ function PlaybookFullPreviewPanel({ preview, onClose }) {
             )}
 
             {t.skipped ? (
-              <p className="mt-2 text-amber-900">{t.skip_reason || 'Canal no disponible.'}</p>
+              <p className="mt-2 text-zinc-900">{t.skip_reason || 'Canal no disponible.'}</p>
             ) : t.body ? (
               <>
                 <SdrReasoningPanel reasoning={t.sdr_reasoning} />
@@ -983,7 +986,7 @@ export function MvpOutreachWorkspace({
   if (!readyProfiles.length) {
     const pending = prospectingRows.filter((r) => r.outreach_ready).length
     return (
-      <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-xs text-amber-900">
+      <p className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-center text-xs text-zinc-900">
         {pending > 0
           ? `${pending} lead(s) Outreach Ready — recargá el pipeline.`
           : 'Sin leads Outreach Ready.'}
@@ -997,15 +1000,14 @@ export function MvpOutreachWorkspace({
 
   return (
     <div className="mt-4 space-y-2">
-      <p className="rounded-lg border border-sky-200 bg-sky-50/60 px-3 py-2 text-[11px] text-sky-950">
-        Playbook SDR — 7 toques (Día 1 Email → 4 LinkedIn → 7 WhatsApp → 10 Email valor → 13
-        LinkedIn → 16 WhatsApp → 19 Email cierre). Un toque por vez en producción; en testing podés
-        auditar la secuencia completa. Sin envío automático.
+      <p className="rounded-lg border border-zinc-200 bg-zinc-50/60 px-3 py-2 text-[11px] text-zinc-950">
+        Outreach: generá el próximo toque de la secuencia (email → LinkedIn → WhatsApp). Un toque a
+        la vez.
       </p>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(220px,1fr)_minmax(280px,1.4fr)]">
-        <div className="rounded-xl border border-violet-200 bg-white p-3 shadow-sm">
-          <p className="text-xs font-semibold text-violet-950">Nexus Outreach — leads listos</p>
+        <div className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm">
+          <p className="text-xs font-semibold text-zinc-950">Nexus Outreach — leads listos</p>
           <ul className="mt-2 max-h-72 space-y-1 overflow-y-auto">
             {readyProfiles.map((p) => {
               const isActive = selectedId === p.external_id
@@ -1017,8 +1019,8 @@ export function MvpOutreachWorkspace({
                     onClick={() => pickProfile(p.external_id)}
                     className={`w-full cursor-pointer rounded-lg border px-2 py-2 text-left text-xs ${
                       isActive
-                        ? 'border-violet-400 bg-violet-50 ring-1 ring-violet-200'
-                        : 'border-zinc-200 hover:border-violet-200 hover:bg-violet-50/40'
+                        ? 'border-zinc-400 bg-zinc-50 ring-1 ring-zinc-200'
+                        : 'border-zinc-200 hover:border-zinc-200 hover:bg-zinc-50/40'
                     }`}
                   >
                     <span className="font-semibold text-zinc-900">{p.person.name}</span>
@@ -1036,8 +1038,8 @@ export function MvpOutreachWorkspace({
         <div className="space-y-3">
           {selected ? <ContactDetailPanel profile={selected} extra={selectedExtra} /> : null}
 
-          <div className="rounded-xl border border-violet-200 bg-violet-50/30 p-3 shadow-sm">
-            <p className="text-xs font-semibold text-violet-950">Estado real — Producción</p>
+          <div className="rounded-xl border border-zinc-200 bg-zinc-50/30 p-3 shadow-sm" hidden={!showOpsDebug}>
+            <p className="text-xs font-semibold text-zinc-950">Estado real — Producción</p>
             {selected?.playbook_state?.available_channels?.length ? (
               <p className="mt-1 text-[10px] text-zinc-500">
                 Canales del lead: {selected.playbook_state.available_channels.join(', ')}
@@ -1059,7 +1061,7 @@ export function MvpOutreachWorkspace({
                   <>
                     <div className="flex gap-2">
                       <dt className="font-medium text-zinc-500">Próximo canal</dt>
-                      <dd className="font-semibold text-violet-900">
+                      <dd className="font-semibold text-zinc-900">
                         {CHANNEL_LABELS[prodSummary.nextChannel] || prodSummary.nextChannel}
                       </dd>
                     </div>
@@ -1080,7 +1082,7 @@ export function MvpOutreachWorkspace({
               <button
                 type="button"
                 disabled={freeze || Boolean(busy) || !selected || !hasPending}
-                className="rounded-lg bg-violet-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-40"
+                className="rounded-lg bg-zinc-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-700 disabled:opacity-40"
                 onClick={() => void handleGenerateNext(false)}
               >
                 {busy === 'gen' ? 'Generando…' : 'Generar próximo toque'}
@@ -1088,24 +1090,25 @@ export function MvpOutreachWorkspace({
               <button
                 type="button"
                 disabled={freeze || Boolean(busy) || !hasProductionTouch}
-                className="rounded-lg border border-violet-200 px-3 py-1.5 text-[11px] font-semibold text-violet-900 hover:bg-violet-50 disabled:opacity-40"
+                className="rounded-lg border border-zinc-200 px-3 py-1.5 text-[11px] font-semibold text-zinc-900 hover:bg-zinc-50 disabled:opacity-40"
                 onClick={() => void handleGenerateNext(true)}
               >
-                {busy === 'regen' ? 'Regenerando…' : 'Regenerar (producción)'}
+                {busy === 'regen' ? 'Regenerando…' : 'Regenerar'}
               </button>
             </div>
           </div>
 
-          <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-3 shadow-sm">
-            <p className="text-xs font-semibold text-amber-950">Modo testing — validación de mensajes</p>
-            <p className="mt-1 text-[10px] text-amber-900/80">
+          {showOpsDebug ? (
+          <div className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50/40 p-3 shadow-sm">
+            <p className="text-xs font-semibold text-zinc-950">Modo testing — validación de mensajes</p>
+            <p className="mt-1 text-[10px] text-zinc-900/80">
               Genera borradores por canal sin avanzar el playbook, o la secuencia completa de 7 toques.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
                 disabled={freeze || Boolean(busy) || !selected}
-                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-40"
+                className="rounded-lg bg-zinc-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-zinc-700 disabled:opacity-40"
                 onClick={() => void handleGeneratePlaybookPreview()}
               >
                 {busy === 'preview' ? 'Generando secuencia…' : 'Vista previa completa del playbook'}
@@ -1115,7 +1118,7 @@ export function MvpOutreachWorkspace({
                   key={ch}
                   type="button"
                   disabled={freeze || Boolean(busy) || !selected}
-                  className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-amber-950 hover:bg-amber-50 disabled:opacity-40"
+                  className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-zinc-950 hover:bg-zinc-50 disabled:opacity-40"
                   onClick={() => void handleGenerateTest(ch)}
                 >
                   {busy === `test-${ch}` ? 'Generando…' : `Generar ${CHANNEL_LABELS[ch]}`}
@@ -1124,7 +1127,7 @@ export function MvpOutreachWorkspace({
               <button
                 type="button"
                 disabled={freeze || Boolean(busy) || !selected}
-                className="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-rose-900 hover:bg-rose-50 disabled:opacity-40"
+                className="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-red-900 hover:bg-red-50 disabled:opacity-40"
                 onClick={() => void handleResetSequence()}
               >
                 {busy === 'reset' ? 'Reiniciando…' : 'Reiniciar secuencia'}
@@ -1133,7 +1136,7 @@ export function MvpOutreachWorkspace({
             {isTestingView ? (
               <button
                 type="button"
-                className="mt-2 text-[10px] font-medium text-amber-900 underline"
+                className="mt-2 text-[10px] font-medium text-zinc-900 underline"
                 onClick={() => {
                   setTestDraft(null)
                   syncEditorFromTouch(touch)
@@ -1148,27 +1151,28 @@ export function MvpOutreachWorkspace({
               onClose={() => setPlaybookPreview(null)}
             />
           </div>
+          ) : null}
 
-          <div className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm">
+          <div className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm" hidden={!showOpsDebug}>
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-xs font-semibold text-zinc-900">Borrador</p>
               {isTestingView ? (
-                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900">
+                <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-900">
                   Modo testing · Día {testDraft?.day} · {CHANNEL_LABELS[testDraft?.channel] || testDraft?.channel}
                 </span>
               ) : hasProductionTouch ? (
-                <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-900">
+                <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold text-zinc-900">
                   Producción · Día {touch?.day} · {CHANNEL_LABELS[touch?.channel] || touch?.channel}
                 </span>
               ) : null}
             </div>
 
             {status?.type === 'loading' ? (
-              <p className="mt-2 text-[11px] font-medium text-violet-800">{status.text}</p>
+              <p className="mt-2 text-[11px] font-medium text-zinc-800">{status.text}</p>
             ) : null}
 
             {status?.type === 'error' ? (
-              <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-2 py-2 text-[11px] text-rose-900">
+              <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-2 py-2 text-[11px] text-red-900">
                 <p className="font-semibold">{status.validation ? 'Borrador rechazado' : 'Error'}</p>
                 <p className="mt-0.5">{status.text}</p>
                 <ValidationDebugPanel validation={status.validation} />
@@ -1184,7 +1188,7 @@ export function MvpOutreachWorkspace({
             ) : null}
 
             {status?.type === 'ok' ? (
-              <p className="mt-2 text-[11px] text-emerald-800">{status.text}</p>
+              <p className="mt-2 text-[11px] text-red-800">{status.text}</p>
             ) : null}
 
             {hasActiveDraft || status?.validation?.rejected_body ? (
@@ -1232,7 +1236,7 @@ export function MvpOutreachWorkspace({
             ) : (
               <p className="mt-3 text-[11px] text-zinc-500">
                 {hasPending
-                  ? 'Usá «Generar próximo toque» (producción) o el modo testing para probar un canal.'
+                  ? 'Usá «Generar próximo toque» para el siguiente mensaje de la secuencia.'
                   : 'Secuencia completa o sin canales disponibles.'}
               </p>
             )}

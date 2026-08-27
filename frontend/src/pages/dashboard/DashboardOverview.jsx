@@ -7,17 +7,22 @@ import { useDashboardAnalytics } from '../../context/DashboardAnalyticsContext.j
 import { useFlattenedProspects } from '../../hooks/useFlattenedProspects.js'
 import {
   parseSequenceFired,
+  PLAYBOOK_LAST_TOUCH_DAY,
+  REACTIVATION_DAY,
   sequenceCalendarDayIndex,
 } from '../../utils/sequenceUi.js'
-function Card({ label, value, hint }) {
-  return (
-    <div className="rounded-xl border border-nx-border bg-nx-card p-4 shadow-sm">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-muted">{label}</p>
-      <p className="mt-2 text-xl font-semibold text-nx-ink">{value}</p>
-      {hint ? <p className="mt-1 text-xs text-nx-muted">{hint}</p> : null}
-    </div>
-  )
-}
+import { useAuth } from '../../context/AuthContext.jsx'
+import { WorkspaceGoLiveChecklist } from '../../components/dashboard/WorkspaceGoLiveChecklist.jsx'
+import { SdrConsolePillars } from '../../components/dashboard/SdrConsolePillars.jsx'
+import { ConsoleActionPanel } from '../../components/dashboard/ConsoleActionPanel.jsx'
+import { Panel, StatCard } from '../../components/ui/Card.jsx'
+import { PageSection } from '../../components/ui/PageSection.jsx'
+import { userDisplayFirstName } from '../../utils/userDisplayName.js'
+import { useLinkedInPending } from '../../hooks/useLinkedInPending.js'
+import { useWhatsAppPending } from '../../hooks/useWhatsAppPending.js'
+import { useCallPending } from '../../hooks/useCallPending.js'
+import { useMeetingsPending } from '../../hooks/useMeetingsPending.js'
+import { useResponderPending } from '../../hooks/useResponderPending.js'
 
 function pct(x) {
   if (x == null || Number.isNaN(x)) {
@@ -40,36 +45,31 @@ function fmtDate(iso) {
   }
 }
 
-function Panel({ title, children }) {
-  return (
-    <div className="rounded-xl border border-nx-border bg-nx-card p-4 shadow-sm">
-      <p className="text-xs font-semibold uppercase tracking-wide text-nx-muted">{title}</p>
-      <div className="mt-3">{children}</div>
-    </div>
-  )
-}
-
 export default function DashboardOverview() {
   const { company, companyId } = useCompany()
+  const { user } = useAuth()
   const { data, loading, error, refresh } = useDashboardAnalytics()
   const { rows: pulseRows, loading: loadingPulse } = useFlattenedProspects(companyId)
+  const { count: linkedInPending, href: linkedInHref } = useLinkedInPending(companyId)
+  const { count: whatsAppPending, href: whatsAppHref } = useWhatsAppPending(companyId)
+  const { count: callPending, href: callHref } = useCallPending(companyId)
+  const { count: meetingsPending, href: meetingsHref } = useMeetingsPending(companyId)
+  const { count: responderPending, href: responderHref } = useResponderPending(companyId)
   const t = data?.totals
   const intel = data?.intelligence
   const commercial = data?.commercial
+  const firstName = userDisplayFirstName(user)
 
   const nexusPulse = useMemo(() => {
     const rows = pulseRows || []
-    let linkedinListos = 0
+    let linkedinConectar = 0
     let descanso = 0
     let reactivacionesPend = 0
     let esperandoRespuesta = 0
     for (const p of rows) {
-      if (
-        (p.linkedin_url || '').trim() &&
-        (p.linkedin_assisted_draft || '').trim() &&
-        !p.linkedin_sdr_marked_sent_at
-      ) {
-        linkedinListos += 1
+      const hasLinkedIn = (p.linkedin_url || '').trim()
+      if (hasLinkedIn && String(p.linkedin_connection_status || '').toLowerCase() === 'invite_pending') {
+        linkedinConectar += 1
       }
       if (String(p.sequence_group || '').toLowerCase() === 'descanso') {
         descanso += 1
@@ -82,9 +82,9 @@ export default function DashboardOverview() {
         const day = sequenceCalendarDayIndex(p.sequence_started_at)
         const fired = parseSequenceFired(p.sequence_fired_milestones)
         if (
-          day >= 42 &&
-          fired.includes(21) &&
-          !fired.includes(42) &&
+          day >= REACTIVATION_DAY &&
+          fired.includes(PLAYBOOK_LAST_TOUCH_DAY) &&
+          !fired.includes(REACTIVATION_DAY) &&
           !p.sequence_paused &&
           String(p.sequence_group || '').toLowerCase() !== 'encajonado'
         ) {
@@ -93,122 +93,114 @@ export default function DashboardOverview() {
       }
     }
     return {
-      linkedinListos,
+      linkedinConectar,
       descanso,
       reactivacionesPend,
       esperandoRespuesta,
     }
   }, [pulseRows])
 
-  const campaignActivityFeed = useMemo(() => {
-    const raw = data?.campaigns_summary ?? data?.campaigns ?? []
-    const rows = Array.isArray(raw) ? raw : []
-    return [...rows]
-      .filter((c) => c.last_activity_at)
-      .sort((a, b) => new Date(b.last_activity_at).getTime() - new Date(a.last_activity_at).getTime())
-      .slice(0, 14)
-  }, [data])
-
-  const recommended = useMemo(() => {
-    const raw = data?.recommended_actions
-    return Array.isArray(raw) ? raw.slice(0, 12) : []
-  }, [data])
-
   return (
     <>
       <PageHeader
-        title="Resumen general"
-        description={
-          company
-            ? `${company.name} · Métricas operativas y pipeline.`
-            : 'Métricas de la empresa seleccionada.'
-        }
+        kicker="Consola"
+        title={firstName ? `Hola, ${firstName}. Esto es lo que pasa hoy` : 'Resumen del día'}
+        actions={null}
       />
       <AlertBanner message={error} onDismiss={() => void refresh()} />
 
       {companyId ? (
-        <div className="mt-6 rounded-xl border border-rose-100/90 bg-gradient-to-br from-zinc-50/90 via-white to-rose-50/20 p-4 shadow-sm ring-1 ring-zinc-900/5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="text-base font-semibold text-nx-ink">Nexus en vivo</h2>
-              <p className="mt-0.5 text-xs text-nx-muted">
-                Pulso operativo con datos ya cargados en la empresa (sin APIs nuevas).
-                {loadingPulse ? ' Actualizando prospectos…' : ''}
-              </p>
-            </div>
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            <Card
-              label="Preparación en cola"
-              value={String(intel?.pending_tasks_total ?? 0)}
-              hint="Tareas outreach pendientes (Nexus + SDR)."
-            />
-            <Card
-              label="Follow-ups activos"
-              value={String(data?.pending_followups ?? intel?.pending_scheduled_followups ?? 0)}
-              hint="Seguimientos programados pendientes."
-            />
-            <Card
-              label="LinkedIn listos para enviar"
-              value={String(nexusPulse.linkedinListos)}
-              hint="Con URL, borrador y sin marcar enviado."
-            />
-            <Card
-              label="Leads esperando respuesta"
-              value={String(nexusPulse.esperandoRespuesta)}
-              hint="Estado contactado sin inbound registrado."
-            />
-            <Card label="Leads en descanso" value={String(nexusPulse.descanso)} hint="Grupo descanso (día 22–41)." />
-            <Card
-              label="Reactivaciones pendientes"
-              value={String(nexusPulse.reactivacionesPend)}
-              hint="Día ≥ 42, hito 21 hecho, 42 aún no."
-            />
-          </div>
+        <div className="mt-6 space-y-6">
+          <WorkspaceGoLiveChecklist />
+          <SdrConsolePillars />
 
-          <div className="mt-6 grid gap-4 lg:grid-cols-2">
-            <Panel title="Últimas acciones de Nexus (por campaña)">
-              {campaignActivityFeed.length ? (
-                <ul className="max-h-64 space-y-2 overflow-y-auto text-sm">
-                  {campaignActivityFeed.map((c) => (
-                    <li
-                      key={c.campaign_id ?? c.name}
-                      className="flex flex-wrap items-baseline justify-between gap-2 border-b border-nx-border/40 pb-2 last:border-0"
-                    >
-                      <span className="font-medium text-nx-ink">{c.name}</span>
-                      <span className="text-xs text-nx-muted">{fmtDate(c.last_activity_at)}</span>
-                      <span className="w-full text-[11px] text-nx-muted">
-                        {c.messages_sent != null ? `${c.messages_sent} mensajes · ` : ''}
-                        {c.prospects_contacted != null ? `${c.prospects_contacted} contactados` : ''}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-nx-muted">Sin actividad reciente indexada.</p>
-              )}
-            </Panel>
-            <Panel title="Prioridades sugeridas (cola)">
-              {recommended.length ? (
-                <ul className="max-h-64 space-y-2 overflow-y-auto text-sm">
-                  {recommended.map((a) => (
-                    <li key={a.id} className="border-b border-nx-border/40 pb-2 last:border-0">
-                      <p className="font-medium text-nx-ink">{a.headline || a.title}</p>
-                      <p className="text-[11px] text-nx-muted">
-                        {a.campaign_name}
-                        {a.prospect_name ? ` · ${a.prospect_name}` : ''}
-                      </p>
-                      {a.suggested_action ? (
-                        <p className="mt-1 text-xs text-nx-ink/90">{a.suggested_action}</p>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-nx-muted">Sin tareas priorizadas en este momento.</p>
-              )}
-            </Panel>
-          </div>
+          <PageSection
+            title="Tu día"
+            description="Indicadores accionables para la jornada."
+            collapsible={false}
+          >
+            <div className="grid gap-4 lg:grid-cols-3">
+              <div className="lg:col-span-2">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <StatCard
+                    label="LinkedIn por enviar"
+                    value={String(linkedInPending)}
+                    hint="Cola LinkedIn asistida (todas las campañas)."
+                  />
+                  <StatCard
+                    label="WhatsApp por enviar"
+                    value={String(whatsAppPending)}
+                    hint="Cola real de WhatsApp (asistido)."
+                  />
+                  <StatCard
+                    label="Llamadas pendientes"
+                    value={String(callPending)}
+                    hint="Toques de llamada en secuencia (guion listo)."
+                  />
+                  <StatCard
+                    label="Reuniones programadas"
+                    value={String(
+                      (commercial?.meetings_pending ?? 0) + (commercial?.meetings_confirmed ?? 0),
+                    )}
+                    hint="Reuniones pendientes o confirmadas en agenda."
+                  />
+                  <StatCard
+                    label="Follow-ups pendientes"
+                    value={String(data?.pending_followups ?? intel?.pending_scheduled_followups ?? 0)}
+                    hint="Seguimientos programados."
+                  />
+                  <StatCard
+                    label="Preparación en cola"
+                    value={String(intel?.pending_tasks_total ?? 0)}
+                    hint="Tareas outreach pendientes."
+                  />
+                </div>
+                {loadingPulse ? (
+                  <p className="mt-3 text-xs text-nx-muted">Actualizando prospectos en vivo…</p>
+                ) : null}
+              </div>
+
+              <ConsoleActionPanel
+                todos={[
+                  {
+                    id: 'responder',
+                    label: 'Responder',
+                    count: responderPending,
+                    to: responderPending > 0 ? responderHref : '/campanas',
+                    tone: 'alert',
+                  },
+                  {
+                    id: 'linkedin',
+                    label: 'LinkedIn por enviar',
+                    count: linkedInPending,
+                    to: linkedInHref,
+                    tone: 'linkedin',
+                  },
+                  {
+                    id: 'whatsapp',
+                    label: 'WhatsApp por enviar',
+                    count: whatsAppPending,
+                    to: whatsAppHref,
+                    tone: 'whatsapp',
+                  },
+                  {
+                    id: 'call',
+                    label: 'Llamadas pendientes',
+                    count: callPending,
+                    to: callHref,
+                    tone: 'call',
+                  },
+                  {
+                    id: 'meetings',
+                    label: 'Reuniones agendadas',
+                    count: meetingsPending,
+                    to: meetingsHref,
+                    tone: 'meeting',
+                  },
+                ]}
+              />
+            </div>
+          </PageSection>
         </div>
       ) : null}
 
@@ -219,47 +211,73 @@ export default function DashboardOverview() {
       ) : null}
 
       {t ? (
-        <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            <Card label="Campañas activas" value={String(t.campaigns_active)} hint="En curso o listas." />
-            <Card label="Campañas pausadas" value={String(t.campaigns_paused)} />
-            <Card
-              label="Otras campañas"
-              value={String(t.campaigns_other)}
-              hint="Borrador, completadas u otros estados."
-            />
-            <Card label="Prospectos importados" value={String(t.prospects_imported)} />
-            <Card label="Prospectos activos (pipeline)" value={String(t.prospects_active)} />
-            <Card label="Contactados" value={String(t.prospects_contacted)} />
-            <Card label="Respondieron" value={String(t.prospects_responded)} />
-            <Card label="Interesados" value={String(t.prospects_interested)} />
-            <Card label="Reuniones generadas" value={String(t.meetings_booked)} />
-            <Card label="Tasa de respuesta" value={pct(t.response_rate)} />
-            <Card label="Tasa de interés (sobre respuestas)" value={pct(t.interest_rate)} />
-            <Card label="Mensajes enviados" value={String(t.messages_sent)} hint="Outbound registrados." />
-            <Card label="Última actividad" value={fmtDate(t.last_activity_at)} />
-          </div>
+        <div className="mt-6 space-y-4">
+          <PageSection
+            title="Pulso operativo"
+            description="Señales de secuencia y respuesta (menos urgentes que «Tu día»)."
+            defaultOpen={false}
+          >
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <StatCard
+                label="Esperando respuesta"
+                value={String(nexusPulse.esperandoRespuesta)}
+                hint="Contactados sin inbound."
+              />
+              <StatCard label="En descanso" value={String(nexusPulse.descanso)} hint="Grupo descanso (día 22–41)." />
+              <StatCard
+                label="Reactivaciones pendientes"
+                value={String(nexusPulse.reactivacionesPend)}
+                hint={`Día ≥ ${REACTIVATION_DAY}, hito ${PLAYBOOK_LAST_TOUCH_DAY} sin ${REACTIVATION_DAY}.`}
+              />
+            </div>
+          </PageSection>
+
+          <PageSection
+            title="Métricas generales"
+            description="Campañas, prospectos y tasas de la empresa."
+            defaultOpen={false}
+          >
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <StatCard label="Campañas activas" value={String(t.campaigns_active)} hint="En curso o listas." />
+              <StatCard label="Campañas pausadas" value={String(t.campaigns_paused)} />
+              <StatCard
+                label="Otras campañas"
+                value={String(t.campaigns_other)}
+                hint="Borrador, completadas u otros estados."
+              />
+              <StatCard label="Prospectos importados" value={String(t.prospects_imported)} />
+              <StatCard label="Prospectos activos" value={String(t.prospects_active)} />
+              <StatCard label="Contactados" value={String(t.prospects_contacted)} />
+              <StatCard label="Respondieron" value={String(t.prospects_responded)} />
+              <StatCard label="Interesados" value={String(t.prospects_interested)} />
+              <StatCard label="Reuniones generadas" value={String(t.meetings_booked)} />
+              <StatCard label="Tasa de respuesta" value={pct(t.response_rate)} />
+              <StatCard label="Tasa de interés" value={pct(t.interest_rate)} />
+              <StatCard label="Mensajes enviados" value={String(t.messages_sent)} />
+              <StatCard label="Última actividad" value={fmtDate(t.last_activity_at)} />
+            </div>
+          </PageSection>
 
           {commercial ? (
-            <>
-              <h2 className="mt-10 text-base font-semibold text-nx-ink">Pipeline y reuniones</h2>
-              <p className="mt-1 text-sm text-nx-muted">
-                Módulo Meeting + etapas comerciales. Integración de calendario externo en una fase posterior.
-              </p>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
-                <Card label="Reuniones pendientes" value={String(commercial.meetings_pending)} />
-                <Card label="Reuniones confirmadas" value={String(commercial.meetings_confirmed)} />
-                <Card label="Reuniones completadas" value={String(commercial.meetings_completed)} />
-                <Card
-                  label="Tasa completitud reuniones"
+            <PageSection
+              title="Pipeline y reuniones"
+              description="Etapas comerciales y reuniones por estado."
+              defaultOpen={false}
+            >
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                <StatCard label="Reuniones pendientes" value={String(commercial.meetings_pending)} />
+                <StatCard label="Reuniones confirmadas" value={String(commercial.meetings_confirmed)} />
+                <StatCard label="Reuniones completadas" value={String(commercial.meetings_completed)} />
+                <StatCard
+                  label="Tasa completitud"
                   value={pct(commercial.meeting_completion_rate)}
-                  hint="Completadas sobre activas (pend./conf./compl.)."
+                  hint="Completadas sobre activas."
                 />
-                <Card label="Total reuniones (registro)" value={String(commercial.meetings_total)} />
-                <Card
+                <StatCard label="Total reuniones" value={String(commercial.meetings_total)} />
+                <StatCard
                   label="Pipeline abierto"
                   value={String(commercial.pipeline_open_count)}
-                  hint="Prospectos fuera de ganado/perdido."
+                  hint="Fuera de ganado/perdido."
                 />
               </div>
               <div className="mt-4 grid gap-4 lg:grid-cols-2">
@@ -317,32 +335,31 @@ export default function DashboardOverview() {
                   )}
                 </Panel>
               </div>
-            </>
+            </PageSection>
           ) : null}
 
           {intel ? (
-            <>
-              <h2 className="mt-10 text-base font-semibold text-nx-ink">Inteligencia de outreach</h2>
-              <p className="mt-1 text-sm text-nx-muted">
-                Follow-ups, objeciones, interés y momentum de reunión (capa lista para cron y canales
-                reales).
-              </p>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                <Card
+            <PageSection
+              title="Inteligencia de outreach"
+              description="Objeciones, interés por campaña e industria."
+              defaultOpen={false}
+            >
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                <StatCard
                   label="Prospectos calientes"
                   value={String(intel.hot_prospects)}
                   hint="Alta probabilidad / pipeline interesado."
                 />
-                <Card
+                <StatCard
                   label="Follow-ups programados pendientes"
                   value={String(intel.pending_scheduled_followups)}
                 />
-                <Card label="Tareas outreach pendientes" value={String(intel.pending_tasks_total)} />
-                <Card
+                <StatCard label="Tareas outreach pendientes" value={String(intel.pending_tasks_total)} />
+                <StatCard
                   label="Sugerencias de reunión enviadas (IA)"
                   value={String(intel.ia_meeting_nudges)}
                 />
-                <Card
+                <StatCard
                   label="Momentum reunión (IA)"
                   value={String(intel.suggested_meeting_momentum)}
                   hint="Alta señal + 2+ respuestas del prospecto."
@@ -445,37 +462,22 @@ export default function DashboardOverview() {
                 </Panel>
               </div>
 
-            </>
+            </PageSection>
           ) : null}
 
-          <div className="mt-10 rounded-xl border border-dashed border-nx-border bg-nx-card-muted/40 p-4 text-sm text-nx-muted">
-            <p className="font-medium text-nx-ink">Secciones detalladas</p>
-            <p className="mt-1">
-              Usá el menú lateral bajo <span className="font-semibold">Dashboard</span> para ver tablas y
-              gráficos por campaña, prospectos, outreach y equipo.
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Link
-                className="rounded-lg bg-nx-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-nx-brand-hover"
-                to="/dashboard/campanas"
-              >
-                Campañas
-              </Link>
-              <Link
-                className="rounded-lg border border-nx-border bg-white px-3 py-1.5 text-xs font-semibold text-nx-ink hover:bg-nx-card-muted"
-                to="/dashboard/prospectos"
-              >
-                Prospectos
-              </Link>
-              <Link
-                className="rounded-lg border border-nx-border bg-white px-3 py-1.5 text-xs font-semibold text-nx-ink hover:bg-nx-card-muted"
-                to="/dashboard/equipo"
-              >
-                Equipo
-              </Link>
-            </div>
+          <div className="nx-card-muted flex flex-wrap items-center gap-2 rounded-xl px-4 py-3 text-sm">
+            <span className="text-nx-muted">Más detalle:</span>
+            <Link to="/dashboard/outreach" className="nx-btn nx-btn-ghost text-xs">
+              Outreach
+            </Link>
+            <Link to="/dashboard/reuniones" className="nx-btn nx-btn-ghost text-xs">
+              Reuniones
+            </Link>
+            <Link to="/campanas" className="nx-btn nx-btn-ghost text-xs">
+              Campañas
+            </Link>
           </div>
-        </>
+        </div>
       ) : null}
 
       {!loading && !t && !error ? (

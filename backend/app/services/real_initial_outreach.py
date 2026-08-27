@@ -16,12 +16,15 @@ from app.models.prospect import Prospect
 from app.schemas.campaign_channels import coerce_allowed_channels
 from app.services import followup_engine, pipeline_sync
 from app.services import multichannel_sequence as mseq
-from app.services.openai_service import generate_gmail_draft_email
 from app.services.outreach_simulation import make_message
+from app.services.sdr_outreach_compose import (
+    generate_playbook_touch_for_prospect,
+    persist_day1_playbook_draft,
+)
 from app.services.gmail_drafts import create_draft_for_user, get_valid_gmail_connection
 from app.services.gmail_send import send_email_for_user
+from app.services.email_deliverability import deliverable_email_skip_reason, is_real_deliverable_email
 from app.services.real_followup_gmail import (
-    _gmail_style_campaign_ctx,
     _truthy_env,
     count_campaign_real_email_outbounds_last_hour,
 )
@@ -79,6 +82,8 @@ def _eligible_prospects(db: Session, campaign_id: int) -> list[Prospect]:
         em = (p.email or "").strip()
         if not em or "@" not in em:
             continue
+        if not is_real_deliverable_email(em):
+            continue
         if prospect_has_any_outbound(db, p.id):
             continue
         out.append(p)
@@ -116,47 +121,81 @@ def deliver_initial_outreach_via_gmail(
     to_addr = (prospect.email or "").strip()
     if not to_addr or "@" not in to_addr:
         return "skipped"
+    skip_reason = deliverable_email_skip_reason(to_addr)
+    if skip_reason:
+        return "skipped"
 
     allowed = coerce_allowed_channels(getattr(campaign, "allowed_channels", None))
     if allowed and "email" not in allowed:
         return "skipped"
 
-    campaign_ctx = _gmail_style_campaign_ctx(campaign)
-    product_ctx = followup_engine._product_dict(campaign)
-    prospect_ctx = {
-        "name": prospect.name,
-        "company_name": prospect.company_name,
-        "role": prospect.role or "",
-        "industry": prospect.industry or "",
-        "country": prospect.country or "",
-        "email": to_addr,
-    }
-
-    subject, body = generate_gmail_draft_email(
-        prospect=prospect_ctx,
-        campaign=campaign_ctx,
-        product=product_ctx,
-        tone=campaign.tone,
-        education=education,
-        conversation_history=[],
-        last_prospect_inbound=None,
-        prospect_timing_soft=False,
-        prospect_booking_priority=False,
+    from app.services.campaign_sequence_channels import (
+        effective_channel_for_day,
+        effective_playbook_step,
     )
 
-    uid = int(campaign.seller_id)
+    if effective_channel_for_day(campaign, 1) != "email":
+        return "skipped"
+
+    from app.services import daily_send_limits as dsl
+
+    seller_id = int(campaign.seller_id or 0)
+    owner_id = int(prospect.owner_user_id or 0)
+    # Preferí Gmail del owner (p. ej. director que tomó el prospecto); si no, el seller.
+    gmail_candidates: list[int] = []
+    for uid in (owner_id, seller_id):
+        if uid > 0 and uid not in gmail_candidates:
+            gmail_candidates.append(uid)
+    if not gmail_candidates:
+        return "skipped"
+
+    step = effective_playbook_step(campaign, 1)
+    subject, body = generate_playbook_touch_for_prospect(
+        db,
+        campaign=campaign,
+        prospect=prospect,
+        education=education,
+        channel="email",
+        prior_touches=[],
+    )
+    if not (subject or "").strip():
+        subject = "Seguimiento"
+    persist_day1_playbook_draft(
+        prospect,
+        subject=subject,
+        body=body,
+        objective=(step.objective if step else "Primer contacto"),
+    )
+
     cid = int(campaign.company_id)
     now = datetime.now(UTC)
     _anchor_sequence_state(db, prospect, now=now)
 
     auto_send = mode == OutreachEmailMode.auto_send.value and _truthy_env("NEXUS_AUTO_SEND_ENABLED")
-    hourly_cap = int(os.getenv("NEXUS_AUTO_SEND_HOURLY_CAP", "8"))
+    # Día 1 de campaña: sin tope horario artificial — el límite diario protege la cuenta.
+    hourly_cap = int(os.getenv("NEXUS_AUTO_SEND_HOURLY_CAP", "500"))
 
     if auto_send and count_campaign_real_email_outbounds_last_hour(db, campaign.id) >= hourly_cap:
         return "skipped"
 
+    sender_id: int | None = None
+    row = None
+    for candidate in gmail_candidates:
+        try:
+            _, row = get_valid_gmail_connection(db, company_id=cid, user_id=candidate)
+            sender_id = candidate
+            break
+        except Exception:
+            continue
+    if sender_id is None or row is None:
+        return "skipped"
+
+    if not dsl.can_send(db, sender_id, dsl.KIND_EMAIL):
+        return "skipped"
+
+    uid = sender_id
+
     if auto_send:
-        _, row = get_valid_gmail_connection(db, company_id=cid, user_id=uid)
         from_addr = (row.external_email or "").strip()
         if not from_addr:
             return "skipped"
@@ -198,14 +237,10 @@ def deliver_initial_outreach_via_gmail(
             prospect.sequence_state = mseq.STATE_LINK
         if not (prospect.preferred_channel or "").strip():
             prospect.preferred_channel = "email"
-        followup_engine.schedule_followup_task(
-            db,
-            company_id=campaign.company_id,
-            campaign_id=campaign.id,
-            prospect_id=prospect.id,
-            campaign=campaign,
-            title="Seguimiento tras primer contacto",
-        )
+        from app.services.prospect_sequence import compute_next_touch
+
+        next_at, _ = compute_next_touch(prospect, campaign)
+        prospect.next_touch_at = next_at
         return "sent"
 
     out = create_draft_for_user(
@@ -242,14 +277,10 @@ def deliver_initial_outreach_via_gmail(
         prospect.sequence_state = mseq.STATE_LINK
     if not (prospect.preferred_channel or "").strip():
         prospect.preferred_channel = "email"
-    followup_engine.schedule_followup_task(
-        db,
-        company_id=campaign.company_id,
-        campaign_id=campaign.id,
-        prospect_id=prospect.id,
-        campaign=campaign,
-        title="Seguimiento tras primer contacto",
-    )
+    from app.services.prospect_sequence import compute_next_touch
+
+    next_at, _ = compute_next_touch(prospect, campaign)
+    prospect.next_touch_at = next_at
     return "draft"
 
 
@@ -279,20 +310,28 @@ def process_campaign_initial_outreach(
     *,
     max_batch: int | None = None,
 ) -> dict[str, Any]:
-    """Procesa hasta `max_batch` prospectos sin outbound en la campaña."""
+    """
+    Día 1: contacta a TODOS los elegibles de la campaña en este tick
+    (mismo día de activación), hasta agotar cola o el límite diario de email.
+    """
     if getattr(campaign, "automation_paused", False):
         return {"drafts": 0, "sent": 0, "skipped": 0, "errors": 0}
 
     batch = max_batch
     if batch is None:
-        batch = int(os.getenv("NEXUS_INITIAL_OUTREACH_BATCH_SIZE", "5"))
-    batch = max(1, min(batch, 50))
+        # Default alto: blast del Día 1, no drip de 3–5.
+        batch = int(os.getenv("NEXUS_INITIAL_OUTREACH_BATCH_SIZE", "500"))
+    batch = max(1, min(batch, 500))
 
     drafts = sent = skipped = errors = 0
     error_messages: list[str] = []
     prospects = _eligible_prospects(db, campaign.id)[:batch]
+    hit_daily_cap = False
 
     for prospect in prospects:
+        if hit_daily_cap:
+            skipped += 1
+            continue
         try:
             outcome = deliver_initial_outreach_via_gmail(
                 db, campaign=campaign, prospect=prospect, education=education
@@ -303,6 +342,14 @@ def process_campaign_initial_outreach(
                 sent += 1
             else:
                 skipped += 1
+                # Si el seller ya no puede mandar más hoy, no quemar el resto del batch.
+                from app.services import daily_send_limits as dsl
+
+                seller_id = int(campaign.seller_id or 0)
+                owner_id = int(prospect.owner_user_id or 0)
+                uid = owner_id or seller_id
+                if uid and not dsl.can_send(db, uid, dsl.KIND_EMAIL):
+                    hit_daily_cap = True
         except Exception as exc:
             errors += 1
             error_messages.append(
@@ -333,4 +380,5 @@ def process_campaign_initial_outreach(
         "error_messages": error_messages[:24],
         "day1_sent": touched,
         "used_gmail": True,
+        "daily_cap_hit": hit_daily_cap,
     }

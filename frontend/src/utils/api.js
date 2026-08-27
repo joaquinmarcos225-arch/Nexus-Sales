@@ -1,5 +1,5 @@
 import { API_BASE_URL, API_EFFECTIVE_TARGET, resolveApiUrl } from './constants.js'
-import { getStoredToken } from '../utils/authStorage.js'
+import { getStoredToken, setStoredToken } from '../utils/authStorage.js'
 
 export { resolveApiUrl }
 
@@ -44,7 +44,7 @@ async function parseErrorResponse(res) {
     // ignore
   }
   const detail = body?.detail
-  let message = res.statusText || 'Error de red'
+  let message = 'No se pudo completar la acción. Reintentá en unos segundos.'
   if (typeof detail === 'string') {
     message = detail
   } else if (Array.isArray(detail)) {
@@ -52,6 +52,44 @@ async function parseErrorResponse(res) {
   } else if (detail && typeof detail === 'object') {
     message = detail.summary || detail.message || message
   }
+
+  // No mostrar jerga técnica / infra al usuario final
+  const raw = String(message || '').trim()
+  const lower = raw.toLowerCase()
+  const loginFailure =
+    lower.includes('incorrectos') ||
+    lower.includes('incorrect') ||
+    lower.includes('inválid') ||
+    lower.includes('invalid credentials')
+  if (
+    (res.status === 401 ||
+      lower.includes('autenticación requerida') ||
+      lower.includes('authentication required') ||
+      lower.includes('not authenticated')) &&
+    !loginFailure
+  ) {
+    message = 'Tu sesión expiró. Volvé a iniciar sesión.'
+  } else if (
+    res.status === 502 ||
+    res.status === 503 ||
+    res.status === 504 ||
+    lower === 'bad gateway' ||
+    lower.includes('bad gateway') ||
+    lower.includes('econnrefused') ||
+    lower.includes('service unavailable') ||
+    lower.includes('gateway timeout')
+  ) {
+    message =
+      res.status === 504
+        ? 'La operación sigue en curso en el servidor. Esperá un momento; no hace falta reintentar de inmediato.'
+        : 'Nexus no responde un momento (servidor ocupado o reiniciando). Esperá unos segundos y volvé a intentar.'
+  } else if (!raw || raw === 'Error' || /^[A-Z][a-z]+(\s+[A-Z][a-z]+)+$/.test(raw)) {
+    // statusText genéricos tipo "Bad Gateway", "Internal Server Error"
+    if (res.status >= 500) {
+      message = 'Nexus no responde un momento. Esperá unos segundos y volvé a intentar.'
+    }
+  }
+
   const structuredDetail =
     detail && typeof detail === 'object' && !Array.isArray(detail) ? detail : null
   return { message, detail: structuredDetail, body }
@@ -64,26 +102,23 @@ async function parseErrorMessage(res) {
 
 async function request(path, options = {}) {
   const url = `${API_BASE_URL}${path}`
+  const { formData, headers: extraHeaders, body, ...rest } = options
+  const isForm = formData === true || (typeof FormData !== 'undefined' && body instanceof FormData)
   let res
   try {
     res = await fetch(url, {
+      ...rest,
+      body,
       headers: {
-        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-        ...authHeaders(options.headers),
+        ...(body && !isForm ? { 'Content-Type': 'application/json' } : {}),
+        ...authHeaders(extraHeaders),
       },
-      ...options,
     })
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
       throw err
     }
-    const hint =
-      err instanceof TypeError
-        ? ` No se pudo conectar al API (${API_BASE_URL || 'proxy dev'} → ${API_EFFECTIVE_TARGET}). Reiniciá Vite tras cambiar .env; probá VITE_DEV_PROXY=0 si querés CORS directo.`
-        : ''
-    throw new Error(
-      err instanceof Error ? `${err.message}.${hint}` : `Error de red.${hint}`,
-    )
+    throw new Error('No se pudo conectar con Nexus. Revisá tu conexión o esperá unos segundos si el servidor está reiniciando.')
   }
 
   if (res.status === 204) {
@@ -111,15 +146,91 @@ export async function fetchCompanies() {
   return request('/companies')
 }
 
-export async function login(email, password) {
+export async function login(email, password, firstName) {
   return request('/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, first_name: firstName }),
+  })
+}
+
+export async function requestPasswordReset(email) {
+  return request('/auth/password-reset/request', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
+export async function verifyPasswordResetCode(email, code) {
+  return request('/auth/password-reset/verify', {
+    method: 'POST',
+    body: JSON.stringify({ email, code }),
+  })
+}
+
+export async function confirmPasswordReset(email, code, password, passwordConfirm) {
+  return request('/auth/password-reset/confirm', {
+    method: 'POST',
+    body: JSON.stringify({
+      email,
+      code,
+      password,
+      password_confirm: passwordConfirm,
+    }),
+  })
+}
+
+export async function downloadChromeExtensionZip() {
+  const url = `${API_BASE_URL}/extension/chrome-zip`
+  let res
+  try {
+    res = await fetch(url, { headers: authHeaders() })
+  } catch {
+    throw new Error('No se pudo conectar con Nexus. Revisá tu conexión o esperá unos segundos si el servidor está reiniciando.')
+  }
+  if (!res.ok) {
+    const { message } = await parseErrorResponse(res)
+    throw new ApiRequestError(message, { status: res.status })
+  }
+  const blob = await res.blob()
+  const href = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = href
+  a.download = 'nexus-linkedin-assist.zip'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(href)
+}
+
+export async function registerWorkspace(payload) {
+  return request('/onboarding/workspace', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 
 export async function fetchAuthMe() {
-  return request('/auth/me')
+  const data = await request('/auth/me')
+  if (data?.access_token) {
+    setStoredToken(data.access_token)
+  }
+  return data
+}
+
+export async function uploadMyAvatar(file) {
+  const form = new FormData()
+  form.append('file', file)
+  return request('/auth/me/avatar', {
+    method: 'POST',
+    body: form,
+    // request() sets JSON Content-Type by default — skip for FormData
+    headers: {},
+    formData: true,
+  })
+}
+
+export async function deleteMyAvatar() {
+  return request('/auth/me/avatar', { method: 'DELETE' })
 }
 
 export async function fetchProspectsOwnership(companyId, { includeTesting = false } = {}) {
@@ -168,6 +279,10 @@ export async function skipProspectSequenceTouch(prospectId, day) {
   return request(`/prospects/${prospectId}/sequence/touches/${day}/skip`, { method: 'POST' })
 }
 
+export async function markProspectSequenceTouchSent(prospectId, day) {
+  return request(`/prospects/${prospectId}/sequence/touches/${day}/mark-sent`, { method: 'POST' })
+}
+
 export async function simulateProspectSequenceResponse(prospectId, body) {
   return request(`/prospects/${prospectId}/sequence/simulate-response`, {
     method: 'POST',
@@ -179,8 +294,9 @@ export async function enrichProspect(prospectId) {
   return request(`/prospects/${prospectId}/enrich`, { method: 'POST' })
 }
 
-export async function startProspectSequence(prospectId) {
-  return request(`/prospects/${prospectId}/sequence/start`, { method: 'POST' })
+export async function startProspectSequence(prospectId, { consumeCredit = false } = {}) {
+  const qs = consumeCredit ? '?consume_credit=true' : ''
+  return request(`/prospects/${prospectId}/sequence/start${qs}`, { method: 'POST' })
 }
 
 export async function reassignProspect(prospectId, toUserId) {
@@ -249,6 +365,28 @@ export async function interpretProductRaw(companyId, rawText) {
   })
 }
 
+/** Extrae texto de PDF/DOCX/TXT/etc. en el backend. */
+export async function extractProductDocument(companyId, file) {
+  const form = new FormData()
+  form.append('file', file)
+  const url = `${API_BASE_URL}/companies/${companyId}/products/extract-document`
+  let res
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+    })
+  } catch (err) {
+    throw new Error(err instanceof Error ? err.message : 'Error de red')
+  }
+  if (!res.ok) {
+    const { message } = await parseErrorResponse(res)
+    throw new ApiRequestError(message, { status: res.status })
+  }
+  return res.json()
+}
+
 export async function updateProduct(productId, payload) {
   return request(`/products/${productId}`, {
     method: 'PATCH',
@@ -266,10 +404,83 @@ export async function fetchWallet(companyId) {
   return request(`/companies/${companyId}/wallet`)
 }
 
-export async function topUpWallet(companyId, amount) {
-  return request(`/companies/${companyId}/wallet/top-up`, {
+export async function fetchCompanyGoLive(companyId) {
+  return request(`/companies/${companyId}/go-live`)
+}
+
+export async function fetchSupportThread() {
+  return request('/support/thread')
+}
+
+export async function postSupportMessage(text) {
+  return request('/support/messages', {
     method: 'POST',
-    body: JSON.stringify({ amount }),
+    body: JSON.stringify({ text }),
+  })
+}
+
+export async function fetchVapidPublicKey() {
+  return request('/notifications/push/vapid-public')
+}
+
+export async function subscribePush(payload) {
+  return request('/notifications/push/subscribe', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** Créditos disponibles del usuario logueado (directora: pool sin asignar; manager/SDR: saldo personal). */
+export async function fetchMyCredits() {
+  return request('/users/me/credits')
+}
+
+export async function applyPlanWalletCredits(companyId) {
+  return request(`/companies/${companyId}/wallet/apply-plan`, { method: 'POST' })
+}
+
+export async function fetchBillingOpsBoard(cycleKey) {
+  const q = cycleKey ? `?cycle_key=${encodeURIComponent(cycleKey)}` : ''
+  return request(`/billing-ops/board${q}`)
+}
+
+export async function fetchCompanyBillingOps(companyId, cycleKey) {
+  const q = cycleKey ? `?cycle_key=${encodeURIComponent(cycleKey)}` : ''
+  return request(`/companies/${companyId}/billing-ops${q}`)
+}
+
+export async function patchBillingOpsPlan(companyId, payload) {
+  return request(`/companies/${companyId}/billing-ops/plan`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function patchBillingOpsCustomCredits(companyId, credits) {
+  return request(`/companies/${companyId}/billing-ops/custom-credits`, {
+    method: 'PATCH',
+    body: JSON.stringify({ credits }),
+  })
+}
+
+export async function markBillingOpsPaid(companyId, payload = {}) {
+  return request(`/companies/${companyId}/billing-ops/mark-paid`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function markBillingOpsTool(companyId, tool, payload = {}) {
+  return request(`/companies/${companyId}/billing-ops/tools/${encodeURIComponent(tool)}`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function grantBillingOpsCredits(companyId, payload = {}) {
+  return request(`/companies/${companyId}/billing-ops/grant-credits`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 
@@ -277,11 +488,35 @@ export async function fetchCreditAllocations(companyId) {
   return request(`/companies/${companyId}/credit-allocations`)
 }
 
+export async function fetchCreditLedger(companyId, limit = 60) {
+  const q = Number.isFinite(limit) ? `?limit=${limit}` : ''
+  return request(`/companies/${companyId}/credit-ledger${q}`)
+}
+
 export async function assignSellerCredits(companyId, sellerId, amount) {
   return request(`/companies/${companyId}/credit-allocations`, {
     method: 'POST',
     body: JSON.stringify({ seller_id: sellerId, amount }),
   })
+}
+
+export async function transferSellerCredits(companyId, fromUserId, toUserId, amount) {
+  return request(`/companies/${companyId}/credit-transfers`, {
+    method: 'POST',
+    body: JSON.stringify({
+      from_user_id: fromUserId,
+      to_user_id: toUserId,
+      amount,
+    }),
+  })
+}
+
+export async function fetchCreditPeerTransfers(companyId, peerUserId, limit = 80) {
+  const q = new URLSearchParams({
+    peer_user_id: String(peerUserId),
+  })
+  if (Number.isFinite(limit)) q.set('limit', String(limit))
+  return request(`/companies/${companyId}/credit-peer-transfers?${q}`)
 }
 
 export async function previewCampaignEstimates(companyId, prospectCount) {
@@ -293,6 +528,10 @@ export async function previewCampaignEstimates(companyId, prospectCount) {
 
 export async function fetchCampaigns(companyId) {
   return request(`/companies/${companyId}/campaigns`)
+}
+
+export async function fetchResponderInbox(companyId) {
+  return request(`/companies/${companyId}/responder-inbox`)
 }
 
 export async function fetchCompanyAnalytics(companyId) {
@@ -324,8 +563,26 @@ export async function deleteCampaign(campaignId) {
   })
 }
 
-export async function fetchCampaignProspects(campaignId) {
-  return request(`/campaigns/${campaignId}/prospects`)
+export async function fetchSequenceTemplates(companyId) {
+  return request(`/companies/${companyId}/sequence-templates`)
+}
+
+export async function createSequenceTemplate(companyId, payload) {
+  return request(`/companies/${companyId}/sequence-templates`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteSequenceTemplate(companyId, templateId) {
+  return request(`/companies/${companyId}/sequence-templates/${templateId}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function fetchCampaignProspects(campaignId, { compact = true } = {}) {
+  const qs = compact ? '?compact=1' : ''
+  return request(`/campaigns/${campaignId}/prospects${qs}`)
 }
 
 export async function createCampaignProspect(campaignId, payload) {
@@ -333,6 +590,29 @@ export async function createCampaignProspect(campaignId, payload) {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+/** Secuencia individual: guarda el prospecto (kickoff al Iniciar secuencia). */
+export async function startIndividualProspectSequence(companyId, payload) {
+  const controller = new AbortController()
+  // Solo guarda (o arranca enrich en background si la secuencia ya está activa).
+  const timer = setTimeout(() => controller.abort(), 60_000)
+  try {
+    return await request(`/companies/${companyId}/prospects/start-individual`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    })
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(
+        'No se pudo guardar el prospecto a tiempo. Revisá que el backend esté activo e intentá de nuevo.',
+      )
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export async function bulkCreateCampaignProspects(campaignId, prospects) {
@@ -368,15 +648,25 @@ export async function fetchCampaignOutreach(campaignId) {
   return request(`/campaigns/${campaignId}/outreach`)
 }
 
-export async function startCampaignOutreach(campaignId) {
-  return request(`/campaigns/${campaignId}/outreach/start`, {
-    method: 'POST',
-  })
+export async function startCampaignOutreach(campaignId, { timeoutMs = 180000 } = {}) {
+  return fetchWithTimeout(
+    `/campaigns/${campaignId}/outreach/start`,
+    { method: 'POST' },
+    timeoutMs,
+  )
 }
 
 export async function stopCampaignOutreach(campaignId) {
   return request(`/campaigns/${campaignId}/outreach/stop`, {
     method: 'POST',
+  })
+}
+
+/** Omite un canal bloqueado (extensión/Gmail) y sigue con el resto del plan. Requiere confirm=true. */
+export async function continueCampaignWithoutChannel(campaignId, channel, { confirm = true } = {}) {
+  return request(`/campaigns/${campaignId}/outreach/continue-without-channel`, {
+    method: 'POST',
+    body: JSON.stringify({ channel, confirm: Boolean(confirm) }),
   })
 }
 
@@ -412,6 +702,47 @@ export async function fetchLinkedInAssistQueue(campaignId) {
   return request(`/campaigns/${campaignId}/linkedin-assisted/queue`)
 }
 
+export async function fetchWhatsAppAssistQueue(campaignId) {
+  return request(`/campaigns/${campaignId}/whatsapp-assisted/queue`)
+}
+
+export async function fetchCallAssistQueue(campaignId) {
+  return request(`/campaigns/${campaignId}/call-assisted/queue`)
+}
+
+export async function fetchMailQueue(campaignId) {
+  return request(`/campaigns/${campaignId}/mail-queue`)
+}
+
+export async function beginWhatsAppAssistedSession(prospectId) {
+  return request(`/prospects/${prospectId}/whatsapp-assisted/assist`, {
+    method: 'POST',
+  })
+}
+
+export async function abandonWhatsAppAssistedSession(prospectId) {
+  return request(`/prospects/${prospectId}/whatsapp-assisted/abandon`, {
+    method: 'POST',
+  })
+}
+
+export async function markWhatsAppAssistedSent(prospectId) {
+  return request(`/prospects/${prospectId}/whatsapp-assisted/mark-sent`, {
+    method: 'POST',
+  })
+}
+
+export async function markCallAssistedDone(prospectId) {
+  return request(`/prospects/${prospectId}/call-assisted/mark-done`, {
+    method: 'POST',
+  })
+}
+
+/** Prospectos en checking / invite_*: la extensión (o Nexus) verifica 1º grado sola. */
+export async function fetchLinkedInPendingConnectChecks(companyId) {
+  return request(`/companies/${companyId}/linkedin-assisted/pending-connect-checks`)
+}
+
 export async function fetchWithTimeout(path, options = {}, timeoutMs = 20000) {
   const url = resolveApiUrl(path)
   if (import.meta.env.DEV && String(path).includes('lead-sourcing')) {
@@ -423,8 +754,11 @@ export async function fetchWithTimeout(path, options = {}, timeoutMs = 20000) {
     return await request(path, { ...options, signal: controller.signal })
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
+      const startPath = String(path || '').includes('/outreach/start')
       throw new Error(
-        `Timeout (${Math.round(timeoutMs / 1000)}s): el servidor no respondió. Revisá que el backend esté activo.`,
+        startPath
+          ? 'La campaña sigue arrancando en el servidor. Nexus busca e importa prospectos; no hace falta tocar de nuevo.'
+          : `Esto está tardando más de lo habitual (${Math.round(timeoutMs / 1000)}s). Recargá en unos segundos; si ya inició, no hace falta repetir.`,
       )
     }
     throw err
@@ -558,6 +892,18 @@ export async function reactivateProspectSequence(prospectId) {
   })
 }
 
+export async function pauseProspectSequence(prospectId) {
+  return request(`/prospects/${prospectId}/sequence/pause`, {
+    method: 'POST',
+  })
+}
+
+export async function resumeProspectSequence(prospectId) {
+  return request(`/prospects/${prospectId}/sequence/resume`, {
+    method: 'POST',
+  })
+}
+
 export async function beginLinkedInAssistedSession(prospectId) {
   return request(`/prospects/${prospectId}/linkedin-assisted/assist`, {
     method: 'POST',
@@ -573,6 +919,32 @@ export async function abandonLinkedInAssistedSession(prospectId) {
 export async function markLinkedInAssistedSent(prospectId) {
   return request(`/prospects/${prospectId}/linkedin-assisted/mark-sent`, {
     method: 'POST',
+  })
+}
+
+export async function markLinkedInConnectSent(prospectId) {
+  return request(`/prospects/${prospectId}/linkedin-assisted/mark-connect-sent`, {
+    method: 'POST',
+  })
+}
+
+export async function reportLinkedInConnectionStatus(prospectId, status) {
+  return request(`/prospects/${prospectId}/linkedin-connection-status`, {
+    method: 'POST',
+    body: JSON.stringify({ status }),
+  })
+}
+
+export async function regenerateLinkedInAssistedReply(prospectId) {
+  return request(`/prospects/${prospectId}/linkedin-assisted/regenerate-reply`, {
+    method: 'POST',
+  })
+}
+
+export async function registerLinkedInInbound(prospectId, body) {
+  return request(`/prospects/${prospectId}/linkedin-inbound`, {
+    method: 'POST',
+    body: JSON.stringify(body),
   })
 }
 
@@ -635,8 +1007,9 @@ export async function reanalyzeProspectState(prospectId) {
   })
 }
 
-export async function fetchCompanyMeetings(companyId) {
-  return request(`/companies/${companyId}/meetings`)
+export async function fetchCompanyMeetings(companyId, { includeCanceled = false } = {}) {
+  const qs = includeCanceled ? '?include_canceled=true' : ''
+  return request(`/companies/${companyId}/meetings${qs}`)
 }
 
 export async function fetchCampaignMeetings(campaignId) {
@@ -689,47 +1062,6 @@ export async function runScheduledCampaignFollowups(campaignId) {
   })
 }
 
-/** Instrucciones IA por empresa (prompt “Educación”). */
-export async function fetchAIInstructions(companyId) {
-  return request(`/companies/${companyId}/ai-instructions`)
-}
-
-export async function createAIInstruction(companyId, payload) {
-  return request(`/companies/${companyId}/ai-instructions`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-export async function updateAIInstruction(companyId, instructionId, payload) {
-  return request(`/companies/${companyId}/ai-instructions/${instructionId}`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  })
-}
-
-export async function deleteAIInstruction(companyId, instructionId) {
-  return request(`/companies/${companyId}/ai-instructions/${instructionId}`, {
-    method: 'DELETE',
-  })
-}
-
-/** Política de comportamiento del SDR (Educación IA — panel estructurado). */
-export async function fetchAIBehaviorPolicy(companyId) {
-  return request(`/companies/${companyId}/ai-behavior-policy`)
-}
-
-export async function fetchAIBehaviorPolicyFields(companyId) {
-  return request(`/companies/${companyId}/ai-behavior-policy/fields`)
-}
-
-export async function saveAIBehaviorPolicy(companyId, payload) {
-  return request(`/companies/${companyId}/ai-behavior-policy`, {
-    method: 'PUT',
-    body: JSON.stringify(payload),
-  })
-}
-
 /** Centro de operaciones — observabilidad y control. */
 export async function fetchOperationsOverview(companyId) {
   return request(`/companies/${companyId}/operations/overview`)
@@ -770,14 +1102,6 @@ export async function retryOutreachTask(companyId, taskId) {
   })
 }
 
-/** Chat interno Nexus (contexto empresa + stats). */
-export async function assistantChat(payload) {
-  return request('/assistant/chat', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
 /** Conexiones por usuario (Fase 1: mock, sin OAuth real). */
 export async function fetchUserConnections(companyId, userId) {
   return request(`/users/${userId}/connections?company_id=${companyId}`)
@@ -791,11 +1115,104 @@ export async function fetchGoogleIntegrationVerify(companyId, userId, { deep = t
   return request(`/users/${userId}/integrations/google/verify?${qs.toString()}`)
 }
 
-export async function mockConnectUserProvider(companyId, userId, provider) {
-  const p = encodeURIComponent(provider)
-  return request(`/users/${userId}/connections/${p}/mock-connect?company_id=${companyId}`, {
+export async function fetchWhatsAppIntegrationVerify(companyId, userId, { deep = true } = {}) {
+  const qs = new URLSearchParams({
+    company_id: String(companyId),
+    deep: deep ? 'true' : 'false',
+  })
+  return request(`/users/${userId}/integrations/whatsapp/verify?${qs.toString()}`)
+}
+
+export async function fetchHubSpotIntegrationVerify(companyId, { deep = true } = {}) {
+  const qs = new URLSearchParams({ deep: deep ? 'true' : 'false' })
+  return request(`/companies/${companyId}/integrations/hubspot/verify?${qs.toString()}`)
+}
+
+export async function fetchSalesforceIntegrationVerify(companyId, { deep = true } = {}) {
+  const qs = new URLSearchParams({ deep: deep ? 'true' : 'false' })
+  return request(`/companies/${companyId}/integrations/salesforce/verify?${qs.toString()}`)
+}
+
+export async function fetchHubSpotOAuthStartUrl(companyId, userId) {
+  const qs = new URLSearchParams({
+    company_id: String(companyId),
+    user_id: String(userId),
+  })
+  return request(`/auth/hubspot/start-url?${qs.toString()}`)
+}
+
+export async function fetchSalesforceOAuthStartUrl(companyId, userId) {
+  const qs = new URLSearchParams({
+    company_id: String(companyId),
+    user_id: String(userId),
+  })
+  return request(`/auth/salesforce/start-url?${qs.toString()}`)
+}
+
+export async function disconnectHubSpotIntegration(companyId) {
+  return request(`/companies/${companyId}/integrations/hubspot/disconnect`, { method: 'POST' })
+}
+
+export async function disconnectSalesforceIntegration(companyId) {
+  return request(`/companies/${companyId}/integrations/salesforce/disconnect`, { method: 'POST' })
+}
+
+export async function fetchCrmSyncStatus(companyId) {
+  return request(`/companies/${companyId}/integrations/crm/sync-status`)
+}
+
+export async function retryCrmSync(companyId) {
+  return request(`/companies/${companyId}/integrations/crm/retry`, { method: 'POST' })
+}
+
+export async function fetchCrmExclusions(companyId) {
+  return request(`/companies/${companyId}/integrations/crm/exclusions`)
+}
+
+export async function syncCrmExclusions(companyId, provider) {
+  const qs = new URLSearchParams()
+  if (provider) qs.set('provider', provider)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return request(`/companies/${companyId}/integrations/crm/exclusions/sync${suffix}`, {
     method: 'POST',
   })
+}
+
+export async function importCrmExclusions(companyId, { file, text } = {}) {
+  const form = new FormData()
+  if (file) form.append('file', file)
+  if (text) form.append('text', text)
+  const url = `${API_BASE_URL}/companies/${companyId}/integrations/crm/exclusions/import`
+  let res
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+    })
+  } catch (err) {
+    throw new Error(err instanceof Error ? err.message : 'Error de red')
+  }
+  if (!res.ok) {
+    const { message } = await parseErrorResponse(res)
+    throw new ApiRequestError(message, { status: res.status })
+  }
+  return res.json()
+}
+
+export async function clearCrmManualExclusions(companyId) {
+  return request(`/companies/${companyId}/integrations/crm/exclusions/manual`, {
+    method: 'DELETE',
+  })
+}
+
+export async function mockConnectUserProvider(companyId, userId, provider, extra = null) {
+  const p = encodeURIComponent(provider)
+  const opts = { method: 'POST' }
+  if (extra && typeof extra === 'object') {
+    opts.body = JSON.stringify(extra)
+  }
+  return request(`/users/${userId}/connections/${p}/mock-connect?company_id=${companyId}`, opts)
 }
 
 export async function disconnectUserProvider(companyId, userId, provider) {
@@ -839,10 +1256,17 @@ export async function createGmailDraft(payload) {
 
 /** Envío real por Gmail API (users.messages.send). Requiere confirm_send: true en el payload. */
 export async function sendGmailMessage(payload) {
-  return request('/gmail/send', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 120_000)
+  try {
+    return await request('/gmail/send', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export async function syncGmailInbound(payload) {
@@ -866,6 +1290,10 @@ export async function fetchAnalytics(companyId = 1) {
 
 export async function fetchServerHealth() {
   return request('/health')
+}
+
+export async function fetchAutomationHealth() {
+  return request('/health/automation')
 }
 
 export async function fetchOpenAIDiagnostics({ probe = false } = {}) {

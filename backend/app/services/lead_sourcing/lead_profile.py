@@ -134,7 +134,7 @@ def build_lead_profile(
         domain = company_row.company_domain
 
     company_block = CompanyProfileBlock(
-        name=lead.company_name or (company_row.name if company_row else "Empresa"),
+        name=lead.company_name or (company_row.name if company_row else "") or "Contacto",
         industry=lead.industry or (company_row.industry if company_row else None),
         size=(company_row.company_size if company_row else None),
         website=lead.company_website or (company_row.website_url if company_row else None),

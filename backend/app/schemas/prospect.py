@@ -7,7 +7,7 @@ ProspectBulkCreate.agrega listas grandes en una sola request; ProspectCreate es 
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.enums import PipelineStage, ProspectStatus
 
@@ -22,10 +22,64 @@ class ProspectCreate(BaseModel):
     email: str | None = Field(default=None, max_length=255)
     phone: str | None = Field(default=None, max_length=64)
     whatsapp: str | None = Field(default=None, max_length=64)
+    landline_phone: str | None = Field(default=None, max_length=64)
     company_website: str | None = Field(default=None, max_length=2048)
     source_provider: str | None = Field(default=None, max_length=32)
     source_external_id: str | None = Field(default=None, max_length=128)
     notes: str | None = None
+
+
+class ManualIndividualSequenceCreate(ProspectCreate):
+    """Carga manual: alcanza con un canal (email / LinkedIn / WhatsApp). Nombre opcional."""
+
+    name: str = Field(default="", max_length=255)
+    company_name: str = Field(default="—", max_length=255)
+    product_id: int = Field(ge=1, description="Producto a vender (secuencia fuera de campaña).")
+    sequence_plan: dict = Field(
+        ...,
+        description="Plan de secuencia (plantilla Nexus o custom) obligatorio para el kickoff individual.",
+    )
+    post_sequence_followup_enabled: bool = Field(
+        default=True,
+        description="Si True, genera follow-up post-secuencia cuando el prospecto no respondió.",
+    )
+    followup_delay_days: int | None = Field(
+        default=None,
+        ge=1,
+        le=365,
+        description="Días hasta el follow-up (vacío/None = default de campaña, tip. 30).",
+    )
+
+    @field_validator("sequence_plan")
+    @classmethod
+    def _validate_sequence_plan(cls, v: dict) -> dict:
+        from app.core.sequence_templates import validate_plan
+
+        try:
+            return validate_plan(v)
+        except ValueError as e:
+            raise ValueError(str(e)) from e
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _blank_name_ok(cls, v: object) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
+    @field_validator("company_name", mode="before")
+    @classmethod
+    def _blank_company_ok(cls, v: object) -> str:
+        if v is None:
+            return "—"
+        s = str(v).strip()
+        return s or "—"
+
+    def resolved_display_name(self) -> str:
+        """Nombre para guardar. Si el usuario no puso, placeholder hasta el enrich."""
+        if (self.name or "").strip():
+            return self.name.strip()
+        return "Contacto"
 
 
 class ProspectUpdate(BaseModel):
@@ -38,6 +92,7 @@ class ProspectUpdate(BaseModel):
     email: str | None = Field(default=None, max_length=255)
     phone: str | None = Field(default=None, max_length=64)
     whatsapp: str | None = Field(default=None, max_length=64)
+    landline_phone: str | None = Field(default=None, max_length=64)
     company_website: str | None = Field(default=None, max_length=2048)
     notes: str | None = None
     campaign_id: int | None = Field(default=None, ge=1, description="Reasignar campaña de origen.")
@@ -69,9 +124,11 @@ class ProspectRead(BaseModel):
     industry: str | None
     country: str | None
     linkedin_url: str | None
+    linkedin_profile_urn: str | None = None
     email: str | None
     phone: str | None
     whatsapp: str | None = None
+    landline_phone: str | None = None
     company_website: str | None = None
     source_provider: str | None = None
     source_external_id: str | None = None
@@ -90,17 +147,29 @@ class ProspectRead(BaseModel):
     followup_count: int = 0
     last_followup_at: datetime | None = None
     score_reason: str | None = None
+    icp_checklist: list[dict] = Field(default_factory=list)
     next_best_action: str | None = None
     pipeline_stage: str = "nuevo"
     meeting_suggestion_pending: bool = False
 
     preferred_channel: str | None = None
     channel_reason: str | None = None
+    channel_enrich_status: str = "none"
+    channel_enrich_deadline_at: datetime | None = None
+    channel_enrich_message: str | None = None
+    channel_find_summary: str | None = None
+    activity_code: str = "idle"
+    activity_label: str = "Guardado · esperando inicio"
+    activity_tone: str = "muted"
     linkedin_assisted_draft: str | None = None
     linkedin_assist_status: str | None = None
     linkedin_assist_session_id: str | None = None
     linkedin_last_assisted_at: datetime | None = None
     linkedin_sdr_marked_sent_at: datetime | None = None
+    linkedin_connection_status: str = "none"
+    linkedin_mention_next_touch: bool = False
+    whatsapp_assist_status: str | None = None
+    whatsapp_assisted_draft: str | None = None
 
     sequence_started_at: datetime | None = None
     sequence_group: str = "contactado"

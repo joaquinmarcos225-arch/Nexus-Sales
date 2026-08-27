@@ -11,8 +11,10 @@ from app.database.base import Base
 if TYPE_CHECKING:
     from app.models.ai_instruction import AIInstruction
     from app.models.campaign import Campaign
+    from app.models.company_integration import CompanyIntegration
     from app.models.connected_account import ConnectedAccount
     from app.models.credit_wallet import CreditWallet
+    from app.models.billing_ops_cycle import BillingOpsCycle
     from app.models.meeting import Meeting
     from app.models.outreach_task import OutreachTask
     from app.models.product import Product
@@ -30,6 +32,20 @@ class Company(Base):
     plan: Mapped[str] = mapped_column(String(64), nullable=False, default="starter")
     employee_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     global_automation_stop: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Billing / suscripción (Stripe + Mercado Pago)
+    billing_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    billing_status: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
+    billing_country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    mp_preapproval_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    mp_payer_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    dlocal_payment_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    pending_plan: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    billing_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_payment_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -62,4 +78,10 @@ class Company(Base):
     )
     connected_accounts: Mapped[list[ConnectedAccount]] = relationship(
         "ConnectedAccount", back_populates="company", cascade="all, delete-orphan"
+    )
+    company_integrations: Mapped[list[CompanyIntegration]] = relationship(
+        "CompanyIntegration", back_populates="company", cascade="all, delete-orphan"
+    )
+    billing_ops_cycles: Mapped[list[BillingOpsCycle]] = relationship(
+        "BillingOpsCycle", back_populates="company", cascade="all, delete-orphan"
     )

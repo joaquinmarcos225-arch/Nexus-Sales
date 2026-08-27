@@ -4,6 +4,11 @@ from collections.abc import Mapping
 
 from app.models.enums import ProspectStatus
 from app.services import campaign_icp as icp
+from app.services.lead_sourcing.icp_import_gate import (
+    MIN_ROLE_MATCH_FOR_IMPORT,
+    is_noisy_prospect,
+)
+from app.services.lead_sourcing.role_alignment import best_icp_role_match
 
 
 def _norm(value: str | None) -> str:
@@ -26,18 +31,24 @@ def score_prospect_against_campaign(
 ) -> tuple[int, int, ProspectStatus]:
     """
     Devuelve (compatibility_score 0–100, interest_probability 0–100, estado inicial clase).
+
+    Si hay target_role y el rol no alinea, el score queda capado bajo 70 (no_compatible).
     """
     pts = 0
     max_pts = 0
+    role_score = 0
 
-    p_country = _norm(prospect_fields.get("country"))
     p_industry = _norm(prospect_fields.get("industry"))
-    p_role = _norm(prospect_fields.get("role"))
 
     if _icp_usable_campaign_field(campaign_country):
-        max_pts += 35
-        if p_country and p_country == _norm(campaign_country):
-            pts += 35
+        p_country = (prospect_fields.get("country") or "").strip()
+        # País desconocido ≠ fuera de región: no penalizar en el denominador.
+        if p_country:
+            max_pts += 35
+            from app.services.lead_sourcing.icp_region import score_region_alignment
+
+            region_pts, _ = score_region_alignment(campaign_country, p_country)
+            pts += int(round(35 * max(0, min(100, region_pts)) / 100))
 
     if _icp_usable_campaign_field(campaign_industry):
         max_pts += 35
@@ -50,9 +61,8 @@ def score_prospect_against_campaign(
 
     if _icp_usable_campaign_field(campaign_role):
         max_pts += 30
-        tr = _norm(campaign_role)
-        if tr and tr in p_role:
-            pts += 30
+        role_score, _ = best_icp_role_match(campaign_role, prospect_fields.get("role"))
+        pts += int(round(30 * role_score / 100))
 
     if max_pts == 0:
         compatibility = 55
@@ -60,6 +70,15 @@ def score_prospect_against_campaign(
         compatibility = int(round(100 * pts / max_pts))
 
     compatibility = max(0, min(100, compatibility))
+
+    noisy = is_noisy_prospect(
+        role=prospect_fields.get("role"),
+        company_name=prospect_fields.get("company_name"),
+        linkedin_url=prospect_fields.get("linkedin_url"),
+    )
+    role_fail = _icp_usable_campaign_field(campaign_role) and role_score < MIN_ROLE_MATCH_FOR_IMPORT
+    if noisy or role_fail:
+        compatibility = min(compatibility, 45)
 
     bonus = 0
     if prospect_fields.get("email"):
@@ -94,20 +113,27 @@ def explain_compatibility(
         campaign_industry=campaign_industry,
         campaign_role=campaign_role,
     )
-    p_country = _norm(prospect_fields.get("country"))
     p_industry = _norm(prospect_fields.get("industry"))
-    p_role = _norm(prospect_fields.get("role"))
     if _icp_usable_campaign_field(campaign_country):
-        parts.append(
-            "pais alineado" if p_country and p_country == _norm(campaign_country) else "pais fuera ICP"
-        )
+        from app.services.lead_sourcing.icp_region import score_region_alignment
+
+        region_pts, _ = score_region_alignment(campaign_country, prospect_fields.get("country"))
+        parts.append("pais alineado" if region_pts >= 50 else "pais fuera ICP")
     if _icp_usable_campaign_field(campaign_industry):
         ci = _norm(campaign_industry)
         ok = p_industry and ci and (p_industry == ci or ci in p_industry or p_industry in ci)
         parts.append("industria alineada" if ok else "industria parcial/no alineada")
     if _icp_usable_campaign_field(campaign_role):
-        tr = _norm(campaign_role)
-        parts.append("rol alineado" if tr and tr in p_role else "rol no alineado")
+        role_score, _ = best_icp_role_match(campaign_role, prospect_fields.get("role"))
+        parts.append(
+            "rol alineado" if role_score >= MIN_ROLE_MATCH_FOR_IMPORT else "rol no alineado"
+        )
+    if is_noisy_prospect(
+        role=prospect_fields.get("role"),
+        company_name=prospect_fields.get("company_name"),
+        linkedin_url=prospect_fields.get("linkedin_url"),
+    ):
+        parts.append("fuente/rol ruidoso")
     if product_name:
         parts.append(f"producto: {product_name}")
     if not parts:
@@ -122,14 +148,13 @@ def score_prospect_breakdown(
     campaign_industry: str | None,
     campaign_role: str | None,
 ) -> tuple[int, str, dict[str, int | str | bool]]:
-    """
-    Igual que score_prospect_against_campaign, con desglose para debug Lead Sourcing.
-    """
+    """Igual que score_prospect_against_campaign, con desglose para debug Lead Sourcing."""
     pts = 0
     max_pts = 0
     country_pts = 0
     industry_pts = 0
     role_pts = 0
+    role_score = 0
 
     p_country = _norm(prospect_fields.get("country"))
     p_industry = _norm(prospect_fields.get("industry"))
@@ -139,11 +164,13 @@ def score_prospect_breakdown(
     industry_active = _icp_usable_campaign_field(campaign_industry)
     role_active = _icp_usable_campaign_field(campaign_role)
 
-    if country_active:
+    if country_active and p_country:
         max_pts += 35
-        if p_country and p_country == _norm(campaign_country):
-            country_pts = 35
-            pts += 35
+        from app.services.lead_sourcing.icp_region import score_region_alignment
+
+        region_pts, _ = score_region_alignment(campaign_country, prospect_fields.get("country"))
+        country_pts = int(round(35 * max(0, min(100, region_pts)) / 100))
+        pts += country_pts
 
     if industry_active:
         max_pts += 35
@@ -158,8 +185,6 @@ def score_prospect_breakdown(
 
     if role_active:
         max_pts += 30
-        from app.services.lead_sourcing.role_alignment import best_icp_role_match
-
         role_score, _ = best_icp_role_match(campaign_role, prospect_fields.get("role"))
         role_pts = int(round(30 * role_score / 100))
         pts += role_pts
@@ -172,20 +197,30 @@ def score_prospect_breakdown(
         score_mode = "weighted_icp"
 
     compatibility = max(0, min(100, compatibility))
+    noisy = is_noisy_prospect(
+        role=prospect_fields.get("role"),
+        company_name=prospect_fields.get("company_name"),
+        linkedin_url=prospect_fields.get("linkedin_url"),
+    )
+    role_fail = role_active and role_score < MIN_ROLE_MATCH_FOR_IMPORT
+    if noisy or role_fail:
+        compatibility = min(compatibility, 45)
+        score_mode = "capped_role_or_noise"
+
     email_bonus = 8 if prospect_fields.get("email") else 0
     linkedin_bonus = 5 if prospect_fields.get("linkedin_url") else 0
 
     explain_parts: list[str] = []
     if country_active:
-        explain_parts.append(
-            f"país {country_pts}/35"
-            if country_pts
-            else "país 0/35"
-        )
+        explain_parts.append(f"país {country_pts}/35" if country_pts else "país 0/35")
     if industry_active:
         explain_parts.append(f"industria {industry_pts}/35")
     if role_active:
         explain_parts.append(f"rol {role_pts}/30")
+    if noisy:
+        explain_parts.append("ruido")
+    if role_fail:
+        explain_parts.append("rol insuficiente → cap")
     if not explain_parts:
         explain_parts.append("ICP campaña vacío → base 55")
     if email_bonus:
@@ -197,10 +232,12 @@ def score_prospect_breakdown(
         "country_pts": country_pts,
         "industry_pts": industry_pts,
         "role_pts": role_pts,
+        "role_score": role_score,
         "max_pts": max_pts,
         "email_bonus": email_bonus,
         "linkedin_bonus": linkedin_bonus,
         "score_mode": score_mode,
+        "noisy": noisy,
         "prospect_country": p_country or "",
         "prospect_industry": p_industry or "",
         "prospect_role": p_role or "",

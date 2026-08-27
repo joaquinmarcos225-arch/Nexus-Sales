@@ -47,21 +47,21 @@ function KanbanCard({ prospect, dragId }) {
       style={style}
       {...listeners}
       {...attributes}
-      className={`group cursor-grab active:cursor-grabbing rounded-xl border border-slate-200/90 bg-white px-3 py-2.5 shadow-sm transition-[box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:shadow-md ${
-        isDragging ? 'z-20 scale-[1.02] shadow-lg opacity-95 ring-2 ring-sky-400/40' : ''
+      className={`group cursor-grab active:cursor-grabbing rounded-xl border border-nx-border/90 bg-white px-3 py-2.5 shadow-sm transition-[box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:shadow-md ${
+        isDragging ? 'z-20 scale-[1.02] shadow-lg opacity-95 ring-2 ring-zinc-400/40' : ''
       }`}
     >
-      <p className="text-sm font-semibold text-slate-900 leading-snug">{prospect.name}</p>
-      <p className="mt-0.5 text-xs text-slate-500 truncate">{prospect.company_name}</p>
+      <p className="text-sm font-semibold text-nx-ink leading-snug">{prospect.name}</p>
+      <p className="mt-0.5 text-xs text-nx-muted truncate">{prospect.company_name}</p>
       <div className="mt-2 flex flex-wrap gap-1.5">
-        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium capitalize text-slate-600">
+        <span className="rounded-full bg-nx-card-muted px-2 py-0.5 text-[10px] font-medium capitalize text-nx-muted">
           {prospect.interest_level || '—'}
         </span>
-        <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-800">
+        <span className="rounded-full bg-zinc-50 px-2 py-0.5 text-[10px] font-medium text-zinc-800">
           {formatAct(last)}
         </span>
       </div>
-      <p className="mt-2 text-[11px] leading-snug text-slate-600 line-clamp-2" title={prospect.next_best_action}>
+      <p className="mt-2 text-[11px] leading-snug text-nx-muted line-clamp-2" title={prospect.next_best_action}>
         {shorten(prospect.next_best_action, 90)}
       </p>
     </div>
@@ -73,14 +73,14 @@ function KanbanColumn({ col, children }) {
   return (
     <div
       ref={setNodeRef}
-      className={`flex min-h-[420px] w-[272px] shrink-0 flex-col rounded-2xl border border-slate-200/80 bg-gradient-to-b from-slate-50/95 to-white p-2.5 shadow-inner transition-all duration-200 ${
-        isOver ? 'ring-2 ring-offset-2 ring-sky-400/50 scale-[1.01]' : ''
+      className={`flex min-h-[420px] w-[272px] shrink-0 flex-col rounded-2xl border border-nx-border/80 bg-gradient-to-b from-slate-50/95 to-white p-2.5 shadow-inner transition-all duration-200 ${
+        isOver ? 'ring-2 ring-offset-2 ring-zinc-400/50 scale-[1.01]' : ''
       }`}
       style={{ borderTop: `3px solid ${col.color}` }}
     >
       <div className="mb-2 flex items-center justify-between gap-2 px-1">
-        <h3 className="text-xs font-bold uppercase tracking-wide text-slate-700">{col.label}</h3>
-        <span className="rounded-full bg-slate-200/70 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-slate-700">
+        <h3 className="text-xs font-bold uppercase tracking-wide text-nx-ink">{col.label}</h3>
+        <span className="rounded-full bg-nx-border/70 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-nx-ink">
           {Children.count(children)}
         </span>
       </div>
@@ -136,11 +136,11 @@ export function CampaignPipelineKanban({ campaignId, prospects, freeze = false, 
   }
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <section className="rounded-2xl border border-nx-border bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-900">Pipeline comercial</h2>
-          <p className="mt-1 max-w-2xl text-xs text-slate-500 leading-relaxed">
+          <h2 className="text-sm font-semibold text-nx-ink">Pipeline comercial</h2>
+          <p className="mt-1 max-w-2xl text-xs text-nx-muted leading-relaxed">
             Vista tipo CRM: arrastrá prospectos entre columnas. La etapa comercial es independiente del estado
             técnico de outreach.
           </p>
@@ -148,7 +148,7 @@ export function CampaignPipelineKanban({ campaignId, prospects, freeze = false, 
       </div>
       <AlertBanner message={error} onDismiss={() => setError(null)} />
       {freeze ? (
-        <p className="mt-2 text-xs text-amber-800">Seleccioná la empresa correcta para mover tarjetas.</p>
+        <p className="mt-2 text-xs text-zinc-800">Seleccioná la empresa correcta para mover tarjetas.</p>
       ) : null}
       <DndContext sensors={sensors} onDragEnd={(e) => void handleDragEnd(e)}>
         <div className="mt-4 flex gap-3 overflow-x-auto pb-4 scroll-smooth [scrollbar-width:thin]">

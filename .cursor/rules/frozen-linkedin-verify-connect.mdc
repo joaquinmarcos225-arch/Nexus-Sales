@@ -1,0 +1,51 @@
+---
+description: FROZEN — LinkedIn LI-SAFE + Respondieron (sin probe / sin Voyager / sin DOM inbox)
+alwaysApply: true
+---
+
+# FROZEN: LinkedIn LI-SAFE + Respondieron (post-restricción)
+
+**Estado (2026-08-08): LI-SAFE activo + inbound manual estilo Outreach** (extensión ≥ **0.18.49**, flag `LI_SAFE_NO_PROFILE_PROBE`).
+
+## SÍ (permitido)
+
+- Listas / URLs / borradores con nombre, empresa, rol y producto.
+- Copiar mensaje al portapapeles.
+- **Un click humano** abre el perfil (`Contactar` → tilde verde) vía `window.open` nombre fijo (sin extensión).
+- `Enviar mensaje` → copia + abre; tilde Enviar manual → mark-sent. **La secuencia sigue** si no hay respuesta registrada.
+- **Respondieron:** el SDR pega el mensaje inbound → `registerLinkedInInbound` → pausa secuencia + borrador en **Responder**.
+- Sale de Respondieron: tras pasar el horario de la reunión; si la secuencia avanza sin reply; o **Handoff** (SDR se encarga).
+- Historial / follow-ups sin scrape de grado.
+
+## NO (prohibido — no reintroducir)
+
+- Abrir perfiles LinkedIn en **background** / probe tabs.
+- Leer grado 1º/2º/3º, **Voyager** (grado o inbox), cookies scrape.
+- Auto-click Contactar / Enviar / pegar en el chat de LinkedIn.
+- Poll / scrape DOM de Messaging o overlay como fuente de verdad de inbound.
+- Armar vigilancia LI-IN silenciosa tras Enviar / mark-sent.
+- Atribuir mensaje sin slug claro / a prospecto equivocado.
+- `checking` / `pending_verify` / probes / FORCE connection check.
+- Chips de prioridad (“Alta prioridad”) en cards de mensaje LinkedIn.
+
+## UI bandeja
+
+1. Card con mensaje (sin badge de prioridad).
+2. **Contactar** + tilde auto (tachado al hecho).
+3. **Enviar mensaje** + tilde gris manual (= enviado).
+4. **Respondieron** (post mark-sent): pegar inbound → Generar respuesta → card **Responder**. Sale tras la reunión, si la secuencia sigue, o **Handoff**.
+5. **Responder**: mismo patrón copy + tilde.
+
+## Archivos del contrato
+
+- `backend/app/services/linkedin_assisted_service.py` — `LI_SAFE_NO_PROFILE_PROBE`
+- `backend/app/services/linkedin_inbound_sync.py` — registro inbound + borrador (vía POST)
+- `frontend/src/components/outreach/LinkedInRespondieronPanel.jsx` — CTA + modal pegar
+- `frontend/src/components/outreach/LinkedInAssistQueue.jsx` — Contactar + Enviar + Responder
+- `frontend/src/utils/linkedinLiSafe.js` — `openLiSafeProfile` (sin awaiting watch)
+- `frontend/src/utils/linkedinAssistExtension.js` — arm/poll inbound = no-op
+- `browser-extension/*` — probes off; código LI-IN DOM no es path de producto
+
+## Si hace falta un cambio cerca
+
+Extraer código nuevo aparte. **No** reactivar probes/Voyager/DOM-inbox “de paso”. Requiere permiso explícito.

@@ -19,10 +19,11 @@ from app.models.enums import ProspectStatus
 from app.models.outreach import OutreachMessage
 from app.models.outreach_task import OutreachTask
 from app.models.prospect import Prospect
-from app.schemas.campaign_channels import coerce_allowed_channels
+from app.services.campaign_outreach_context import campaign_dict_for_outreach
 
-FOLLOWUP_DELAY_DAYS = int(os.getenv("NEXUS_FOLLOWUP_DELAY_DAYS", "3"))
-MAX_AUTO_FOLLOWUPS = int(os.getenv("NEXUS_MAX_AUTO_FOLLOWUPS", "5"))
+FOLLOWUP_DELAY_DAYS = int(os.getenv("NEXUS_FOLLOWUP_DELAY_DAYS", "30"))
+# Producto: un solo follow-up post-secuencia por prospecto (no configurable).
+MAX_AUTO_FOLLOWUPS = 1
 
 
 def _now() -> datetime:
@@ -31,30 +32,22 @@ def _now() -> datetime:
 
 def _effective_followup_days(days: int | None, campaign: Campaign | None) -> int:
     if days is not None:
-        return max(1, min(int(days), 90))
+        return max(1, min(int(days), 365))
     if campaign is not None:
         cd = getattr(campaign, "followup_delay_days", None)
         if cd is not None:
             try:
                 v = int(cd)
                 if v >= 1:
-                    return max(1, min(v, 90))
+                    return max(1, min(v, 365))
             except (TypeError, ValueError):
                 pass
     return FOLLOWUP_DELAY_DAYS
 
 
 def effective_max_auto_followups(campaign: Campaign | None) -> int:
-    if campaign is None:
-        return MAX_AUTO_FOLLOWUPS
-    mx = getattr(campaign, "max_auto_followups", None)
-    if mx is not None:
-        try:
-            v = int(mx)
-            if v >= 1:
-                return max(1, min(v, 50))
-        except (TypeError, ValueError):
-            pass
+    """Siempre 1 — no se pregunta en la UI."""
+    _ = campaign
     return MAX_AUTO_FOLLOWUPS
 
 
@@ -82,6 +75,40 @@ def cancel_deferred_resume_tasks(db: Session, prospect_id: int) -> None:
     )
 
 
+def _completed_auto_followups(db: Session, prospect_id: int) -> int:
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(OutreachTask)
+            .where(
+                OutreachTask.prospect_id == prospect_id,
+                OutreachTask.task_kind == "scheduled_followup",
+                OutreachTask.status == "done",
+            )
+        )
+        or 0
+    )
+
+
+def post_sequence_followup_enabled(campaign: Campaign | None) -> bool:
+    if campaign is None:
+        return True
+    return bool(getattr(campaign, "post_sequence_followup_enabled", True))
+
+
+def cancel_campaign_pending_followup_tasks(db: Session, campaign_id: int) -> int:
+    result = db.execute(
+        update(OutreachTask)
+        .where(
+            OutreachTask.campaign_id == campaign_id,
+            OutreachTask.task_kind == "scheduled_followup",
+            OutreachTask.status == "pending",
+        )
+        .values(status="cancelled", updated_at=_now())
+    )
+    return int(result.rowcount or 0)
+
+
 def schedule_followup_task(
     db: Session,
     *,
@@ -91,7 +118,11 @@ def schedule_followup_task(
     days: int | None = None,
     campaign: Campaign | None = None,
     title: str | None = None,
-) -> OutreachTask:
+) -> OutreachTask | None:
+    if campaign is None:
+        campaign = db.get(Campaign, campaign_id)
+    if not post_sequence_followup_enabled(campaign):
+        return None
     d = _effective_followup_days(days, campaign)
     cancel_pending_followup_tasks(db, prospect_id)
     due = _now() + timedelta(days=d)
@@ -100,8 +131,11 @@ def schedule_followup_task(
         campaign_id=campaign_id,
         prospect_id=prospect_id,
         task_kind="scheduled_followup",
-        title=title or f"Follow-up automático ({d}d)",
-        notes="Generado por motor de sequía. En producción lo dispararía un job programado.",
+        title=title or f"Último follow-up (despedida) — {d} días",
+        notes=(
+            "Follow-up post-secuencia opcional: último intento con aire de despedida sutil "
+            "(si no hay interés, se deja de insistir)."
+        ),
         due_at=due,
         status="pending",
     )
@@ -235,33 +269,13 @@ def _payload(msgs: list[OutreachMessage]) -> list[dict[str, str]]:
 
 
 def _campaign_dict(campaign: Campaign) -> dict[str, str]:
-    ch = coerce_allowed_channels(getattr(campaign, "allowed_channels", None))
-    prio = " → ".join(ch)
-    digest = ""
-    raw = getattr(campaign, "icp_ai_last_analysis", None)
-    if isinstance(raw, dict):
-        digest = str(raw.get("recommendations") or raw.get("notes") or "")[:1200]
-    return {
-        "name": campaign.name,
-        "tone": campaign.tone,
-        "target_company_size": campaign.target_company_size or "",
-        "target_role": campaign.target_role or "",
-        "target_industry": campaign.target_industry or "",
-        "target_country": campaign.target_country or "",
-        "target_language": campaign.target_language or "",
-        "preferred_channel_hint": prio,
-        "allowed_channels_csv": ",".join(ch),
-        "calendar_link": campaign.calendar_link or "",
-        "icp_ai_digest": digest,
-        "sender_name": (getattr(campaign, "sender_name", None) or "").strip(),
-        "sender_email": (getattr(campaign, "sender_email", None) or "").strip(),
-    }
+    return campaign_dict_for_outreach(campaign)
 
 
 def _product_dict(campaign: Campaign) -> dict[str, str]:
     p = campaign.product
     return {
-        "name": p.name if p else "Nexus Sales",
+        "name": (p.name if p else "") or "",
         "value_proposition": p.value_proposition if p and p.value_proposition else "",
         "description": p.description if p and p.description else "",
     }
@@ -287,6 +301,16 @@ def run_due_followups_for_campaign_real(
     from app.services import real_followup_gmail as rfg
 
     now = _now()
+    camp = db.scalars(
+        select(Campaign)
+        .where(Campaign.id == campaign_id)
+        .options(selectinload(Campaign.product), selectinload(Campaign.company))
+    ).first()
+    if camp is None:
+        return {"processed": 0, "skipped": 0, "errors": 0}
+    if not post_sequence_followup_enabled(camp):
+        return {"processed": 0, "skipped": 0, "errors": 0}
+
     tasks = db.scalars(
         select(OutreachTask)
         .where(
@@ -297,12 +321,6 @@ def run_due_followups_for_campaign_real(
         )
         .order_by(OutreachTask.due_at.asc())
     ).all()
-
-    camp = db.scalars(
-        select(Campaign).where(Campaign.id == campaign_id).options(selectinload(Campaign.product))
-    ).first()
-    if camp is None:
-        return {"processed": 0, "skipped": 0, "errors": 0}
 
     processed = skipped = errors = 0
     for task in tasks:
@@ -319,12 +337,16 @@ def run_due_followups_for_campaign_real(
             task.status = "cancelled"
             skipped += 1
             continue
+        if prospect.status == ProspectStatus.not_compatible.value:
+            task.status = "cancelled"
+            skipped += 1
+            continue
         if prospect.status != ProspectStatus.contacted.value:
             task.status = "cancelled"
             skipped += 1
             continue
         cap = effective_max_auto_followups(camp)
-        if int(prospect.outreach_touch_count or 0) >= cap:
+        if _completed_auto_followups(db, prospect.id) >= cap:
             task.status = "cancelled"
             skipped += 1
             continue
@@ -345,13 +367,14 @@ def run_due_followups_for_campaign_real(
                 continue
             task.status = "done"
             task.updated_at = _now()
-            schedule_followup_task(
-                db,
-                company_id=camp.company_id,
-                campaign_id=campaign_id,
-                prospect_id=prospect.id,
-                campaign=camp,
-            )
+            if _completed_auto_followups(db, prospect.id) < cap:
+                schedule_followup_task(
+                    db,
+                    company_id=camp.company_id,
+                    campaign_id=campaign_id,
+                    prospect_id=prospect.id,
+                    campaign=camp,
+                )
             processed += 1
         except Exception:
             errors += 1
@@ -390,9 +413,13 @@ def run_due_followups_for_campaign(
     ).all()
 
     camp = db.scalars(
-        select(Campaign).where(Campaign.id == campaign_id).options(selectinload(Campaign.product))
+        select(Campaign)
+        .where(Campaign.id == campaign_id)
+        .options(selectinload(Campaign.product), selectinload(Campaign.company))
     ).first()
     if camp is None:
+        return {"processed": 0, "skipped": 0, "errors": 0}
+    if not post_sequence_followup_enabled(camp):
         return {"processed": 0, "skipped": 0, "errors": 0}
 
     processed = skipped = errors = 0
@@ -410,12 +437,16 @@ def run_due_followups_for_campaign(
             task.status = "cancelled"
             skipped += 1
             continue
+        if prospect.status == ProspectStatus.not_compatible.value:
+            task.status = "cancelled"
+            skipped += 1
+            continue
         if prospect.status != ProspectStatus.contacted.value:
             task.status = "cancelled"
             skipped += 1
             continue
         cap = effective_max_auto_followups(camp)
-        if int(prospect.outreach_touch_count or 0) >= cap:
+        if _completed_auto_followups(db, prospect.id) >= cap:
             task.status = "cancelled"
             skipped += 1
             continue
@@ -438,6 +469,7 @@ def run_due_followups_for_campaign(
                     interest_level=prospect.interest_level or "low",
                     outbound_seq_index=int(prospect.outreach_touch_count or 0),
                     allow_soft_meeting_hint=False,
+                    is_final_goodbye=True,
                 )
                 allowed = coerce_allowed_channels(getattr(camp, "allowed_channels", None))
                 ch = sim.choose_channel(prospect, allowed)
@@ -458,13 +490,14 @@ def run_due_followups_for_campaign(
                 )
                 task.status = "done"
                 task.updated_at = _now()
-                schedule_followup_task(
-                    db,
-                    company_id=camp.company_id,
-                    campaign_id=campaign_id,
-                    prospect_id=prospect.id,
-                    campaign=camp,
-                )
+                if _completed_auto_followups(db, prospect.id) < cap:
+                    schedule_followup_task(
+                        db,
+                        company_id=camp.company_id,
+                        campaign_id=campaign_id,
+                        prospect_id=prospect.id,
+                        campaign=camp,
+                    )
                 processed += 1
         except Exception:
             errors += 1

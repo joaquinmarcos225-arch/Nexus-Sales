@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
@@ -6,6 +7,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.database.session import get_db
 from app.deps import get_campaign, get_prospect
+from app.auth.deps import get_current_user
+from app.models.user import User
 from app.models.campaign import Campaign
 from app.models.enums import ProspectStatus
 from app.models.outreach import OutreachMessage, OutreachSequence
@@ -17,10 +20,42 @@ from app.schemas.linkedin_assisted import (
     LinkedInAssistedAssistRead,
     LinkedInAssistedMarkSentRead,
     LinkedInAssistedPrepareRead,
+    LinkedInAssistedRegenerateRead,
     LinkedInAssistedSummaryRead,
+    LinkedInConnectionStatusBody,
+    LinkedInConnectionStatusRead,
+    LinkedInConnectSentRead,
+    LinkedInInboundRegisterBody,
+    LinkedInInboundRegisterRead,
+    LinkedInPendingConnectCheckRead,
+    LinkedInPendingConnectChecksRead,
+    LinkedInProfileUrnBody,
+    LinkedInProfileUrnRead,
+    LinkedInResolveProspectRead,
 )
 from app.services import linkedin_assisted_service
+from app.services import whatsapp_assisted_service
+from app.services import call_assisted_service
+from app.services import mail_queue_service
+from app.schemas.mail_queue import MailQueueRead
+from app.schemas.whatsapp_assisted import (
+    WhatsAppAssistQueueRead,
+    WhatsAppAssistedAbandonRead,
+    WhatsAppAssistedAssistRead,
+    WhatsAppAssistedMarkSentRead,
+    WhatsAppInboundRegisterBody,
+    WhatsAppInboundRegisterRead,
+    WhatsAppResolveProspectRead,
+)
+from app.schemas.call_assisted import CallAssistMarkDoneRead, CallAssistQueueRead
+from app.services.linkedin_inbound_sync import register_linkedin_inbound as register_linkedin_inbound_message
+from app.services.whatsapp_inbound_sync import (
+    register_whatsapp_inbound as register_whatsapp_inbound_message,
+    resolve_prospect_by_whatsapp_digits,
+)
 from app.schemas.outreach import (
+    ContinueWithoutChannelBody,
+    ContinueWithoutChannelResponse,
     FollowupPreviewRead,
     ManualFollowupActionRead,
     OutreachCampaignRead,
@@ -35,6 +70,7 @@ from app.schemas.outreach import (
 )
 from app.schemas.outreach_tasks import FollowupReprogramRequest, ScheduledFollowupRunResponse
 from app.schemas.campaign_channels import coerce_allowed_channels
+from app.services.campaign_outreach_context import campaign_dict_for_outreach
 from app.services import conversation_intelligence
 from app.services import followup_engine
 from app.services.meeting_booking import ensure_simulated_meeting_for_booked_prospect
@@ -49,6 +85,7 @@ from app.services import outreach_metrics as om
 from app.services.campaign_activation import activate_campaign, pause_campaign
 
 router = APIRouter(tags=["outreach"])
+logger = logging.getLogger(__name__)
 
 
 def _serialize_message(m: OutreachMessage) -> OutreachMessageRead:
@@ -68,6 +105,21 @@ def _get_or_create_sequence(
     return seq
 
 
+def _sequence_read_for_campaign(db: Session, campaign_id: int) -> OutreachSequenceRead:
+    """Secuencia persistida; si la campaña es nueva, crea la fila en BD (evita 500 en GET)."""
+    had_row = (
+        db.scalars(
+            select(OutreachSequence.id).where(OutreachSequence.campaign_id == campaign_id)
+        ).first()
+        is not None
+    )
+    seq = _get_or_create_sequence(db, campaign_id, create_if_missing=True)
+    if not had_row:
+        db.commit()
+    db.refresh(seq)
+    return OutreachSequenceRead.model_validate(seq)
+
+
 def _stats_for_campaign(db: Session, campaign_id: int) -> OutreachStats:
     """Métricas alineadas a actividad en mensajes (Gmail, borradores, IA) — no solo status legacy."""
     rows = db.execute(
@@ -76,13 +128,17 @@ def _stats_for_campaign(db: Session, campaign_id: int) -> OutreachStats:
         .group_by(Prospect.status)
     ).all()
     count_map = {status: count for status, count in rows}
+    total_prospects = int(sum(count_map.values()) or 0)
 
     if om.is_real_mode():
-        touched = om.distinct_prospects_with_real_gmail_outbound_campaign(db, campaign_id)
+        touched = om.distinct_prospects_contacted_campaign(db, campaign_id)
         with_inbound = om.distinct_prospects_with_real_gmail_inbound_campaign(db, campaign_id)
     else:
         touched = om.distinct_prospects_with_outbound_campaign(db, campaign_id)
         with_inbound = om.distinct_prospects_with_inbound_campaign(db, campaign_id)
+
+    messages_outbound = om.count_outbound_messages_campaign(db, campaign_id)
+    messages_inbound = om.count_inbound_messages_campaign(db, campaign_id)
 
     return OutreachStats(
         contacted=touched,
@@ -90,6 +146,10 @@ def _stats_for_campaign(db: Session, campaign_id: int) -> OutreachStats:
         interested=count_map.get(ProspectStatus.interested.value, 0),
         not_interested=count_map.get(ProspectStatus.not_interested.value, 0),
         failed=count_map.get(ProspectStatus.failed.value, 0),
+        total_prospects=total_prospects,
+        prospects_pending_contact=max(0, total_prospects - touched),
+        messages_outbound=messages_outbound,
+        messages_inbound=messages_inbound,
     )
 
 
@@ -117,18 +177,7 @@ def _campaign_allowed_channels_list(campaign: Campaign) -> list[str]:
 
 
 def _campaign_payload(campaign: Campaign) -> dict[str, str]:
-    ch = _campaign_allowed_channels_list(campaign)
-    prio = " → ".join(ch)
-    return {
-        "name": campaign.name,
-        "tone": campaign.tone,
-        "target_role": campaign.target_role or "",
-        "target_industry": campaign.target_industry or "",
-        "target_country": campaign.target_country or "",
-        "preferred_channel_hint": prio,
-        "allowed_channels_csv": ",".join(ch),
-        "calendar_link": campaign.calendar_link or "",
-    }
+    return campaign_dict_for_outreach(campaign)
 
 
 def _product_payload(campaign: Campaign) -> dict[str, str]:
@@ -226,6 +275,7 @@ def _build_followup_text(
         interest_level=prospect.interest_level or "low",
         outbound_seq_index=int(prospect.outreach_touch_count or 0),
         allow_soft_meeting_hint=allow_soft_meeting_hint,
+        is_final_goodbye=True,
     )
 
 
@@ -235,14 +285,17 @@ def get_campaign_outreach(
     db: Session = Depends(get_db),
     campaign: Campaign = Depends(get_campaign),
 ) -> OutreachCampaignRead:
-    seq = _get_or_create_sequence(db, campaign_id, create_if_missing=False)
-    if seq is None:
-        seq = OutreachSequence(campaign_id=campaign_id, is_running=False, current_step=0)
+    from app.services.sequence_channel_gate import (
+        read_campaign_integration_block,
+        seller_channel_block,
+    )
+    from app.services.campaign_sequence_channels import effective_channel_for_day
+
     last_messages = db.scalars(
         select(OutreachMessage)
         .where(OutreachMessage.campaign_id == campaign_id)
         .order_by(OutreachMessage.created_at.desc())
-        .limit(20)
+        .limit(50)
     ).all()
     pending_ops = int(
         db.scalar(
@@ -262,13 +315,161 @@ def get_campaign_outreach(
         )
         or 0
     )
+    block = read_campaign_integration_block(campaign)
+    # LI-SAFE: borrar banner viejo de “verificando 1º/2º/3º” (ya no hay probes).
+    if block and str(block.get("code") or "") == "extension_not_responding":
+        from app.services.linkedin_assisted_service import LI_SAFE_NO_PROFILE_PROBE
+
+        if LI_SAFE_NO_PROFILE_PROBE:
+            from app.services.sequence_channel_gate import clear_campaign_integration_block
+
+            clear_campaign_integration_block(
+                campaign,
+                channel="linkedin",
+                note="LI-SAFE: sin verify de grado — se limpia bloqueo de extensión.",
+            )
+            db.commit()
+            block = None
+    # Si hay bloqueo guardado, revalidar: si ya reconectó, limpiar.
+    if block:
+        code = str(block.get("code") or "")
+        if code == "extension_not_responding":
+            from app.services.sequence_channel_gate import detect_linkedin_verify_stall
+
+            stall = detect_linkedin_verify_stall(db, campaign)
+            if stall is None:
+                from app.services.sequence_channel_gate import clear_campaign_integration_block
+
+                clear_campaign_integration_block(
+                    campaign,
+                    channel="linkedin",
+                    note="LinkedIn ya respondió — secuencia puede continuar.",
+                )
+                db.commit()
+                block = None
+            else:
+                block = {**block, **stall}
+        else:
+            live = seller_channel_block(db, campaign, block.get("channel"))
+            if live is None:
+                from app.services.sequence_channel_gate import clear_campaign_integration_block
+
+                clear_campaign_integration_block(
+                    campaign,
+                    channel=str(block.get("channel") or ""),
+                    note=f"Integración de {block.get('channel')} reconectada — secuencia reanudada.",
+                )
+                db.commit()
+                block = None
+            else:
+                # Preferir el error live (más exacto/actual).
+                block = {**block, **live}
+    else:
+        from app.services.sequence_channel_gate import detect_linkedin_verify_stall
+
+        stall = detect_linkedin_verify_stall(db, campaign)
+        if stall:
+            block = stall
+            from app.services.sequence_channel_gate import set_campaign_integration_block
+
+            set_campaign_integration_block(
+                campaign,
+                stall,
+                blocked_prospects=int(stall.get("blocked_prospects") or 0),
+            )
+            db.commit()
+        elif (campaign.status or "") == "running" and not campaign.automation_paused:
+            day1 = effective_channel_for_day(campaign, 1)
+            live = seller_channel_block(db, campaign, day1)
+            if live:
+                block = live
+
+    progress_note = None
+    log = getattr(campaign, "outreach_activity_log", None)
+    if isinstance(log, list):
+        from app.services.linkedin_assisted_service import LI_SAFE_NO_PROFILE_PROBE
+        from app.services.sequence_channel_gate import BLOCK_KIND, BLOCK_RESOLVED_KIND
+
+        saw_block_resolved = False
+        for entry in reversed(log):
+            if not isinstance(entry, dict):
+                continue
+            kind = str(entry.get("kind") or "")
+            msg = str(entry.get("message") or "").strip()
+            if not msg:
+                continue
+            if kind == BLOCK_RESOLVED_KIND:
+                saw_block_resolved = True
+                continue
+            # Bloqueo ya resuelto (o LI-SAFE sin verify): no reciclarlo como “qué está pasando”.
+            if kind == BLOCK_KIND:
+                if saw_block_resolved:
+                    continue
+                if LI_SAFE_NO_PROFILE_PROBE and (
+                    str(entry.get("code") or "") == "extension_not_responding"
+                    or "1º/2º/3º" in msg
+                    or "verificando" in msg.lower()
+                ):
+                    continue
+            if kind in ("sequence", "sourcing", "linkedin_suggested", BLOCK_KIND):
+                progress_note = msg
+                break
+
     return OutreachCampaignRead(
-        sequence=OutreachSequenceRead.model_validate(seq),
+        sequence=_sequence_read_for_campaign(db, campaign_id),
         stats=_stats_for_campaign(db, campaign_id),
         last_messages=[_serialize_message(m) for m in last_messages],
         pending_operational_tasks=pending_ops,
         real_mode=om.is_real_mode(),
         simulation_disabled=om.is_outreach_simulation_disabled(),
+        sequence_block=block,
+        progress_note=progress_note,
+    )
+
+
+@router.post(
+    "/campaigns/{campaign_id}/outreach/continue-without-channel",
+    response_model=ContinueWithoutChannelResponse,
+)
+def continue_campaign_without_channel(
+    campaign_id: int,
+    body: ContinueWithoutChannelBody,
+    db: Session = Depends(get_db),
+    campaign: Campaign = Depends(get_campaign),
+    current_user: User = Depends(get_current_user),
+) -> ContinueWithoutChannelResponse:
+    """Omite un canal bloqueado (extensión/Gmail) y sigue la secuencia con el resto del plan."""
+    if not body.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Confirmá explícitamente: seguir sin ese canal omite esos toques "
+                "y la secuencia continúa solo con los canales restantes."
+            ),
+        )
+    from app.services.sequence_channel_gate import (
+        continue_sequence_without_channel,
+        read_campaign_integration_block,
+    )
+
+    result = continue_sequence_without_channel(
+        db,
+        campaign,
+        channel=body.channel,
+        actor_user_id=int(current_user.id),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("detail") or "No se pudo continuar.")
+    db.commit()
+    db.refresh(campaign)
+    return ContinueWithoutChannelResponse(
+        ok=True,
+        channel=result.get("channel"),
+        allowed_channels=list(result.get("allowed_channels") or []),
+        omitted_touches=int(result.get("omitted_touches") or 0),
+        advanced_prospects=int(result.get("advanced_prospects") or 0),
+        message=result.get("message"),
+        sequence_block=read_campaign_integration_block(campaign),
     )
 
 
@@ -288,6 +489,11 @@ def start_campaign_outreach(
     db.refresh(seq)
     db.refresh(campaign_loaded)
 
+    if result.get("defer_sourcing"):
+        from app.services.lead_sourcing.auto_bootstrap import schedule_campaign_sourcing_background
+
+        schedule_campaign_sourcing_background(int(campaign_id))
+
     return OutreachStartResponse(
         sequence=OutreachSequenceRead.model_validate(seq),
         contacted_now=int(result.get("contacted_now") or 0),
@@ -299,6 +505,14 @@ def start_campaign_outreach(
         campaign_status=campaign_loaded.status,
         gmail_connected=bool(result.get("gmail_connected")),
         used_gmail=bool(result.get("used_gmail")),
+        sourcing_ran=bool(result.get("sourcing_ran")),
+        sourcing_queued=bool(result.get("sourcing_queued")),
+        sourcing_imported=int(result.get("sourcing_imported") or 0),
+        sourcing_message=result.get("sourcing_message"),
+        channel_enrich_pending=int(result.get("channel_enrich_pending") or 0),
+        sourcing_quota_met=bool(result.get("sourcing_quota_met")),
+        sourcing_prospect_count_after=int(result.get("sourcing_prospect_count_after") or 0),
+        sourcing_prospect_count_target=int(result.get("sourcing_prospect_count_target") or 0),
     )
 
 
@@ -1054,6 +1268,338 @@ def mark_linkedin_assisted_sent(
     )
 
 
+@router.post(
+    "/prospects/{prospect_id}/linkedin-assisted/mark-connect-sent",
+    response_model=LinkedInConnectSentRead,
+)
+def mark_linkedin_connect_sent(
+    prospect_id: int,
+    db: Session = Depends(get_db),
+    prospect: Prospect = Depends(get_prospect),
+) -> LinkedInConnectSentRead:
+    """El SDR envió la solicitud de conexión: pasa a esperar aceptación."""
+    try:
+        detail = linkedin_assisted_service.mark_connect_sent(db, prospect)
+        db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    db.refresh(prospect)
+    return LinkedInConnectSentRead(
+        ok=True,
+        detail=detail,
+        connection_status=linkedin_assisted_service.read_connection_status(prospect),
+    )
+
+
+@router.post(
+    "/prospects/{prospect_id}/linkedin-profile-urn",
+    response_model=LinkedInProfileUrnRead,
+)
+def save_linkedin_profile_urn(
+    prospect_id: int,
+    body: LinkedInProfileUrnBody,
+    db: Session = Depends(get_db),
+    prospect: Prospect = Depends(get_prospect),
+) -> LinkedInProfileUrnRead:
+    """
+    Guarda el URN fsd_profile del prospecto (aprendido del botón Mensaje).
+    Con ese URN Nexus arma /messaging/compose?... para cualquier contacto.
+    """
+    try:
+        urn = linkedin_assisted_service.save_linkedin_profile_urn(
+            prospect,
+            urn=body.urn,
+            compose_url=body.compose_url,
+        )
+        db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    db.refresh(prospect)
+    compose = linkedin_assisted_service.build_linkedin_compose_url(urn) or ""
+    return LinkedInProfileUrnRead(
+        ok=True,
+        prospect_id=prospect.id,
+        linkedin_profile_urn=urn,
+        compose_url=compose,
+        detail="URN LinkedIn guardado. Próximos envíos abren el chat directo.",
+    )
+
+
+@router.post(
+    "/prospects/{prospect_id}/linkedin-connection-status",
+    response_model=LinkedInConnectionStatusRead,
+)
+def report_linkedin_connection_status(
+    prospect_id: int,
+    body: LinkedInConnectionStatusBody,
+    db: Session = Depends(get_db),
+    prospect: Prospect = Depends(get_prospect),
+) -> LinkedInConnectionStatusRead:
+    """
+    La extensión reporta el estado de conexión detectado (grado 1º = conectado).
+    Al conectar, Nexus deja preparado el mensaje post-aceptación para enviar.
+    """
+    try:
+        status, draft = linkedin_assisted_service.apply_connection_status(
+            db, prospect, body.status
+        )
+        db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    db.refresh(prospect)
+    text = (draft or "").strip()
+    return LinkedInConnectionStatusRead(
+        ok=True,
+        detail=(
+            "Conexión aceptada. Mensaje listo para enviar."
+            if status == "connected"
+            else "Estado de conexión actualizado."
+        ),
+        connection_status=status,
+        message_ready=bool(text),
+        message=text or None,
+    )
+
+
+@router.post(
+    "/prospects/{prospect_id}/linkedin-assisted/regenerate-reply",
+    response_model=LinkedInAssistedRegenerateRead,
+)
+def regenerate_linkedin_assisted_reply(
+    prospect_id: int,
+    db: Session = Depends(get_db),
+    prospect: Prospect = Depends(get_prospect),
+) -> LinkedInAssistedRegenerateRead:
+    """Regenera borrador de réplica LinkedIn tras inbound (OpenAI si está configurada)."""
+    try:
+        linkedin_assisted_service.require_real_linkedin(prospect)
+        campaign = linkedin_assisted_service._load_campaign(db, prospect)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    from app.services import openai_service
+
+    try:
+        draft = linkedin_assisted_service.regenerate_linkedin_reply_draft(
+            db, prospect, campaign
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    db.commit()
+    db.refresh(prospect)
+    text = (draft or prospect.linkedin_assisted_draft or "").strip()
+    return LinkedInAssistedRegenerateRead(
+        ok=True,
+        message=text,
+        assist_status=linkedin_assisted_service.read_assist_status(prospect),
+        openai_used=openai_service.openai_configured(),
+        detail=(
+            "Borrador regenerado con IA."
+            if openai_service.openai_configured()
+            else "Borrador regenerado (modo consultivo sin OpenAI)."
+        ),
+    )
+
+
+@router.get(
+    "/prospects/resolve-linkedin",
+    response_model=LinkedInResolveProspectRead,
+)
+def resolve_linkedin_prospect(
+    url: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> LinkedInResolveProspectRead:
+    """Resuelve prospect_id a partir de una URL de perfil LinkedIn (extensión inbound)."""
+    prospect = linkedin_assisted_service.resolve_prospect_by_linkedin_url(
+        db,
+        company_id=user.company_id,
+        url=url,
+    )
+    if prospect is None:
+        raise HTTPException(status_code=404, detail="Prospecto no encontrado para esta URL de LinkedIn.")
+    try:
+        linkedin_assisted_service.require_real_linkedin(prospect)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return LinkedInResolveProspectRead(
+        prospect_id=prospect.id,
+        prospect_name=prospect.name or f"Prospecto #{prospect.id}",
+        company_name=prospect.company_name,
+        linkedin_url=(prospect.linkedin_url or url).strip(),
+        campaign_id=prospect.campaign_id,
+    )
+
+
+@router.post(
+    "/prospects/{prospect_id}/linkedin-inbound",
+    response_model=LinkedInInboundRegisterRead,
+)
+def register_linkedin_inbound(
+    prospect_id: int,
+    body: LinkedInInboundRegisterBody,
+    db: Session = Depends(get_db),
+    prospect: Prospect = Depends(get_prospect),
+) -> LinkedInInboundRegisterRead:
+    """Registra respuesta inbound de LinkedIn (extensión o pegado manual del SDR)."""
+    if not prospect.campaign_id:
+        raise HTTPException(status_code=400, detail="El prospecto no tiene campaña asignada.")
+    campaign = db.get(Campaign, int(prospect.campaign_id))
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaña no encontrada.")
+    try:
+        linkedin_assisted_service.require_real_linkedin(prospect)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    result = register_linkedin_inbound_message(
+        db,
+        prospect=prospect,
+        campaign=campaign,
+        message=body.message.strip(),
+        linkedin_message_id=body.linkedin_message_id,
+        prepare_reply_draft=True,
+    )
+    db.commit()
+    db.refresh(prospect)
+
+    inserted = bool(result.get("inserted"))
+    reply_at = result.get("reply_available_at")
+    if inserted and reply_at and result.get("reply_draft_ready"):
+        detail = "Respuesta LinkedIn registrada. La réplica aparecerá en cola en unos minutos."
+    elif inserted:
+        detail = "Respuesta LinkedIn registrada. Revisá la cola para responder."
+    else:
+        detail = "Ese mensaje ya estaba registrado."
+    return LinkedInInboundRegisterRead(
+        ok=True,
+        inserted=inserted,
+        duplicate=not inserted,
+        sequence_paused=bool(result.get("sequence_paused")),
+        reply_draft_ready=bool(result.get("reply_draft_ready")),
+        reply_draft=result.get("reply_draft"),
+        reply_available_at=reply_at,
+        detail=detail,
+    )
+
+
+@router.get("/prospects/resolve-whatsapp", response_model=WhatsAppResolveProspectRead)
+def resolve_whatsapp_prospect(
+    phone: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> WhatsAppResolveProspectRead:
+    """Resuelve prospecto por teléfono (extensión WhatsApp Web / auto-inbound)."""
+    prospect = resolve_prospect_by_whatsapp_digits(
+        db,
+        company_id=user.company_id,
+        from_digits=phone,
+    )
+    if prospect is None:
+        raise HTTPException(status_code=404, detail="Prospecto no encontrado para este teléfono.")
+    digits = whatsapp_assisted_service.prospect_whatsapp_digits(prospect) or phone
+    return WhatsAppResolveProspectRead(
+        prospect_id=prospect.id,
+        prospect_name=prospect.name or f"Prospecto #{prospect.id}",
+        company_name=prospect.company_name,
+        phone_digits=digits,
+        campaign_id=prospect.campaign_id,
+    )
+
+
+@router.post(
+    "/prospects/{prospect_id}/whatsapp-inbound",
+    response_model=WhatsAppInboundRegisterRead,
+)
+def register_whatsapp_inbound(
+    prospect_id: int,
+    body: WhatsAppInboundRegisterBody,
+    db: Session = Depends(get_db),
+    prospect: Prospect = Depends(get_prospect),
+) -> WhatsAppInboundRegisterRead:
+    """Registra respuesta inbound de WhatsApp (webhook Meta o extensión Web)."""
+    if not prospect.campaign_id:
+        raise HTTPException(status_code=400, detail="El prospecto no tiene campaña asignada.")
+    campaign = db.get(Campaign, int(prospect.campaign_id))
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaña no encontrada.")
+    try:
+        whatsapp_assisted_service.require_whatsapp_phone(prospect)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    from sqlalchemy.exc import IntegrityError, PendingRollbackError
+
+    try:
+        result = register_whatsapp_inbound_message(
+            db,
+            prospect=prospect,
+            campaign=campaign,
+            message=body.message.strip(),
+            whatsapp_message_id=body.whatsapp_message_id,
+            prepare_reply_draft=bool(body.prepare_reply_draft),
+        )
+        db.commit()
+        db.refresh(prospect)
+    except (IntegrityError, PendingRollbackError):
+        db.rollback()
+        # Race del unique index u sesión dirty tras dedupe: tratar como duplicado OK.
+        return WhatsAppInboundRegisterRead(
+            ok=True,
+            inserted=False,
+            duplicate=True,
+            sequence_paused=bool(getattr(prospect, "sequence_paused", False)),
+            reply_draft_ready=False,
+            reply_draft=None,
+            detail="Ese mensaje ya estaba registrado.",
+        )
+    except Exception as e:
+        db.rollback()
+        logger.exception("whatsapp-inbound failed prospect_id=%s", prospect_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"whatsapp inbound failed: {str(e)[:180]}",
+        ) from e
+
+    if result.get("echo_ignored"):
+        return WhatsAppInboundRegisterRead(
+            ok=True,
+            inserted=False,
+            duplicate=False,
+            sequence_paused=bool(result.get("sequence_paused")),
+            reply_draft_ready=False,
+            reply_draft=None,
+            detail="Ignorado: eco del mensaje propio.",
+        )
+
+    inserted = bool(result.get("inserted"))
+    calendar_reconnect = bool(result.get("calendar_reconnect_required"))
+    operator_message = (result.get("operator_message") or "").strip() or None
+    if calendar_reconnect:
+        detail = operator_message or (
+            "Google Calendar necesita reconexión. "
+            "Andá a Configuración → Integraciones antes de confirmar la reunión."
+        )
+    elif inserted and result.get("reply_draft_ready"):
+        detail = "Respuesta WhatsApp detectada. Réplica lista en la cola para enviar."
+    elif inserted:
+        detail = "Respuesta WhatsApp detectada."
+    else:
+        detail = "Ese mensaje ya estaba registrado."
+    return WhatsAppInboundRegisterRead(
+        ok=True,
+        inserted=inserted,
+        duplicate=not inserted,
+        sequence_paused=bool(result.get("sequence_paused")),
+        reply_draft_ready=bool(result.get("reply_draft_ready")),
+        reply_draft=result.get("reply_draft"),
+        calendar_reconnect_required=calendar_reconnect,
+        operator_message=operator_message,
+        detail=detail,
+    )
+
+
 @router.get(
     "/campaigns/{campaign_id}/linkedin-assisted/queue",
     response_model=LinkedInAssistQueueRead,
@@ -1061,9 +1607,205 @@ def mark_linkedin_assisted_sent(
 def linkedin_assisted_queue(
     campaign_id: int,
     db: Session = Depends(get_db),
-    _: Campaign = Depends(get_campaign),
+    campaign: Campaign = Depends(get_campaign),
+    user: User = Depends(get_current_user),
 ) -> LinkedInAssistQueueRead:
-    return linkedin_assisted_service.build_campaign_queue(db, campaign_id)
+    return linkedin_assisted_service.build_campaign_queue(db, campaign_id, viewer=user)
+
+
+@router.post(
+    "/prospects/{prospect_id}/whatsapp-assisted/assist",
+    response_model=WhatsAppAssistedAssistRead,
+)
+def begin_whatsapp_assisted_session(
+    prospect_id: int,
+    db: Session = Depends(get_db),
+    prospect: Prospect = Depends(get_prospect),
+) -> WhatsAppAssistedAssistRead:
+    """Abre sesión asistida WhatsApp Web. NO marca enviado."""
+    try:
+        campaign = whatsapp_assisted_service._load_campaign(db, prospect)
+        draft, session_id, phone = whatsapp_assisted_service.begin_assist_session(
+            db, prospect, campaign
+        )
+        db.commit()
+        db.refresh(prospect)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    send_url = whatsapp_assisted_service.wa_web_send_url(phone, draft)
+    return WhatsAppAssistedAssistRead(
+        message=draft,
+        phone_digits=phone,
+        send_url=send_url,
+        app_send_url=whatsapp_assisted_service.wa_app_send_url(phone, draft),
+        desktop_protocol_url=whatsapp_assisted_service.wa_desktop_protocol_url(phone, draft),
+        clipboard_ready=True,
+        detail="Sesión iniciada. Revisá en WhatsApp (Web o app) y confirmá solo después de enviar.",
+        assist_status=whatsapp_assisted_service.read_assist_status(prospect),
+        session_id=session_id,
+    )
+
+
+@router.post(
+    "/prospects/{prospect_id}/whatsapp-assisted/abandon",
+    response_model=WhatsAppAssistedAbandonRead,
+)
+def abandon_whatsapp_assisted_session(
+    prospect_id: int,
+    db: Session = Depends(get_db),
+    prospect: Prospect = Depends(get_prospect),
+) -> WhatsAppAssistedAbandonRead:
+    if not (prospect.whatsapp_assisted_draft or "").strip():
+        return WhatsAppAssistedAbandonRead(ok=True, detail="Sin borrador pendiente.")
+    try:
+        campaign = whatsapp_assisted_service._load_campaign(db, prospect)
+        status = whatsapp_assisted_service.abandon_assist_session(db, prospect, campaign)
+        db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return WhatsAppAssistedAbandonRead(
+        ok=True,
+        detail="Sesión cerrada sin confirmar envío. La notificación sigue pendiente.",
+        assist_status=status,
+    )
+
+
+@router.post(
+    "/prospects/{prospect_id}/whatsapp-assisted/mark-sent",
+    response_model=WhatsAppAssistedMarkSentRead,
+)
+def mark_whatsapp_assisted_sent(
+    prospect_id: int,
+    db: Session = Depends(get_db),
+    prospect: Prospect = Depends(get_prospect),
+) -> WhatsAppAssistedMarkSentRead:
+    draft = (prospect.whatsapp_assisted_draft or "").strip()
+    if not draft:
+        status = whatsapp_assisted_service.read_assist_status(prospect)
+        if status == whatsapp_assisted_service.STATUS_SENT or getattr(
+            prospect, "whatsapp_sdr_marked_sent_at", None
+        ):
+            return WhatsAppAssistedMarkSentRead(
+                ok=True,
+                detail="Envío ya confirmado en WhatsApp.",
+                assist_status=status,
+                session_id=None,
+            )
+        raise HTTPException(
+            status_code=400,
+            detail="No hay mensaje WhatsApp pendiente. Usá «Enviar WhatsApp» primero.",
+        )
+    try:
+        detail = whatsapp_assisted_service.confirm_whatsapp_sent(db, prospect)
+        db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    db.refresh(prospect)
+    return WhatsAppAssistedMarkSentRead(
+        ok=True,
+        detail=detail,
+        assist_status=whatsapp_assisted_service.read_assist_status(prospect),
+        session_id=None,
+    )
+
+
+@router.get(
+    "/campaigns/{campaign_id}/whatsapp-assisted/queue",
+    response_model=WhatsAppAssistQueueRead,
+)
+def whatsapp_assisted_queue(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    campaign: Campaign = Depends(get_campaign),
+    user: User = Depends(get_current_user),
+) -> WhatsAppAssistQueueRead:
+    return whatsapp_assisted_service.build_campaign_queue(db, campaign_id, viewer=user)
+
+
+@router.get(
+    "/campaigns/{campaign_id}/call-assisted/queue",
+    response_model=CallAssistQueueRead,
+)
+def call_assisted_queue(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    campaign: Campaign = Depends(get_campaign),
+    user: User = Depends(get_current_user),
+) -> CallAssistQueueRead:
+    return call_assisted_service.build_campaign_queue(db, campaign_id, viewer=user)
+
+
+@router.post(
+    "/prospects/{prospect_id}/call-assisted/mark-done",
+    response_model=CallAssistMarkDoneRead,
+)
+def mark_call_assisted_done(
+    prospect_id: int,
+    db: Session = Depends(get_db),
+    prospect: Prospect = Depends(get_prospect),
+) -> CallAssistMarkDoneRead:
+    brief = (prospect.call_assisted_brief or "").strip()
+    if not brief:
+        status = call_assisted_service.read_assist_status(prospect)
+        if status == call_assisted_service.STATUS_DONE or getattr(
+            prospect, "call_sdr_marked_done_at", None
+        ):
+            return CallAssistMarkDoneRead(
+                ok=True,
+                detail="Llamada ya confirmada.",
+                assist_status=status,
+            )
+        raise HTTPException(
+            status_code=400,
+            detail="No hay llamada pendiente para este prospecto.",
+        )
+    try:
+        detail = call_assisted_service.confirm_call_done(db, prospect)
+        db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    db.refresh(prospect)
+    return CallAssistMarkDoneRead(
+        ok=True,
+        detail=detail,
+        assist_status=call_assisted_service.read_assist_status(prospect),
+    )
+
+
+@router.get(
+    "/campaigns/{campaign_id}/mail-queue",
+    response_model=MailQueueRead,
+)
+def campaign_mail_queue(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    campaign: Campaign = Depends(get_campaign),
+    user: User = Depends(get_current_user),
+) -> MailQueueRead:
+    """Mails enviados de la campaña (notificación; sin acciones de envío)."""
+    del campaign  # auth via get_campaign
+    return mail_queue_service.build_campaign_mail_queue(db, campaign_id, viewer=user)
+
+
+@router.get(
+    "/companies/{company_id}/linkedin-assisted/pending-connect-checks",
+    response_model=LinkedInPendingConnectChecksRead,
+)
+def linkedin_pending_connect_checks(
+    company_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> LinkedInPendingConnectChecksRead:
+    """Lista para la extensión: verificar 1º grado sola (sin clic del SDR)."""
+    if int(user.company_id) != int(company_id):
+        raise HTTPException(status_code=403, detail="No tenés acceso a esta empresa")
+    items = linkedin_assisted_service.list_pending_connect_checks(
+        db, company_id=company_id, limit=1
+    )
+    return LinkedInPendingConnectChecksRead(
+        items=[LinkedInPendingConnectCheckRead(**row) for row in items],
+        total=len(items),
+    )
 
 
 @router.get(
@@ -1073,9 +1815,13 @@ def linkedin_assisted_queue(
 def linkedin_assisted_campaign_summary(
     campaign_id: int,
     db: Session = Depends(get_db),
-    _: Campaign = Depends(get_campaign),
+    campaign: Campaign = Depends(get_campaign),
+    user: User = Depends(get_current_user),
 ) -> LinkedInAssistedSummaryRead:
+    from app.services.campaign_visibility import filter_prospects_for_viewer
+
     rows = db.scalars(select(Prospect).where(Prospect.campaign_id == campaign_id)).all()
+    rows = filter_prospects_for_viewer(user, campaign, list(rows))
     today = datetime.now(UTC).date()
     ready = 0
     drafts = 0
@@ -1106,7 +1852,7 @@ def linkedin_assisted_campaign_summary(
     else:
         risk = "bajo"
 
-    queue = linkedin_assisted_service.build_campaign_queue(db, campaign_id)
+    queue = linkedin_assisted_service.build_campaign_queue(db, campaign_id, viewer=user)
 
     return LinkedInAssistedSummaryRead(
         ready_for_linkedin=ready,
@@ -1116,3 +1862,21 @@ def linkedin_assisted_campaign_summary(
         pending_queue=queue.total_pending,
         risk_level=risk,
     )
+
+
+@router.get("/companies/{company_id}/responder-inbox")
+def get_responder_inbox(
+    company_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Bandeja unificada: borradores de respuesta email + LinkedIn + WhatsApp."""
+    from app.core.permissions import normalize_role
+    from app.models.enums import UserRole
+    from app.services.responder_inbox_service import build_responder_inbox
+
+    if int(user.company_id) != int(company_id):
+        raise HTTPException(status_code=403, detail="Empresa no autorizada")
+    role = normalize_role(user.role)
+    seller_id = int(user.id) if role == UserRole.sdr else None
+    return build_responder_inbox(db, company_id=company_id, seller_id=seller_id)

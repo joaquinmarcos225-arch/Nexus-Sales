@@ -1,12 +1,11 @@
-﻿"""Tests mínimos: research notes + cola LinkedIn visible en checking."""
+"""Tests mínimos: research notes + cola LinkedIn visible en checking."""
 from datetime import UTC, datetime, timedelta
 
 from app.services.linkedin_assisted_service import (
     CONN_CHECKING,
-    CONN_INVITE_PENDING,
     is_queue_eligible,
 )
-from app.services.linkedin_sequence_policy import promote_stale_connection_check
+from app.services.linkedin_sequence_policy import CHECKING_FALLBACK_SECONDS, promote_stale_connection_check
 from app.services.outreach_prospect_research import (
     RESEARCH_END,
     RESEARCH_START,
@@ -44,13 +43,9 @@ def test_checking_without_draft_is_eligible_for_auto_verify():
     assert is_queue_eligible(p) is True
 
 
-def test_promote_stale_connection_check_after_75s():
-    """checking >75s sin respuesta de extensión → invite_pending (Contactar)."""
+def test_promote_stale_timeout_is_check_failed_not_connect():
+    """Timeout de checking → check_failed (nada en cola Contactar/Mensaje)."""
     now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-    young = _P(assisted_at=now - timedelta(seconds=30))
-    assert promote_stale_connection_check(young, now=now) is False
-    assert young.linkedin_connection_status == CONN_CHECKING
-
-    stale = _P(assisted_at=now - timedelta(seconds=76))
+    stale = _P(assisted_at=now - timedelta(seconds=CHECKING_FALLBACK_SECONDS + 999))
     assert promote_stale_connection_check(stale, now=now) is True
-    assert stale.linkedin_connection_status == CONN_INVITE_PENDING
+    assert stale.linkedin_connection_status == "check_failed"

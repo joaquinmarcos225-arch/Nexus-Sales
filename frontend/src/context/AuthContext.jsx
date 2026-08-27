@@ -7,7 +7,7 @@ import {
   useState,
 } from 'react'
 import { getStoredToken, setStoredToken } from '../utils/authStorage.js'
-import { fetchAuthMe, login as apiLogin } from '../utils/api.js'
+import { fetchAuthMe, login as apiLogin, registerWorkspace as apiRegisterWorkspace } from '../utils/api.js'
 
 const AuthContext = createContext(null)
 
@@ -22,25 +22,29 @@ export function AuthProvider({ children }) {
     setStoredToken(value)
   }, [])
 
-  const refreshUser = useCallback(async () => {
+  const refreshUser = useCallback(async ({ silent = false } = {}) => {
     if (!token) {
       setUser(null)
       setLoading(false)
       return null
     }
-    setLoading(true)
+    if (!silent) setLoading(true)
     setError(null)
     try {
       const me = await fetchAuthMe()
       setUser(me)
       return me
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-      setUser(null)
-      setToken(null)
+      const status = e?.status
+      if (status === 401) {
+        setUser(null)
+        setToken(null)
+      } else {
+        setError(e instanceof Error ? e.message : String(e))
+      }
       return null
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [token, setToken])
 
@@ -48,13 +52,32 @@ export function AuthProvider({ children }) {
     void refreshUser()
   }, [refreshUser])
 
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void refreshUser({ silent: true })
+    }, 60 * 60 * 1000)
+    return () => window.clearInterval(id)
+  }, [refreshUser])
+
   const login = useCallback(
-    async (email, password) => {
+    async (email, password, firstName) => {
       setError(null)
-      const res = await apiLogin(email, password)
+      const res = await apiLogin(email, password, firstName)
       setToken(res.access_token)
       setUser(res.user)
       return res.user
+    },
+    [setToken],
+  )
+
+  const registerWorkspace = useCallback(
+    async (payload) => {
+      setError(null)
+      const res = await apiRegisterWorkspace(payload)
+      setToken(res.access_token)
+      const me = await fetchAuthMe()
+      setUser(me)
+      return me
     },
     [setToken],
   )
@@ -72,11 +95,12 @@ export function AuthProvider({ children }) {
       loading,
       error,
       login,
+      registerWorkspace,
       logout,
       refreshUser,
       isAuthenticated: Boolean(token && user),
     }),
-    [token, user, loading, error, login, logout, refreshUser],
+    [token, user, loading, error, login, registerWorkspace, logout, refreshUser],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

@@ -3,7 +3,7 @@ import { hasRealLinkedInUrl, linkedInOpenUrl } from '../../utils/linkedinAssist.
 function OutreachReadyBadge({ ready, missingFields }) {
   if (ready) {
     return (
-      <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-900 ring-1 ring-emerald-100">
+      <span className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold text-red-900 ring-1 ring-red-100">
         Sí
       </span>
     )
@@ -11,7 +11,7 @@ function OutreachReadyBadge({ ready, missingFields }) {
   const hint = Array.isArray(missingFields) && missingFields.length ? missingFields.join(', ') : 'incompleto'
   return (
     <span
-      className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-950 ring-1 ring-amber-100"
+      className="rounded bg-zinc-50 px-1.5 py-0.5 text-[10px] font-medium text-zinc-950 ring-1 ring-zinc-100"
       title={hint}
     >
       No
@@ -30,7 +30,7 @@ function LinkedInCell({ url, valid }) {
       target="_blank"
       rel="noreferrer"
       className={`block max-w-[16rem] break-all text-[11px] font-medium hover:underline ${
-        valid || hasRealLinkedInUrl(url) ? 'text-sky-800' : 'text-amber-800'
+        valid || hasRealLinkedInUrl(url) ? 'text-zinc-800' : 'text-zinc-800'
       }`}
       title={openUrl}
     >
@@ -77,7 +77,7 @@ export function ProspectingLeadsTable({ rows = [], phoneInfo = null, selectedId 
       <div className="mt-4 rounded-xl border border-dashed border-zinc-200 bg-zinc-50/60 p-4">
         <p className="text-xs font-semibold text-zinc-800">Prospección — contactos Nexus</p>
         <p className="mt-1 text-[11px] text-zinc-600">
-          Sin personas tras enriquecer. Ejecutá Prospeo sobre empresas ICP.
+          Todavía no hay contactos. La búsqueda automática los cargará acá.
         </p>
         <ProspeoPhoneInfoPanel info={phoneInfo} />
       </div>
@@ -85,10 +85,10 @@ export function ProspectingLeadsTable({ rows = [], phoneInfo = null, selectedId 
   }
 
   return (
-    <div className="mt-4 overflow-hidden rounded-xl border border-violet-200/80 bg-white shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-violet-100 bg-violet-50/50 px-3 py-2">
-        <span className="text-xs font-semibold text-violet-950">Prospección — leads Nexus</span>
-        <span className="text-[10px] font-medium text-violet-900">
+    <div className="mt-4 overflow-hidden rounded-xl border border-zinc-200/80 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 bg-zinc-50/50 px-3 py-2">
+        <span className="text-xs font-semibold text-zinc-950">Prospección — leads Nexus</span>
+        <span className="text-[10px] font-medium text-zinc-900">
           {list.length} contactos · {readyCount} listos outreach
         </span>
       </div>
@@ -103,9 +103,9 @@ export function ProspectingLeadsTable({ rows = [], phoneInfo = null, selectedId 
               <th className="px-3 py-2">Nombre</th>
               <th className="px-3 py-2">Cargo</th>
               <th className="px-3 py-2">Email</th>
-              <th className="px-3 py-2">LinkedIn</th>
-              <th className="px-3 py-2">Phone</th>
+              <th className="px-3 py-2">Celular</th>
               <th className="px-3 py-2">WhatsApp</th>
+              <th className="px-3 py-2">LinkedIn</th>
               <th className="px-3 py-2 text-center">Outreach Ready</th>
             </tr>
           </thead>
@@ -116,27 +116,29 @@ export function ProspectingLeadsTable({ rows = [], phoneInfo = null, selectedId 
               return (
                 <tr
                   key={id}
-                  className={`cursor-pointer hover:bg-violet-50/40 ${selected ? 'bg-violet-50/60' : ''}`}
+                  className={`cursor-pointer hover:bg-zinc-50/40 ${selected ? 'bg-zinc-50/60' : ''}`}
                   onClick={() => onSelectRow?.(id)}
                 >
                   <td className="px-3 py-2 font-semibold text-zinc-900">{row.person_name}</td>
                   <td className="max-w-[10rem] truncate px-3 py-2 text-zinc-600" title={row.role || ''}>
                     {row.role || '—'}
                   </td>
-                  <td className="max-w-[11rem] truncate px-3 py-2 text-zinc-700" title={row.email || ''}>
+                  <td className="max-w-[12rem] break-all px-3 py-2 text-zinc-700" title={row.email || ''}>
                     {row.email || '—'}
                   </td>
-                  <td className="px-3 py-2">
-                    <LinkedInCell url={row.linkedin_url} valid={row.linkedin_valid} />
-                  </td>
-                  <td className="px-3 py-2 text-zinc-700">
+                  <td className="whitespace-nowrap px-3 py-2 text-zinc-700">
                     {row.phone ? (
                       <span title={row.phone_source || undefined}>{row.phone}</span>
                     ) : (
                       '—'
                     )}
                   </td>
-                  <td className="px-3 py-2 text-zinc-700">{row.whatsapp_number || '—'}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-zinc-700">
+                    {row.whatsapp_number || row.whatsapp || '—'}
+                  </td>
+                  <td className="px-3 py-2">
+                    <LinkedInCell url={row.linkedin_url} valid={row.linkedin_valid} />
+                  </td>
                   <td className="px-3 py-2 text-center">
                     <OutreachReadyBadge ready={row.outreach_ready} missingFields={row.missing_fields} />
                   </td>

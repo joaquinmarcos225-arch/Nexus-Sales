@@ -14,6 +14,7 @@ from app.services import gmail_drafts as gmail_drafts_mod
 from app.services.gmail_drafts import get_valid_gmail_connection
 from app.services.gmail_threads import fetch_thread_full
 from app.services.oauth_tokens import decrypt_secret
+from app.services.outbound_text_normalize import normalize_outbound_email_body
 
 GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 
@@ -102,7 +103,7 @@ def _rfc822_raw(
         msg["In-Reply-To"] = in_reply_to
     if references:
         msg["References"] = references
-    msg.set_content(body, subtype="plain", charset="utf-8")
+    msg.set_content(normalize_outbound_email_body(body), subtype="plain", charset="utf-8")
     raw_bytes = msg.as_bytes()
     return base64.urlsafe_b64encode(raw_bytes).decode("utf-8").rstrip("=")
 

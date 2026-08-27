@@ -3,6 +3,7 @@ import { PageHeader } from '../../layout/PageHeader'
 import { useDashboardAnalytics } from '../../context/DashboardAnalyticsContext.jsx'
 import { AlertBanner } from '../../components/AlertBanner.jsx'
 import { SortFilterTable } from '../../components/dashboard/SortFilterTable.jsx'
+import { PiePercentLabel } from '../../components/charts/ChartLabels.jsx'
 import {
   Bar,
   BarChart,
@@ -19,15 +20,7 @@ import {
   YAxis,
   ZAxis,
 } from 'recharts'
-
-const CH_COLORS = ['#b91c1c', '#991b1b', '#7f1d1d', '#dc2626', '#f97316']
-
-function pct(x) {
-  if (x == null || Number.isNaN(x)) {
-    return '0%'
-  }
-  return `${(Number(x) * 100).toFixed(1)}%`
-}
+import { NX_CHART, NX_CHART_GRID, NX_CHART_LEGEND, NX_CHART_SERIES, NX_CHART_TOOLTIP, averageBy, chartAvgCaption, enrichSlicesWithPct, formatPctRate, pieTooltipWithPct } from '../../utils/chartTheme.js'
 
 export default function DashboardSectionOutreach() {
   const { data, loading, error, refresh } = useDashboardAnalytics()
@@ -44,10 +37,14 @@ export default function DashboardSectionOutreach() {
     mensajes: c.messages_sent,
   }))
 
-  const channelData = (data?.outreach_messages_by_channel ?? []).map((row) => ({
-    name: String(row.channel || '—'),
-    value: Number(row.count) || 0,
-  }))
+  const channelData = enrichSlicesWithPct(
+    (data?.outreach_messages_by_channel ?? []).map((row) => ({
+      name: String(row.channel || '—'),
+      value: Number(row.count) || 0,
+    })),
+  )
+
+  const avgMensajes = averageBy(chartData, 'mensajes')
 
   const scatterData = (data?.scatter_response_vs_messages ?? []).map((row, i) => ({
     x: Number(row.messages_sent) || 0,
@@ -84,15 +81,16 @@ export default function DashboardSectionOutreach() {
               </div>
               <div className="rounded-xl border border-nx-border bg-nx-card p-3">
                 <p className="text-[11px] font-semibold uppercase text-nx-muted">Tasa respuesta</p>
-                <p className="mt-1 text-xl font-semibold text-nx-ink">{pct(t.response_rate)}</p>
+                <p className="mt-1 text-xl font-semibold text-nx-ink">{formatPctRate(t.response_rate)}</p>
               </div>
               <div className="rounded-xl border border-nx-border bg-nx-card p-3">
                 <p className="text-[11px] font-semibold uppercase text-nx-muted">Interesados</p>
                 <p className="mt-1 text-xl font-semibold text-nx-ink">{t.prospects_interested}</p>
               </div>
               <div className="rounded-xl border border-nx-border bg-nx-card p-3">
-                <p className="text-[11px] font-semibold uppercase text-nx-muted">Sin respuesta (contactados)</p>
+                <p className="text-[11px] font-semibold uppercase text-nx-muted">Sin respuesta (prospectos)</p>
                 <p className="mt-1 text-xl font-semibold text-nx-ink">{data?.prospects_no_reply ?? 0}</p>
+                <p className="mt-0.5 text-[10px] text-nx-muted">Contactados menos los que respondieron</p>
               </div>
               <div className="rounded-xl border border-nx-border bg-nx-card p-3">
                 <p className="text-[11px] font-semibold uppercase text-nx-muted">Follow-ups enviados</p>
@@ -109,14 +107,15 @@ export default function DashboardSectionOutreach() {
 
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="h-72 w-full rounded-xl border border-nx-border bg-nx-card p-4">
-              <p className="mb-2 text-xs font-semibold text-nx-muted">Mensajes por campaña</p>
+              <p className="mb-0.5 text-xs font-semibold text-nx-muted">Mensajes por campaña</p>
+              <p className="mb-2 text-[10px] text-nx-muted">{chartAvgCaption('Prom. mensajes', avgMensajes)}</p>
               <ResponsiveContainer width="100%" height="90%">
                 <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 48 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <CartesianGrid {...NX_CHART_GRID} />
                   <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-20} textAnchor="end" height={56} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip />
-                  <Bar dataKey="mensajes" fill="#b91c1c" name="Mensajes" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="mensajes" fill={NX_CHART.brandHover} name="Mensajes" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -125,7 +124,7 @@ export default function DashboardSectionOutreach() {
               <ResponsiveContainer width="100%" height="90%">
                 <PieChart>
                   <Pie
-                    data={channelData}
+                    data={channelData.length ? channelData : [{ name: 'Sin datos', value: 1, pctLabel: '100%' }]}
                     dataKey="value"
                     nameKey="name"
                     cx="50%"
@@ -133,13 +132,15 @@ export default function DashboardSectionOutreach() {
                     innerRadius={44}
                     outerRadius={72}
                     paddingAngle={2}
+                    label={channelData.length ? PiePercentLabel : false}
+                    labelLine={false}
                   >
-                    {channelData.map((_, i) => (
-                      <Cell key={String(i)} fill={CH_COLORS[i % CH_COLORS.length]} />
+                    {(channelData.length ? channelData : [{ name: 'Sin datos', value: 1 }]).map((_, i) => (
+                      <Cell key={String(i)} fill={NX_CHART_SERIES[i % NX_CHART_SERIES.length]} />
                     ))}
                   </Pie>
-                  <Tooltip />
-                  <Legend />
+                  <Tooltip {...NX_CHART_TOOLTIP} formatter={pieTooltipWithPct} />
+                  <Legend {...NX_CHART_LEGEND} formatter={(value, entry) => entry?.payload?.legendLabel || value} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -151,12 +152,12 @@ export default function DashboardSectionOutreach() {
             </p>
             <ResponsiveContainer width="100%" height="88%">
               <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <CartesianGrid {...NX_CHART_GRID} />
                 <XAxis type="number" dataKey="x" name="Mensajes" tick={{ fontSize: 11 }} />
                 <YAxis type="number" dataKey="y" name="Respuestas" tick={{ fontSize: 11 }} allowDecimals={false} />
                 <ZAxis type="number" dataKey="z" range={[60, 60]} />
                 <Tooltip cursor={{ strokeDasharray: '3 3' }} formatter={(v, name) => [v, name]} />
-                <Scatter name="Campañas" data={scatterData} fill="#991b1b" />
+                <Scatter name="Campañas" data={scatterData} fill={NX_CHART.brandDark} />
               </ScatterChart>
             </ResponsiveContainer>
           </div>
@@ -204,7 +205,7 @@ export default function DashboardSectionOutreach() {
                   key: 'response_rate_msg',
                   label: 'Tasa respuesta (msg)',
                   sortValue: (r) => r.response_rate_msg,
-                  render: (r) => pct(r.response_rate_msg),
+                  render: (r) => formatPctRate(r.response_rate_msg),
                 },
               ]}
               rows={rows}

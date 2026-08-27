@@ -60,17 +60,56 @@ def compute_extraction_confidence(
     return max(0, min(100, blended))
 
 
-def passes_web_search_company_row(candidate: CompanyCandidateRead) -> bool:
+def passes_web_search_company_row(
+    candidate: CompanyCandidateRead,
+    *,
+    min_relevance: int | None = None,
+) -> bool:
     if candidate.result_kind != "company":
         return False
     conf = candidate.confidence or 0
     if conf < MIN_WEB_SEARCH_COMPANY_CONFIDENCE:
+        return False
+    from app.services.lead_sourcing.company_relevance import (
+        MIN_COMPANY_RELEVANCE,
+        MIN_COMPANY_RELEVANCE_STRICT,
+    )
+
+    floor = (
+        int(min_relevance)
+        if min_relevance is not None
+        else MIN_COMPANY_RELEVANCE_STRICT
+    )
+    floor = max(MIN_COMPANY_RELEVANCE, min(MIN_COMPANY_RELEVANCE_STRICT, floor))
+    if (candidate.icp_relevance_score or 0) < floor:
         return False
     name = candidate.normalized_company_name or candidate.name
     if not name or _is_generic_name(name):
         return False
     if is_seo_listing_title(candidate.name):
         return False
+    # Listicles / directorios SEO: no sirven como empleador ICP.
+    from app.services.lead_sourcing.providers.prospeo_enrichment import _website_domain
+
+    blob = " ".join(
+        filter(
+            None,
+            [
+                (candidate.company_domain or "").lower(),
+                (_website_domain(candidate.website_url) or "").lower(),
+                (candidate.website_url or "").lower(),
+            ],
+        )
+    )
+    for frag in (
+        "growthlist.",
+        "saasworthy.",
+        "saashub.",
+        "craft.co",
+        "cbinsights.com",
+    ):
+        if frag in blob:
+            return False
     return True
 
 

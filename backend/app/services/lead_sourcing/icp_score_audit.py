@@ -26,14 +26,10 @@ def _icp_active(value: str | None) -> bool:
 
 def _score_country(prospect_country: str | None, campaign_country: str | None) -> tuple[int, str]:
     if not _icp_active(campaign_country):
-        return 0, "ICP país no configurado"
-    pc = _norm(prospect_country)
-    cc = _norm(campaign_country)
-    if pc and cc and pc == cc:
-        return 100, "País coincide con ICP"
-    if pc and cc and (cc in pc or pc in cc):
-        return 70, "País parcialmente alineado"
-    return 0, "País no alineado con ICP"
+        return 0, "ICP región no configurada"
+    from app.services.lead_sourcing.icp_region import score_region_alignment
+
+    return score_region_alignment(campaign_country, prospect_country)
 
 
 def _score_industry(prospect_industry: str | None, campaign_industry: str | None) -> tuple[int, str]:
@@ -165,11 +161,20 @@ def compute_icp_score_breakdown(
         company_icp_score=company_icp_relevance_score,
     )
 
+    # Dimensión activa solo si el ICP la pide Y hay dato del prospecto/empresa.
+    # Desconocido ≠ fuera de ICP (no hundir el score a 0 en el denominador).
+    industry_on = _icp_active(campaign_industry) and bool((prospect_industry or "").strip())
+    role_on = _icp_active(campaign_role) and bool((prospect_role or "").strip())
+    country_on = _icp_active(campaign_country) and bool((prospect_country or "").strip())
+    size_on = _icp_active(campaign_company_size) and (
+        bool((company_size or "").strip()) or employee_count is not None
+    )
+
     dimensions: list[tuple[str, int, int, bool]] = [
-        ("industry", industry_score, 25, _icp_active(campaign_industry)),
-        ("role", role_score, 30, _icp_active(campaign_role)),
-        ("country", country_score, 15, _icp_active(campaign_country)),
-        ("company_size", size_score, 10, _icp_active(campaign_company_size)),
+        ("industry", industry_score, 25, industry_on),
+        ("role", role_score, 30, role_on),
+        ("country", country_score, 15, country_on),
+        ("company_size", size_score, 10, size_on),
         ("additional", additional_score, 20, True),
     ]
 

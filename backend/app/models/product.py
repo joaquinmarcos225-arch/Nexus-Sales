@@ -22,6 +22,8 @@ class Product(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     value_proposition: Mapped[str] = mapped_column(Text, nullable=False, default="")
     target_notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # b2b | b2c | both — define qué tipos de campaña admite el producto
+    market_scope: Mapped[str] = mapped_column(String(16), nullable=False, default="b2b")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

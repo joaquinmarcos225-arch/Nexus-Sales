@@ -46,6 +46,9 @@ def get_campaign(
         raise HTTPException(status_code=404, detail="Campaña no encontrada")
     if user.company_id != campaign.company_id:
         raise HTTPException(status_code=403, detail="No tenés acceso a esta campaña")
+    from app.services.campaign_visibility import assert_campaign_access
+
+    assert_campaign_access(user, campaign)
     return campaign
 
 

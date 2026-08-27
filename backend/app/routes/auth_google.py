@@ -99,6 +99,16 @@ def google_oauth_start_url(
     _company=Depends(get_company),
 ) -> GoogleOAuthStartRead:
     """Devuelve la URL de consentimiento Google (requiere JWT — usar desde la app)."""
+    cfg_err = google_oauth.oauth_configuration_error()
+    if cfg_err:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Google OAuth no está configurado en el servidor. "
+                f"Completá backend/.env (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, "
+                f"GOOGLE_REDIRECT_URI, NEXUS_TOKEN_FERNET_KEY). Detalle: {cfg_err}"
+            ),
+        )
     try:
         url = _build_google_authorization_url(
             db, company_id=company_id, user_id=user_id, current_user=current_user

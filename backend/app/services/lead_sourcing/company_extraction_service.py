@@ -24,8 +24,10 @@ from app.services.lead_sourcing.company_relevance import (
 from app.services.lead_sourcing.company_search_classifier import classify_company_hit
 from app.services.lead_sourcing.icp_intelligence import parse_company_icp
 from app.services.lead_sourcing.pipeline_runtime import run_with_timeout
-from app.services.lead_sourcing.phantombuster_queue import PHANTOM_ONLY_PLATFORMS
 from app.services.lead_sourcing.timeouts_config import PER_DIRECTORY_SOURCE_TIMEOUT_SEC
+
+# Directorios que no se crawlean directo (semilla ICP / referencia).
+BLOCKED_DIRECTORY_PLATFORMS = frozenset({"wellfound", "g2", "clutch", "crunchbase"})
 
 _logger = logging.getLogger(__name__)
 
@@ -51,7 +53,7 @@ class CompanyExtractionService:
             if not url:
                 continue
             platform = detect_platform(url)
-            if platform in PHANTOM_ONLY_PLATFORMS:
+            if platform in BLOCKED_DIRECTORY_PLATFORMS:
                 from app.services.lead_sourcing.company_extraction.models import (
                     ExtractionSourceResult,
                 )
@@ -61,7 +63,7 @@ class CompanyExtractionService:
                         directory_url=url,
                         platform=platform,
                         status="requires_phantombuster",
-                        message="Fuente bloqueada para crawling directo — usar PhantomBuster",
+                        message="Fuente bloqueada para crawling directo — semilla ICP",
                     )
                 )
                 continue
@@ -108,7 +110,7 @@ class CompanyExtractionService:
                         platform=platform,
                         status="requires_phantombuster" if is_blocked else "error",
                         message=(
-                            "Fuente bloqueada — enviar a PhantomBuster"
+                            "Fuente bloqueada — directorio ICP (no crawl directo)"
                             if is_blocked
                             else err_text
                         ),

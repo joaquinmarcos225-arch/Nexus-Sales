@@ -26,15 +26,13 @@ from app.services.lead_sourcing.env_config import refresh_lead_sourcing_env
 from app.services.lead_sourcing.mapper import to_prospect_create
 from app.services.lead_sourcing.providers.base import ProviderAPIError, ProviderNotConfiguredError
 from app.services.lead_sourcing.diag_trace import DiagTrace
-from app.services.lead_sourcing.mvp_pipeline import (
-    MVP_PIPELINE_STEPS,
-    phantom_experimental_enabled,
-)
+from app.services.lead_sourcing.mvp_pipeline import MVP_PIPELINE_STEPS
 from app.services.lead_sourcing.providers.registry import (
     get_providers_status,
     mvp_pipeline_ready,
-    phantom_pipeline_ready,
+    pipeline_ready_for_campaign,
     pipeline_ready,
+    prospeo_ready,
 )
 
 _logger = logging.getLogger(__name__)
@@ -53,14 +51,11 @@ def get_status(*, trace: DiagTrace | None = None) -> LeadSourcingStatusRead:
     if trace:
         trace.step("providers_mapped")
     mvp_ready = mvp_pipeline_ready()
-    phantom_ok = phantom_pipeline_ready()
     if mvp_ready:
         msg = (
             "Pipeline MVP: ICP → Web Search → empresas candidatas → Prospeo (selectivo) → "
-            "Nexus Outreach. PhantomBuster es opcional (modo experimental)."
+            "Nexus Outreach."
         )
-        if phantom_ok and phantom_experimental_enabled():
-            msg += " Phantom experimental activo en .env."
     else:
         missing = [
             p.name
@@ -84,7 +79,6 @@ def get_status(*, trace: DiagTrace | None = None) -> LeadSourcingStatusRead:
         providers=providers,
         pipeline=list(MVP_PIPELINE_STEPS),
         mvp_ready=mvp_ready,
-        phantom_experimental=phantom_ok,
         prospeo_health=prospeo_health,
     )
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -120,7 +114,13 @@ def run_pipeline_step(
     fit_threshold: int | None = None,
 ) -> PipelineRunRead:
     refresh_lead_sourcing_env()
-    if not pipeline_ready():
+    if not pipeline_ready_for_campaign(campaign):
+        from app.services.campaign_market import campaign_is_b2c
+
+        if campaign_is_b2c(campaign):
+            raise ProviderNotConfiguredError(
+                "B2C requiere Prospeo (PROSPEO_API_KEY). Web Search no es necesario."
+            )
         raise ProviderNotConfiguredError(get_status().message)
     if fit_threshold is not None:
         row = store.get_or_create(db, campaign.id)
@@ -171,28 +171,102 @@ def import_people(
             result.skipped_duplicates += 1
             continue
         from app.services.lead_sourcing.contact_identity import (
-            is_outreach_ready_any,
             is_pipeline_contact,
             is_pipeline_generic_contact,
+        )
+        from app.services.lead_sourcing.prospecting_lead import (
+            is_prospecting_importable_for_campaign,
         )
 
         if not is_pipeline_contact(c) and not is_pipeline_generic_contact(c):
             result.skipped_missing += 1
             result.errors.append(f"{eid}: no es un contacto persona real.")
             continue
-        if not is_outreach_ready_any(c):
+        fit = int(getattr(row, "fit_threshold", None) or 70)
+        if not is_prospecting_importable_for_campaign(c, campaign, fit_threshold=fit):
             result.skipped_missing += 1
-            result.errors.append(f"{eid}: sin email ni LinkedIn — no importable.")
+            result.errors.append(
+                f"{eid}: no cumple calidad de importación (rol/email o LinkedIn/score)."
+            )
+            continue
+        from app.services.lead_sourcing.icp_import_gate import (
+            icp_import_gate_reason,
+        )
+
+        gate_reason = icp_import_gate_reason(
+            campaign_role=campaign.target_role,
+            campaign_industry=campaign.target_industry,
+            campaign_country=campaign.target_country,
+            campaign_company_size=campaign.target_company_size,
+            prospect_role=c.role,
+            prospect_industry=c.industry,
+            prospect_country=c.country,
+            company_name=c.company_name,
+            company_domain=c.company_domain,
+            linkedin_url=c.linkedin_url,
+            email=c.email,
+            company_size=getattr(c, "company_size", None),
+            employee_count=getattr(c, "employee_count", None),
+            compatibility_score=c.compatibility_score,
+            fit_threshold=fit,
+        )
+        if gate_reason:
+            result.skipped_missing += 1
+            result.errors.append(f"{eid}: ICP estricto — {gate_reason}")
             continue
         if not (c.linkedin_url or c.email):
             result.skipped_missing += 1
             result.errors.append(f"{eid}: sin email ni LinkedIn.")
             continue
+        from app.services.crm import exclusions as crm_exclusions
+
+        blocked = crm_exclusions.is_crm_excluded(
+            db,
+            campaign.company_id,
+            email=c.email,
+            company_name=c.company_name,
+            company_website=c.company_website,
+            company_domain=c.company_domain,
+        )
+        if blocked is not None:
+            result.skipped_duplicates += 1
+            continue
+        try:
+            from app.services.nexus_contact_cache import contact_delivered_to_tenant
+
+            if contact_delivered_to_tenant(
+                db,
+                int(campaign.company_id),
+                email=c.email,
+                linkedin_url=c.linkedin_url,
+                phone=getattr(c, "phone", None),
+                whatsapp=getattr(c, "whatsapp", None) or getattr(c, "whatsapp_number", None),
+            ):
+                result.skipped_duplicates += 1
+                continue
+        except Exception:  # noqa: BLE001
+            pass
         payload = to_prospect_create(c)
         try:
             p_row = persist_fn(db, campaign, payload)
             result.imported += 1
             result.prospect_ids.append(p_row.id)
+            try:
+                from app.services.lead_sourcing.cogs_runtime_metrics import record_import
+
+                record_import(1)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                from app.services.nexus_contact_cache import safe_upsert_from_prospect
+
+                safe_upsert_from_prospect(
+                    db,
+                    p_row,
+                    tenant_company_id=int(campaign.company_id),
+                )
+            except Exception:  # noqa: BLE001
+                pass
         except Exception as exc:
             from fastapi import HTTPException
 

@@ -171,6 +171,17 @@ export function buildBlockChecklist(validation) {
 
   const issues = validation?.issues || []
 
+  const parseOnly =
+    issues.length > 0 &&
+    issues.every((issue) => /JSONDecodeError|JSON válido|json\.loads|parse/i.test(String(issue)))
+  if (parseOnly) {
+    return []
+  }
+
+  if (validation?.step_day != null && validation.step_day !== 1) {
+    return []
+  }
+
   return DEFAULT_BLOCK_DEFS.map(({ key, label }) => {
 
     const value = blockValue(key, sections, internal)
@@ -255,15 +266,15 @@ function OpenAIGenerationDebugSection({ generationDebug }) {
 
   return (
 
-    <details className="mt-3 rounded border border-violet-300 bg-violet-50/80">
+    <details className="mt-3 rounded border border-zinc-300 bg-zinc-50/80">
 
-      <summary className="cursor-pointer px-2 py-1.5 text-xs font-semibold text-violet-950">
+      <summary className="cursor-pointer px-2 py-1.5 text-xs font-semibold text-zinc-950">
 
         OpenAI — prompts y respuesta raw
 
       </summary>
 
-      <div className="space-y-2 border-t border-violet-200 px-2 py-2 text-[10px] text-violet-950">
+      <div className="space-y-2 border-t border-zinc-200 px-2 py-2 text-[10px] text-zinc-950">
 
         {generationDebug.model ? (
 
@@ -299,7 +310,7 @@ function OpenAIGenerationDebugSection({ generationDebug }) {
 
             <summary className="cursor-pointer font-medium">Prompt user</summary>
 
-            <pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-violet-200 bg-white px-2 py-1 font-mono">
+            <pre className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-zinc-200 bg-white px-2 py-1 font-mono">
 
               {generationDebug.prompt_user}
 
@@ -315,7 +326,7 @@ function OpenAIGenerationDebugSection({ generationDebug }) {
 
             <summary className="cursor-pointer font-medium">Respuesta RAW</summary>
 
-            <pre className="mt-0.5 max-h-72 overflow-auto whitespace-pre-wrap rounded border border-amber-300 bg-amber-50/50 px-2 py-1 font-mono">
+            <pre className="mt-0.5 max-h-72 overflow-auto whitespace-pre-wrap rounded border border-zinc-300 bg-zinc-50/50 px-2 py-1 font-mono">
 
               {generationDebug.raw_response}
 
@@ -379,7 +390,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
     <div
 
-      className={`rounded-lg border border-rose-300 bg-rose-50/90 text-sm text-rose-950 ${
+      className={`rounded-lg border border-red-300 bg-red-50/90 text-sm text-red-950 ${
 
         compact ? 'px-2 py-2' : 'px-3 py-3'
 
@@ -389,7 +400,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
       <div className="flex items-start justify-between gap-2">
 
-        <p className="font-semibold text-rose-900">Borrador rechazado — depuración completa</p>
+        <p className="font-semibold text-red-900">Borrador rechazado — depuración completa</p>
 
         {onDismiss ? (
 
@@ -399,7 +410,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
             onClick={onDismiss}
 
-            className="shrink-0 text-xs text-rose-700 hover:underline"
+            className="shrink-0 text-xs text-red-700 hover:underline"
 
           >
 
@@ -415,7 +426,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
       {validation.step_day != null ? (
 
-        <p className="mt-1 text-xs text-rose-700">
+        <p className="mt-1 text-xs text-red-700">
 
           Día {validation.step_day}
 
@@ -429,13 +440,13 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
 
 
-      <div className="mt-3 space-y-3 rounded border border-rose-200 bg-white/90 p-3 text-xs">
+      <div className="mt-3 space-y-3 rounded border border-red-200 bg-white/90 p-3 text-xs">
 
         <div>
 
-          <p className="font-semibold text-rose-900">Asunto:</p>
+          <p className="font-semibold text-red-900">Asunto:</p>
 
-          <pre className="mt-1 whitespace-pre-wrap text-[#374151]">
+          <pre className="mt-1 whitespace-pre-wrap text-nx-ink">
 
             {validation.rejected_subject?.trim() || '—'}
 
@@ -447,9 +458,9 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
         <div>
 
-          <p className="font-semibold text-rose-900">Mensaje:</p>
+          <p className="font-semibold text-red-900">Mensaje:</p>
 
-          <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap leading-relaxed text-[#374151]">
+          <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap leading-relaxed text-nx-ink">
 
             {fullDraft || '— (la IA no devolvió body ni sections parseables)'}
 
@@ -461,7 +472,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
         <div>
 
-          <p className="font-semibold text-rose-900">Bloques detectados:</p>
+          <p className="font-semibold text-red-900">Bloques detectados:</p>
 
           <ul className="mt-1 space-y-1">
 
@@ -469,17 +480,17 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
               <li key={block.key} className="flex flex-wrap items-start gap-2">
 
-                <span className={block.ok ? 'text-emerald-700' : 'text-red-700'}>
+                <span className={block.ok ? 'text-red-700' : 'text-red-700'}>
 
                   {block.ok ? '✓' : '✗'}
 
                 </span>
 
-                <span className="font-medium text-rose-800">{block.label}</span>
+                <span className="font-medium text-red-800">{block.label}</span>
 
                 {block.value ? (
 
-                  <span className="min-w-0 flex-1 whitespace-pre-wrap text-[#4b5563]">
+                  <span className="min-w-0 flex-1 whitespace-pre-wrap text-nx-muted">
 
                     — {block.value}
 
@@ -487,7 +498,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
                 ) : (
 
-                  <span className="text-rose-500">— vacío</span>
+                  <span className="text-red-500">— vacío</span>
 
                 )}
 
@@ -505,9 +516,9 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
           <div>
 
-            <p className="font-semibold text-rose-900">Bloques faltantes / incumplidos:</p>
+            <p className="font-semibold text-red-900">Bloques faltantes / incumplidos:</p>
 
-            <ul className="mt-1 list-inside list-disc space-y-0.5 text-rose-900">
+            <ul className="mt-1 list-inside list-disc space-y-0.5 text-red-900">
 
               {missingBlocks.map((item, i) => (
 
@@ -527,9 +538,9 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
           <div>
 
-            <p className="font-semibold text-amber-900">Advertencias (no bloquean envío):</p>
+            <p className="font-semibold text-zinc-900">Advertencias (no bloquean envío):</p>
 
-            <ul className="mt-1 list-inside list-disc space-y-0.5 text-amber-900">
+            <ul className="mt-1 list-inside list-disc space-y-0.5 text-zinc-900">
 
               {validation.warnings.map((warning, i) => (
 
@@ -549,9 +560,9 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
           <div>
 
-            <p className="font-semibold text-rose-900">Errores de validación:</p>
+            <p className="font-semibold text-red-900">Errores de validación:</p>
 
-            <ul className="mt-1 list-inside list-disc space-y-0.5 text-rose-900">
+            <ul className="mt-1 list-inside list-disc space-y-0.5 text-red-900">
 
               {validation.issues.map((issue, i) => (
 
@@ -573,7 +584,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
         <details className="mt-3" open>
 
-          <summary className="cursor-pointer text-xs font-medium text-rose-800">
+          <summary className="cursor-pointer text-xs font-medium text-red-800">
 
             Trazas validador — cómo lo hacemos ({validation.how_we_do_trace.result})
 
@@ -605,7 +616,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
               <div>
 
-                <p className="font-medium text-rose-800">Issues atribuidos al bloque solution en UI:</p>
+                <p className="font-medium text-red-800">Issues atribuidos al bloque solution en UI:</p>
 
                 <ul className="list-inside list-disc">
 
@@ -625,7 +636,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
               <div key={`how-check-${i}`} className="rounded bg-white/80 px-2 py-1">
 
-                <span className={check.ok ? 'text-emerald-700' : 'text-red-700'}>
+                <span className={check.ok ? 'text-red-700' : 'text-red-700'}>
 
                   {check.ok ? 'PASS' : 'FAIL'}
 
@@ -635,7 +646,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
                 {check.matches?.length ? (
 
-                  <span className="text-[#4b5563]"> — matches: {check.matches.join(', ')}</span>
+                  <span className="text-nx-muted"> — matches: {check.matches.join(', ')}</span>
 
                 ) : null}
 
@@ -669,7 +680,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
         <details className="mt-3" open={!compact}>
 
-          <summary className="cursor-pointer text-xs font-medium text-rose-800">
+          <summary className="cursor-pointer text-xs font-medium text-red-800">
 
             Parser — sections (JSON)
 
@@ -681,11 +692,11 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
               <div key={key}>
 
-                <dt className="text-xs font-medium text-rose-700">
+                <dt className="text-xs font-medium text-red-700">
 
                   {SECTION_BLOCK_LABELS[key] || key}
 
-                  {!text ? <span className="ml-1 font-normal text-rose-500">(vacío)</span> : null}
+                  {!text ? <span className="ml-1 font-normal text-red-500">(vacío)</span> : null}
 
                 </dt>
 
@@ -711,7 +722,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
         <details className="mt-3" open={!compact}>
 
-          <summary className="cursor-pointer text-xs font-medium text-rose-800">
+          <summary className="cursor-pointer text-xs font-medium text-red-800">
 
             Parser — internal (razonamiento IA)
 
@@ -723,11 +734,11 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
               <div key={key}>
 
-                <dt className="text-xs font-medium text-rose-700">
+                <dt className="text-xs font-medium text-red-700">
 
                   {INTERNAL_BLOCK_LABELS[key] || key}
 
-                  {!text ? <span className="ml-1 font-normal text-rose-500">(vacío)</span> : null}
+                  {!text ? <span className="ml-1 font-normal text-red-500">(vacío)</span> : null}
 
                 </dt>
 
@@ -753,7 +764,7 @@ export function SdrValidationDebugPanel({ validation, onDismiss, compact = false
 
         <details className="mt-3">
 
-          <summary className="cursor-pointer text-xs font-medium text-rose-800">
+          <summary className="cursor-pointer text-xs font-medium text-red-800">
 
             Frases prohibidas detectadas ({validation.banned_matches.length})
 

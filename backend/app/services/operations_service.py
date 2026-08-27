@@ -29,7 +29,12 @@ _JOB_LABELS: dict[str, str] = {
     "automation:tick_calendar_sync": "Google Calendar sync",
     "automation:tick_followups": "Follow-ups programados",
     "automation:tick_initial_outreach": "Primer contacto email",
+    "automation:tick_sequence_touches": "Toques secuencia (días 4–19)",
+    "automation:tick_sourcing_refill": "Refill prospección (cupo campaña)",
     "automation:tick_inbound_auto_reply": "Auto-respuesta inbound",
+    "automation:tick_plan_renewal": "Renovación créditos del plan",
+    "automation:tick_crm_exclusions": "Sync exclusiones CRM",
+    "automation:tick_crm_outbound": "Sync outbound CRM",
 }
 
 
@@ -58,6 +63,13 @@ def _integration_health(db: Session, company_id: int) -> dict[str, Any]:
         (r.updated_at for r in gcal if r.updated_at),
         default=None,
     )
+    from app.services.whatsapp_cloud_service import (
+        is_whatsapp_api_configured,
+        is_whatsapp_dry_run,
+    )
+
+    wa_configured = is_whatsapp_api_configured()
+    wa_dry = is_whatsapp_dry_run()
     return {
         "gmail_connected": gmail_ok,
         "gmail_accounts": len(gmail),
@@ -65,7 +77,18 @@ def _integration_health(db: Session, company_id: int) -> dict[str, Any]:
         "calendar_accounts": len(gcal),
         "last_gmail_activity_at": last_gmail.isoformat() if last_gmail else None,
         "last_calendar_activity_at": last_cal.isoformat() if last_cal else None,
-        "status": "healthy" if gmail_ok and gcal_ok else ("degraded" if gmail_ok or gcal_ok else "offline"),
+        "whatsapp_configured": wa_configured,
+        "whatsapp_dry_run": wa_dry,
+        "status": (
+            "healthy"
+            if gmail_ok and gcal_ok
+            else (
+                "degraded"
+                if gmail_ok or gcal_ok or wa_configured
+                else "offline"
+            )
+        ),
+        "whatsapp_optional": not wa_configured,
     }
 
 

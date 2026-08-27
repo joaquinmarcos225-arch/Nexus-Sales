@@ -1,6 +1,9 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.models.enums import MarketScope
+from app.services.campaign_market import normalize_market_scope
 
 
 class ProductInterpretRequest(BaseModel):
@@ -28,11 +31,28 @@ class ProductInterpretRead(BaseModel):
     use_cases: str = ""
 
 
+class ProductDocumentExtractRead(BaseModel):
+    text: str
+    filename: str
+    format: str
+    chars: int
+
+
 class ProductCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = ""
     value_proposition: str = ""
     target_notes: str = ""
+    market_scope: MarketScope = Field(default=MarketScope.b2b)
+
+    @field_validator("market_scope", mode="before")
+    @classmethod
+    def _normalize_scope(cls, v):
+        if v is None or v == "":
+            return MarketScope.b2b
+        if isinstance(v, MarketScope):
+            return v
+        return MarketScope(normalize_market_scope(str(v)))
 
 
 class ProductUpdate(BaseModel):
@@ -41,6 +61,16 @@ class ProductUpdate(BaseModel):
     value_proposition: str | None = None
     target_notes: str | None = None
     is_active: bool | None = None
+    market_scope: MarketScope | None = None
+
+    @field_validator("market_scope", mode="before")
+    @classmethod
+    def _normalize_scope_optional(cls, v):
+        if v is None or v == "":
+            return None
+        if isinstance(v, MarketScope):
+            return v
+        return MarketScope(normalize_market_scope(str(v)))
 
 
 class ProductRead(BaseModel):
@@ -52,5 +82,15 @@ class ProductRead(BaseModel):
     description: str
     value_proposition: str
     target_notes: str
+    market_scope: MarketScope = MarketScope.b2b
     created_at: datetime
     is_active: bool
+
+    @field_validator("market_scope", mode="before")
+    @classmethod
+    def _coerce_scope(cls, v):
+        if v is None or v == "":
+            return MarketScope.b2b
+        if isinstance(v, MarketScope):
+            return v
+        return MarketScope(normalize_market_scope(str(v)))

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import json
 
-CHANNEL_PRIORITY = ("linkedin", "email", "whatsapp")
+CHANNEL_PRIORITY = ("linkedin", "email", "whatsapp", "call")
+
+# Canales por defecto: LinkedIn + Email + WhatsApp + Llamada asistida.
+DEFAULT_MVP_CHANNELS = ("linkedin", "email", "whatsapp", "call")
 
 
 def normalize_allowed_channels(channels: list[str] | None) -> list[str]:
-    allowed = {"linkedin", "email", "whatsapp"}
+    """Preserva el orden que eligió el usuario (no reordenar por prioridad fija)."""
+    allowed = {"linkedin", "email", "whatsapp", "call"}
     if channels is None:
-        return list(CHANNEL_PRIORITY)
+        return list(DEFAULT_MVP_CHANNELS)
     if not channels:
         raise ValueError("Debe habilitarse al menos un canal.")
     seen: set[str] = set()
@@ -20,22 +24,22 @@ def normalize_allowed_channels(channels: list[str] | None) -> list[str]:
         if lc not in seen:
             seen.add(lc)
             raw.append(lc)
-    return [ch for ch in CHANNEL_PRIORITY if ch in seen]
+    return raw
 
 
 def coerce_allowed_channels(raw: object) -> list[str]:
     """Acepta lista JSON (modelo) o TEXT legacy en SQLite."""
     if raw is None:
-        return list(CHANNEL_PRIORITY)
+        return list(DEFAULT_MVP_CHANNELS)
     data = raw
     if isinstance(data, str):
         try:
             data = json.loads(data)
         except json.JSONDecodeError:
-            return list(CHANNEL_PRIORITY)
+            return list(DEFAULT_MVP_CHANNELS)
     if isinstance(data, list):
         try:
             return normalize_allowed_channels([str(x).lower().strip() for x in data])
         except ValueError:
-            return list(CHANNEL_PRIORITY)
-    return list(CHANNEL_PRIORITY)
+            return list(DEFAULT_MVP_CHANNELS)
+    return list(DEFAULT_MVP_CHANNELS)

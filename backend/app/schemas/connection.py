@@ -24,6 +24,7 @@ class IntegrationProviderVerifyRead(BaseModel):
     status: str = "not_connected"
     effective_status: str = "not_connected"
     requires_reconnect: bool = False
+    has_refresh_token: bool = False
     external_email: str | None = None
     connected_at: datetime | None = None
     updated_at: datetime | None = None
@@ -44,3 +45,15 @@ class GoogleIntegrationVerifyRead(BaseModel):
     oauth_configured: bool = True
     gmail: IntegrationProviderVerifyRead
     google_calendar: GoogleCalendarVerifyRead
+
+
+class WhatsAppIntegrationVerifyRead(BaseModel):
+    configured: bool = False
+    api_reachable: bool = False
+    mode: str | None = None
+    dry_run: bool = False
+    phone_number_id: str | None = None
+    display_phone_number: str | None = None
+    http_status: int | None = None
+    verification_summary: str | None = None
+    api_error: str | None = None

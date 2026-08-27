@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.auth.deps import get_current_user
 from app.database.session import get_db
 from app.deps import get_company
 from app.models.campaign import Campaign
@@ -83,8 +84,14 @@ def _rate(n: int, d: int) -> float:
     return round(min(1.0, n / d), 4)
 
 
-def build_company_analytics_read(db: Session, company_id: int) -> CompanyAnalyticsRead:
+def build_company_analytics_read(
+    db: Session, company_id: int, viewer: User | None = None
+) -> CompanyAnalyticsRead:
     camps = db.scalars(select(Campaign).where(Campaign.company_id == company_id)).all()
+    if viewer is not None:
+        from app.services.campaign_visibility import campaign_is_visible_to_user
+
+        camps = [c for c in camps if campaign_is_visible_to_user(viewer, c)]
 
     use_real = om.is_real_mode()
 
@@ -106,8 +113,37 @@ def build_company_analytics_read(db: Session, company_id: int) -> CompanyAnalyti
     prospects_imported = sum(sm(s.value) for s in ProspectStatus)
     prospects_active = sum(sm(s) for s in STATUSES_ACTIVE)
     if use_real:
-        prospects_contacted_group = om.distinct_prospects_with_real_gmail_outbound_company(db, company_id)
-        prospects_responded = om.distinct_prospects_with_real_gmail_inbound_company(db, company_id)
+        from sqlalchemy import or_
+
+        prospects_contacted_group = int(
+            db.scalar(
+                select(func.count(func.distinct(OutreachMessage.prospect_id)))
+                .select_from(OutreachMessage)
+                .join(Prospect, OutreachMessage.prospect_id == Prospect.id)
+                .where(
+                    Prospect.company_id == company_id,
+                    OutreachMessage.direction == "outbound",
+                    or_(
+                        OutreachMessage.gmail_message_id.isnot(None),
+                        OutreachMessage.channel.in_(("linkedin", "whatsapp")),
+                    ),
+                )
+            )
+            or 0
+        )
+        prospects_responded = int(
+            db.scalar(
+                select(func.count(func.distinct(OutreachMessage.prospect_id)))
+                .select_from(OutreachMessage)
+                .join(Prospect, OutreachMessage.prospect_id == Prospect.id)
+                .where(
+                    Prospect.company_id == company_id,
+                    OutreachMessage.direction == "inbound",
+                    OutreachMessage.sender_type == "prospect",
+                )
+            )
+            or 0
+        )
     else:
         prospects_contacted_group = om.distinct_prospects_with_outbound_company(db, company_id)
         prospects_responded = om.distinct_prospects_with_inbound_company(db, company_id)
@@ -115,6 +151,8 @@ def build_company_analytics_read(db: Session, company_id: int) -> CompanyAnalyti
     meetings_booked = sm(ProspectStatus.meeting_booked.value)
 
     if use_real:
+        from sqlalchemy import or_
+
         messages_sent = int(
             db.scalar(
                 select(func.count(OutreachMessage.id))
@@ -122,8 +160,11 @@ def build_company_analytics_read(db: Session, company_id: int) -> CompanyAnalyti
                 .where(
                     Prospect.company_id == company_id,
                     OutreachMessage.direction == "outbound",
-                    OutreachMessage.sender_type == "user",
-                    OutreachMessage.gmail_message_id.isnot(None),
+                    OutreachMessage.sender_type.in_(("user", "ai", "system")),
+                    or_(
+                        OutreachMessage.gmail_message_id.isnot(None),
+                        OutreachMessage.channel.in_(("linkedin", "whatsapp")),
+                    ),
                 )
             )
             or 0
@@ -573,8 +614,9 @@ def company_analytics(
     company_id: int,
     db: Session = Depends(get_db),
     _company=Depends(get_company),
+    user: User = Depends(get_current_user),
 ) -> CompanyAnalyticsRead:
-    return build_company_analytics_read(db, company_id)
+    return build_company_analytics_read(db, company_id, viewer=user)
 
 
 def _recommended_action_item_from_curated(
@@ -605,8 +647,10 @@ def _recommended_action_item_from_curated(
     )
 
 
-def build_analytics_dashboard_read(db: Session, company_id: int) -> AnalyticsDashboardRead:
-    base = build_company_analytics_read(db, company_id)
+def build_analytics_dashboard_read(
+    db: Session, company_id: int, viewer: User | None = None
+) -> AnalyticsDashboardRead:
+    base = build_company_analytics_read(db, company_id, viewer=viewer)
     total_products = int(
         db.scalar(select(func.count(Product.id)).where(Product.company_id == company_id)) or 0
     )
@@ -635,15 +679,45 @@ def build_analytics_dashboard_read(db: Session, company_id: int) -> AnalyticsDas
         {"channel": str(r[0]), "count": int(r[1])} for r in sorted(ch_rows, key=lambda x: -int(x[1]))
     ]
 
-    prospects_no_reply = int(
-        db.scalar(
-            select(func.count(Prospect.id)).where(
-                Prospect.company_id == company_id,
-                Prospect.status == ProspectStatus.contacted.value,
+    # Sin respuesta = contactados (con outbound) que aún no respondieron.
+    # Comparable con "Contactados" / "Respondieron", no con "Mensajes enviados".
+    from app.services import outreach_metrics as om
+
+    if om.is_real_mode():
+        contacted_people = int(
+            db.scalar(
+                select(func.count(func.distinct(OutreachMessage.prospect_id)))
+                .select_from(OutreachMessage)
+                .join(Prospect, OutreachMessage.prospect_id == Prospect.id)
+                .where(
+                    Prospect.company_id == company_id,
+                    OutreachMessage.direction == "outbound",
+                    or_(
+                        OutreachMessage.gmail_message_id.isnot(None),
+                        OutreachMessage.channel.in_(("linkedin", "whatsapp")),
+                    ),
+                )
             )
+            or 0
         )
-        or 0
-    )
+        replied_people = int(
+            db.scalar(
+                select(func.count(func.distinct(OutreachMessage.prospect_id)))
+                .select_from(OutreachMessage)
+                .join(Prospect, OutreachMessage.prospect_id == Prospect.id)
+                .where(
+                    Prospect.company_id == company_id,
+                    OutreachMessage.direction == "inbound",
+                    OutreachMessage.sender_type == "prospect",
+                )
+            )
+            or 0
+        )
+    else:
+        contacted_people = om.distinct_prospects_with_outbound_company(db, company_id)
+        replied_people = om.distinct_prospects_with_inbound_company(db, company_id)
+
+    prospects_no_reply = max(0, int(contacted_people) - int(replied_people))
 
     followups_sent_total = int(
         db.scalar(
@@ -828,6 +902,7 @@ analytics_dashboard_router = APIRouter(tags=["analytics"])
 def analytics_dashboard(
     company_id: int = Query(..., ge=1, description="ID de empresa (multi-tenant)"),
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> AnalyticsDashboardRead:
     import logging
     import time
@@ -837,10 +912,12 @@ def analytics_dashboard(
     log = logging.getLogger("nexus.http")
     t0 = time.perf_counter()
     log.info("[analytics] dashboard company_id=%s start", company_id)
+    if int(user.company_id) != int(company_id):
+        raise HTTPException(status_code=403, detail="No tenés acceso a esta empresa")
     if db.get(Company, company_id) is None:
         raise HTTPException(status_code=404, detail="Empresa no encontrada")
     try:
-        result = build_analytics_dashboard_read(db, company_id)
+        result = build_analytics_dashboard_read(db, company_id, viewer=user)
     except OperationalError as exc:
         log.exception(
             "[analytics] dashboard sqlite_busy company_id=%s elapsed_ms=%s",
