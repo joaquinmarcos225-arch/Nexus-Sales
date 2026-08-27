@@ -28,7 +28,7 @@ import { CampaignChannelsField } from './CampaignChannelsField.jsx'
 import { SequenceTemplatePicker } from './SequenceTemplatePicker.jsx'
 import { TimezoneSelect } from './TimezoneSelect.jsx'
 import { SuggestSelect } from './SuggestSelect.jsx'
-import { resolveTimezoneQuery, buildTimezoneOptions } from '../../utils/timezones.js'
+import { resolveTimezoneQuery, buildTimezoneOptions, canonicalizeTimezoneId } from '../../utils/timezones.js'
 import { formatContactCredits } from '../../utils/format.js'
 import { notifyCreditsChanged, useMyCredits } from '../../hooks/useMyCredits.js'
 
@@ -242,7 +242,7 @@ export function CampaignFormModal({
       return
     }
 
-    let timezone = form.timezone.trim()
+    let timezone = canonicalizeTimezoneId(form.timezone.trim())
     if (!timezone) {
       timezone = resolveTimezoneQuery(
         document.getElementById('camp-tz')?.value,
@@ -721,7 +721,7 @@ export function CampaignFormModal({
             <TimezoneSelect
               id="camp-tz"
               value={form.timezone}
-              onChange={(v) => setForm((f) => ({ ...f, timezone: v }))}
+              onChange={(v) => setForm((f) => ({ ...f, timezone: canonicalizeTimezoneId(v) }))}
               required
             />
             <SuggestSelect

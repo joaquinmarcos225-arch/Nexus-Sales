@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   buildTimezoneOptions,
+  canonicalizeTimezoneId,
   labelForTimezoneId,
   resolveTimezoneQuery,
 } from '../../utils/timezones.js'
@@ -42,7 +43,7 @@ export function TimezoneSelect({ id, value, onChange, required }) {
   }, [])
 
   function pick(opt) {
-    onChange(opt.id)
+    onChange(canonicalizeTimezoneId(opt.id))
     setQuery(opt.label)
     setOpen(false)
   }
@@ -76,7 +77,8 @@ export function TimezoneSelect({ id, value, onChange, required }) {
         Zona horaria del usuario
       </label>
       <p className="mt-0.5 text-[11px] text-nx-subtle">
-        Buscá tu región (ej. LATAM, Brasil, Argentina). Si tiene varias zonas, elegí la de tu ciudad.
+        Buscá tu país (ej. Argentina, LATAM, Brasil). Solo en países con varios husos
+        (EE.UU., Brasil, México…) elegí la ciudad.
       </p>
       <input
         id={id}

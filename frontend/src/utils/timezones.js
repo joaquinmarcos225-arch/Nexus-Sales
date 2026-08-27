@@ -13,12 +13,41 @@ const FALLBACK_TIMEZONES = [
   'UTC',
 ]
 
+/** Canonical IANA for Argentina — same offset nationwide (no provincial split). */
+export const ARGENTINA_TIMEZONE = 'America/Argentina/Buenos_Aires'
+
+/** Legacy / provincial IANA ids that share Argentina's single offset. */
+const ARGENTINA_ALIAS_IDS = new Set([
+  'America/Argentina/Buenos_Aires',
+  'America/Argentina/Catamarca',
+  'America/Argentina/ComodRivadavia',
+  'America/Argentina/Cordoba',
+  'America/Argentina/Jujuy',
+  'America/Argentina/La_Rioja',
+  'America/Argentina/Mendoza',
+  'America/Argentina/Rio_Gallegos',
+  'America/Argentina/Salta',
+  'America/Argentina/San_Juan',
+  'America/Argentina/San_Luis',
+  'America/Argentina/Tucuman',
+  'America/Argentina/Ushuaia',
+  'America/Buenos_Aires',
+  'America/Catamarca',
+  'America/Cordoba',
+  'America/Jujuy',
+  'America/Mendoza',
+  'America/Rosario',
+])
+
 /** Región (español) por primer segmento IANA tras el continente. */
 const LOCATION_REGION = {
   Argentina: 'Argentina',
   Buenos_Aires: 'Argentina',
   Cordoba: 'Argentina',
   Mendoza: 'Argentina',
+  Catamarca: 'Argentina',
+  Jujuy: 'Argentina',
+  Rosario: 'Argentina',
   Santiago: 'Chile',
   Mexico_City: 'México',
   Cancun: 'México',
@@ -125,17 +154,33 @@ const LATAM_REGIONS = new Set([
   'Barbados',
 ])
 
+/** Países con husos distintos reales (ciudad importa). Argentina NO: un solo huso. */
 const MULTI_ZONE_REGIONS = new Set([
   'Estados Unidos',
   'Canadá',
   'Brasil',
   'México',
-  'Argentina',
   'Australia',
   'Rusia',
   'Indonesia',
   'Reino Unido',
 ])
+
+/** Colapsa alias provinciales de Argentina al IANA canónico. */
+export function canonicalizeTimezoneId(timeZoneId) {
+  const id = String(timeZoneId || '').trim()
+  if (!id) return id
+  const lower = id.toLowerCase()
+  if (lower.startsWith('america/argentina/')) {
+    return ARGENTINA_TIMEZONE
+  }
+  for (const alias of ARGENTINA_ALIAS_IDS) {
+    if (alias.toLowerCase() === lower) {
+      return ARGENTINA_TIMEZONE
+    }
+  }
+  return id
+}
 
 function humanizeSegment(seg) {
   return String(seg || '')
@@ -155,6 +200,10 @@ function inferRegionAndCity(timeZoneId) {
   const locParts = parts.slice(1)
   const head = locParts[0]
   const region = LOCATION_REGION[head] ?? humanizeSegment(head)
+  // Argentina: nunca mostrar provincia (mismo huso en todo el país).
+  if (region === 'Argentina' || head === 'Argentina') {
+    return { region: 'Argentina', city: '' }
+  }
   let city = ''
   if (locParts.length > 1) {
     city = humanizeSegment(locParts.slice(1).join(' '))
@@ -176,6 +225,17 @@ function buildSearchText(region, city, id) {
   const parts = [region, city, id.replace(/_/g, ' ')]
   if (region === 'Brasil') {
     parts.push('brasil', 'brazil')
+  } else if (region === 'Argentina') {
+    parts.push(
+      'argentina',
+      'buenos aires',
+      'córdoba',
+      'cordoba',
+      'mendoza',
+      'latam',
+      'américa latina',
+      'america latina',
+    )
   } else if (LATAM_REGIONS.has(region)) {
     parts.push('latam', 'latin america', 'américa latina', 'america latina')
   }
@@ -189,10 +249,15 @@ export function buildTimezoneOptions() {
       ? Intl.supportedValuesOf('timeZone')
       : FALLBACK_TIMEZONES
 
-  const parsed = ids.map((id) => {
+  const seen = new Set()
+  const parsed = []
+  for (const rawId of ids) {
+    const id = canonicalizeTimezoneId(rawId)
+    if (seen.has(id)) continue
+    seen.add(id)
     const { region, city } = inferRegionAndCity(id)
-    return { id, region, city }
-  })
+    parsed.push({ id, region, city })
+  }
 
   const countByRegion = new Map()
   for (const row of parsed) {
@@ -215,14 +280,24 @@ export function buildTimezoneOptions() {
 
 export function labelForTimezoneId(timeZoneId, options) {
   const list = options ?? buildTimezoneOptions()
-  return list.find((o) => o.id === timeZoneId)?.label ?? timeZoneId
+  const id = canonicalizeTimezoneId(timeZoneId)
+  return list.find((o) => o.id === id)?.label ?? timeZoneId
 }
 
 /** Resuelve texto libre a un id IANA si hay coincidencia única o exacta. */
 export function resolveTimezoneQuery(query, options) {
   const list = options ?? buildTimezoneOptions()
-  const q = String(query ?? '').trim().toLowerCase()
-  if (!q) return null
+  const raw = String(query ?? '').trim()
+  if (!raw) return null
+
+  const canonical = canonicalizeTimezoneId(raw)
+  if (canonical !== raw || ARGENTINA_ALIAS_IDS.has(raw) || raw.toLowerCase().startsWith('america/argentina/')) {
+    if (list.some((o) => o.id === canonical)) {
+      return canonical
+    }
+  }
+
+  const q = raw.toLowerCase()
 
   const byId = list.find((o) => o.id.toLowerCase() === q)
   if (byId) return byId.id
