@@ -38,3 +38,19 @@ def test_skipped_disabled_silent_and_retryable(monkeypatch):
     with patch("app.services.inbound_auto_reply.get_auto_reply_receipt", return_value=receipt):
         assert auto_reply_is_finished(db, 10, "gmail-mid-1") is False
         assert inbound_needs_auto_reply_retry(db, 10, "gmail-mid-1") is True
+
+
+def test_not_interested_is_not_in_prior_skip_set():
+    from app.models.enums import ProspectStatus
+    from app.services import inbound_auto_reply as mod
+
+    assert ProspectStatus.not_interested.value not in mod._SKIP_PRIOR_PROSPECT_STATUSES
+    assert ProspectStatus.failed.value in mod._SKIP_PRIOR_PROSPECT_STATUSES
+
+
+def test_skipped_closed_receipt_is_retryable():
+    db = MagicMock()
+    receipt = MagicMock(outcome="skipped_closed")
+    with patch("app.services.inbound_auto_reply.get_auto_reply_receipt", return_value=receipt):
+        assert auto_reply_is_finished(db, 45, "mid-1") is False
+        assert inbound_needs_auto_reply_retry(db, 45, "mid-1") is True

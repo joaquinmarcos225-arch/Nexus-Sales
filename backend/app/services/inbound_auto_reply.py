@@ -51,10 +51,10 @@ _TERMINAL_AUTO_REPLY_OUTCOMES = frozenset(
     {
         "sent",
         "draft",
-        "skipped_closed",
         "skipped_already",
         "skipped_existing_inbound",
         "skipped_no_inbound",
+        # skipped_closed NO es terminal: un "no gracias" debe poder reintentar cierre cortés.
         # skipped_disabled NO es terminal: si se reactiva NEXUS_INBOUND_AUTO_REPLY, reintenta.
     }
 )
@@ -69,10 +69,11 @@ _SILENT_ACTIVITY_OUTCOMES = frozenset(
     }
 )
 
+# Solo "failed" (bounce / hard-fail). "not_interested" NO: el mail de rechazo
+# debe recibir cierre cortés automático (una vez por gmail_message_id).
 _SKIP_PRIOR_PROSPECT_STATUSES = frozenset(
     {
         ProspectStatus.failed.value,
-        ProspectStatus.not_interested.value,
     }
 )
 
@@ -159,7 +160,16 @@ def record_auto_reply_receipt(
         db.flush()
         return
     prev = (row.outcome or "").strip()
-    rank = {"scheduled": 1, "failed": 2, "draft": 3, "sent": 4}
+    # skipped_* / failed pueden quedar atrás de un reintento exitoso (sent/draft).
+    rank = {
+        "skipped_closed": 0,
+        "skipped": 0,
+        "skipped_disabled": 0,
+        "scheduled": 1,
+        "failed": 2,
+        "draft": 3,
+        "sent": 4,
+    }
     if rank.get(outcome, 0) >= rank.get(prev, 0):
         row.outcome = outcome
 
@@ -249,6 +259,9 @@ def inbound_needs_auto_reply_retry(db: Session, prospect_id: int, inbound_gmail_
         if outcome == "failed":
             return True
         if outcome == "skipped_disabled":
+            return True
+        if outcome == "skipped_closed":
+            # Antes se salteaba "no gracias"; permitir cierre cortés.
             return True
         return False
     return _get_inbound_row(db, prospect_id, mid) is not None
