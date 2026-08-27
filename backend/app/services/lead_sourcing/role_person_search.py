@@ -273,6 +273,17 @@ def person_dict_to_role_lead(
     if role_score < MIN_ROLE_MATCH_FOR_IMPORT:
         return None
 
+    linkedin_pre = (
+        person.get("linkedin_url")
+        or person.get("linkedin")
+        or person.get("profile_url")
+        or ""
+    )
+    from app.services.lead_sourcing.icp_import_gate import is_noisy_prospect
+
+    if is_noisy_prospect(role=role, linkedin_url=str(linkedin_pre).strip() or None):
+        return None
+
     email, _ = extract_email_phone(person)
     if email and is_forbidden_email(email):
         email = None

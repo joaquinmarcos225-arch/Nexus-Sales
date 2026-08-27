@@ -40,6 +40,24 @@ def test_score_region_brazil_excluded_from_latam_sin_brasil():
     assert score == 0
 
 
+def test_infer_country_from_snippet():
+    from app.services.lead_sourcing.icp_region import infer_country_from_text
+
+    assert infer_country_from_text("RBA Inmobiliaria Buenos Aires Argentina") == "Argentina"
+    assert infer_country_from_text("Empresa en Santiago de Chile") == "Chile"
+
+
+def test_conflicting_country_in_latam_sin_brasil():
+    from app.services.lead_sourcing.icp_region import text_has_conflicting_country
+
+    assert text_has_conflicting_country(
+        "Inmobiliaria São Paulo Brazil", "LATAM - Brasil"
+    )
+    assert not text_has_conflicting_country(
+        "Inmobiliaria Buenos Aires Argentina", "LATAM - Brasil"
+    )
+
+
 def test_industry_search_terms_saas():
     terms = industry_search_terms("B2B SaaS — Sales Enablement")
     assert any("saas" in t.lower() for t in terms)

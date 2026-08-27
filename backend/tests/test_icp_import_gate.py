@@ -57,6 +57,13 @@ def test_noise_recruiters_and_careers():
     assert not is_noisy_prospect(role="Head of Sales", company_name="Andes Analytics")
 
 
+def test_noise_job_seekers():
+    assert is_noisy_prospect(role="Open to work — Product Manager")
+    assert is_noisy_prospect(role="Buscando empleo en ventas")
+    assert is_noisy_prospect(role="Job Seeker | Real Estate")
+    assert not is_noisy_prospect(role="CEO", company_name="Inmobiliaria Norte")
+
+
 def test_score_caps_when_role_mismatches():
     compat, _, status = score_prospect_against_campaign(
         {
@@ -275,9 +282,9 @@ def test_hard_gate_rejects_unknown_geo_when_only_geo_icp():
     assert "desconocido" in note.lower()
 
 
-def test_hard_gate_allows_unknown_geo_when_industry_matches():
-    # País ausente pero industria alineada → casi (Prospeo a menudo omite país).
-    from app.services.lead_sourcing.icp_import_gate import ICP_TIER_NEAR, assess_icp_identity
+def test_hard_gate_rejects_unknown_geo_when_industry_and_region_set():
+    """Industria + región configuradas: país ausente → rechazo (calidad ICP)."""
+    from app.services.lead_sourcing.icp_import_gate import ICP_TIER_REJECT, assess_icp_identity
 
     tier, _, reason = assess_icp_identity(
         campaign_industry="SaaS",
@@ -286,8 +293,9 @@ def test_hard_gate_allows_unknown_geo_when_industry_matches():
         prospect_industry="SaaS B2B",
         prospect_country=None,
     )
-    assert tier == ICP_TIER_NEAR
-    assert reason is None
+    assert tier == ICP_TIER_REJECT
+    assert reason is not None
+    assert "ubicación" in reason.lower() or "región" in reason.lower()
 
 
 def test_hard_gate_rejects_wrong_size():

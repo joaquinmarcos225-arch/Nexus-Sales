@@ -28,6 +28,22 @@ _ROLE_NOISE = re.compile(
     re.I,
 )
 
+_JOB_SEEKER = re.compile(
+    r"\b("
+    r"open\s*to\s*work|#opentowork|"
+    r"buscando\s+(empleo|trabajo|laburo|oportunidad)|"
+    r"en\s+b[uú]squeda\s+de\s+(empleo|trabajo|laburo)|"
+    r"looking\s+for\s+(a\s+)?(job|work|employment)|"
+    r"job\s*seeker|"
+    r"disponible\s+para\s+trabajar|"
+    r"aspirante|postulante|"
+    r"unemployed|sin\s+empleo|"
+    r"en\s+transici[oó]n\s+laboral|"
+    r"seeking\s+(a\s+)?(job|employment)"
+    r")\b",
+    re.I,
+)
+
 _COMPANY_NOISE = re.compile(
     r"\b("
     r"recruit|recruiting|recruitment|staffing|headhunter|"
@@ -59,7 +75,10 @@ _SIZE_BOUNDS: list[tuple[re.Pattern[str], tuple[int, int]]] = [
 
 
 def is_noisy_role(role: str | None) -> bool:
-    return bool(_ROLE_NOISE.search((role or "").strip()))
+    blob = (role or "").strip()
+    if not blob:
+        return False
+    return bool(_ROLE_NOISE.search(blob) or _JOB_SEEKER.search(blob))
 
 
 def is_noisy_company(company_name: str | None, *, company_domain: str | None = None) -> bool:
@@ -287,6 +306,14 @@ def assess_icp_identity(
             "industria desconocida (ICP industria configurada)",
         )
 
+    # Región + industria configuradas: exigir país verificable (calidad > cupo).
+    if geo_unknown and industry_active and geo_active:
+        return (
+            ICP_TIER_REJECT,
+            0,
+            "ubicación desconocida (ICP región e industria configuradas)",
+        )
+
     # Región: si es la única dim firmográfica y falta el país → rechazo.
     # Si hay industria/tamaño verificable, desconocido → casi (Prospeo a menudo no manda país).
     if geo_unknown and not industry_active and not size_active:
@@ -420,7 +447,7 @@ def icp_import_gate_reason(
         company_domain=company_domain,
         linkedin_url=linkedin_url,
     ):
-        return "fuente/rol ruidoso (recruiter, careers, staffing, etc.)"
+        return "fuente/rol ruidoso (recruiter, careers, staffing, buscando trabajo, etc.)"
 
     if not role_match_passes(campaign_role, prospect_role):
         return f"rol no alinea con ICP (mín. {MIN_ROLE_MATCH_FOR_IMPORT})"

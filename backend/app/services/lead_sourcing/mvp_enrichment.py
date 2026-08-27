@@ -198,6 +198,41 @@ def _person_display_name(person: dict[str, Any]) -> str:
     return full or ""
 
 
+def _person_country_from_hit(
+    person: dict[str, Any],
+    company: CompanyCandidateRead,
+) -> str | None:
+    """País del contacto (Prospeo/location), no el hint de búsqueda web."""
+    from app.services.lead_sourcing.icp_region import infer_country_from_text
+
+    org = person.get("company") or person.get("organization") or person.get("current_company") or {}
+    if not isinstance(org, dict):
+        org = {}
+
+    loc = person.get("location") or person.get("person_location") or person.get("geo")
+    loc_country: str | None = None
+    if isinstance(loc, dict):
+        loc_country = (
+            loc.get("country")
+            or loc.get("country_name")
+            or loc.get("country_code")
+        )
+    elif isinstance(loc, str) and loc.strip():
+        loc_country = infer_country_from_text(loc) or loc.strip()
+
+    raw = (
+        person.get("country")
+        or loc_country
+        or org.get("country")
+        or org.get("company_country")
+        or org.get("hq_country")
+        or org.get("location_country")
+    )
+    if raw:
+        return str(raw).strip()[:128]
+    return company.country
+
+
 def _apply_company_enrichment(company: CompanyCandidateRead, firmo: dict[str, Any]) -> CompanyCandidateRead:
     if not firmo:
         domain = _website_domain(company.website_url)
@@ -285,6 +320,11 @@ def _lead_from_prospeo_person(
         or person.get("headline")
         or ""
     )
+    from app.services.lead_sourcing.icp_import_gate import is_noisy_prospect
+
+    if is_noisy_prospect(role=str(role) if role else None, linkedin_url=linkedin):
+        return None
+    person_country = _person_country_from_hit(person, company)
     domain = company.company_domain or _website_domain(company.website_url)
     conf = confidence_from_person(person)
     compat, breakdown = score_prospeo_contact_fit(
@@ -298,7 +338,7 @@ def _lead_from_prospeo_person(
         icp_target_country=icp_target_country,
         icp_target_company_size=icp_target_company_size,
         prospect_industry=company.industry,
-        prospect_country=company.country,
+        prospect_country=person_country,
         company_size=company.company_size,
         linkedin_url=linkedin,
     )
@@ -310,7 +350,7 @@ def _lead_from_prospeo_person(
         company_name=(company.name or "").strip()[:255] or "",
         role=str(role)[:255] if role else None,
         industry=company.industry,
-        country=company.country,
+        country=person_country,
         email=email,
         phone=mobile,
         landline_phone=landline,

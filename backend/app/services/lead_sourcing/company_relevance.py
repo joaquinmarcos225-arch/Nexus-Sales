@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from app.schemas.lead_sourcing import CompanyCandidateRead
 from app.services.lead_sourcing.company_search_classifier import CompanyResultKind
 from app.services.lead_sourcing.icp_intelligence import CompanyIcpProfile
+from app.services.lead_sourcing.icp_region import text_has_conflicting_country
 
 MIN_COMPANY_RELEVANCE = 55
 MIN_COMPANY_RELEVANCE_STRICT = 70  # cuando hay industria ICP configurada
@@ -33,6 +34,9 @@ def score_company_relevance(
     blob = f"{name} {title} {snippet} {url}".lower()
 
     if company_is_noisy_for_sourcing(name, url):
+        return 0
+
+    if profile.country and text_has_conflicting_country(blob, profile.country):
         return 0
 
     for neg in profile.all_negatives():

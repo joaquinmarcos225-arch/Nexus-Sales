@@ -41,7 +41,7 @@ _REGION_DEFS: dict[str, RegionSearchContext] = {
     "latambrasil": RegionSearchContext(
         label="LATAM (sin Brasil)",
         query_phrase="Latin America Mexico Colombia Argentina Chile Peru Uruguay",
-        brave_country_codes=("MX", "AR", "CL"),
+        brave_country_codes=("MX", "CO", "AR", "CL", "PE", "UY"),
         country_names=(
             "mexico",
             "méxico",
@@ -253,6 +253,99 @@ def country_hint_for_query(ctx: RegionSearchContext | None, query_index: int) ->
 
 def _norm_country(value: str | None) -> str:
     return (value or "").strip().lower()
+
+
+# Alias → etiqueta canónica para inferir país desde snippet/título/URL.
+_COUNTRY_INFERENCE_ALIASES: tuple[tuple[str, str], ...] = (
+    ("argentina", "Argentina"),
+    ("buenos aires", "Argentina"),
+    ("mexico", "Mexico"),
+    ("méxico", "Mexico"),
+    ("cdmx", "Mexico"),
+    ("colombia", "Colombia"),
+    ("bogotá", "Colombia"),
+    ("bogota", "Colombia"),
+    ("chile", "Chile"),
+    ("santiago", "Chile"),
+    ("peru", "Peru"),
+    ("perú", "Peru"),
+    ("lima", "Peru"),
+    ("uruguay", "Uruguay"),
+    ("montevideo", "Uruguay"),
+    ("ecuador", "Ecuador"),
+    ("costa rica", "Costa Rica"),
+    ("panama", "Panama"),
+    ("panamá", "Panama"),
+    ("brazil", "Brazil"),
+    ("brasil", "Brazil"),
+    ("são paulo", "Brazil"),
+    ("sao paulo", "Brazil"),
+    ("united states", "United States"),
+    ("usa", "United States"),
+    ("u.s.", "United States"),
+    ("canada", "Canada"),
+    ("toronto", "Canada"),
+    ("united kingdom", "United Kingdom"),
+    ("london", "United Kingdom"),
+    ("germany", "Germany"),
+    ("berlin", "Germany"),
+    ("france", "France"),
+    ("paris", "France"),
+    ("spain", "Spain"),
+    ("madrid", "Spain"),
+    ("netherlands", "Netherlands"),
+    ("amsterdam", "Netherlands"),
+    ("ireland", "Ireland"),
+    ("dublin", "Ireland"),
+    ("australia", "Australia"),
+    ("sydney", "Australia"),
+    ("singapore", "Singapore"),
+    ("india", "India"),
+    ("mumbai", "India"),
+    ("japan", "Japan"),
+    ("tokyo", "Japan"),
+)
+
+
+def infer_country_from_text(text: str | None) -> str | None:
+    """Inferir país desde snippet, título o URL (sin usar hint rotativo de query)."""
+    blob = (text or "").strip().lower()
+    if not blob:
+        return None
+    best: tuple[int, str] | None = None
+    for alias, label in _COUNTRY_INFERENCE_ALIASES:
+        if re.search(rf"\b{re.escape(alias)}\b", blob):
+            rank = len(alias)
+            if best is None or rank > best[0]:
+                best = (rank, label)
+    return best[1] if best else None
+
+
+def countries_mentioned_in_text(text: str | None) -> list[str]:
+    """Países explícitos mencionados en texto (puede haber más de uno)."""
+    blob = (text or "").strip().lower()
+    if not blob:
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    for alias, label in _COUNTRY_INFERENCE_ALIASES:
+        if label in seen:
+            continue
+        if re.search(rf"\b{re.escape(alias)}\b", blob):
+            found.append(label)
+            seen.add(label)
+    return found
+
+
+def text_has_conflicting_country(text: str | None, campaign_region: str | None) -> bool:
+    """True si el texto menciona un país claramente fuera de la región ICP."""
+    if _is_empty_region(campaign_region):
+        return False
+    for country in countries_mentioned_in_text(text):
+        score, _ = score_region_alignment(campaign_region, country)
+        if score == 0:
+            return True
+    return False
 
 
 def score_region_alignment(

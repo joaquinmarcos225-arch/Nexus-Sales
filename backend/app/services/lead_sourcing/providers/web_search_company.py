@@ -22,8 +22,9 @@ from app.services.lead_sourcing.company_search_queries import build_company_sear
 from app.services.lead_sourcing.icp_intelligence import parse_company_icp
 from app.services.lead_sourcing.icp_region import (
     brave_country_for_query,
-    country_hint_for_query,
+    infer_country_from_text,
     resolve_region_search_context,
+    text_has_conflicting_country,
 )
 from app.services.lead_sourcing.providers.base import (
     CompanySearchProvider,
@@ -119,7 +120,6 @@ class WebSearchCompanyProvider(CompanySearchProvider):
             if raw_candidates and _kept_count(raw_candidates) >= limit:
                 break
             brave_country = brave_country_for_query(region_ctx, i)
-            search_country_hint = country_hint_for_query(region_ctx, i)
             try:
                 hits = search_web(
                     q,
@@ -140,6 +140,12 @@ class WebSearchCompanyProvider(CompanySearchProvider):
                 classified = classify_company_hit(link, title)
                 if classified is None:
                     continue
+
+                text_blob = f"{title} {snippet} {classified.url}"
+                if text_has_conflicting_country(text_blob, campaign.target_country):
+                    continue
+
+                inferred_country = infer_country_from_text(text_blob)
 
                 relevance = score_company_relevance(
                     profile,
@@ -170,10 +176,9 @@ class WebSearchCompanyProvider(CompanySearchProvider):
                         provider="web_search",
                         name=display,
                         website_url=classified.url,
-                        # Industria real viene del enrich; país: hint de la query geo
-                        # (Prospeo HQ lo sobrescribe si aparece).
+                        # País solo si hay evidencia en snippet/título/URL (no hint rotativo).
                         industry=None,
-                        country=search_country_hint,
+                        country=inferred_country,
                         city=None,
                         result_kind=classified.kind.value,
                         quality_score=classified.quality_score,
