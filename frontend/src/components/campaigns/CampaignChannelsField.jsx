@@ -50,7 +50,7 @@ export function CampaignChannelsField({ value, onChange, disabled, hintClassName
     }
     const extOk = isNexusWhatsAppExtensionReady()
     // LinkedIn es LI-SAFE desde Nexus (no requiere scripts LI en la extensión Store).
-    const next = { email: 'missing', linkedin: 'connected', whatsapp: 'missing', call: 'connected' }
+    const next = { email: 'missing', linkedin: 'connected', whatsapp: 'missing' }
     try {
       const verify = await fetchGoogleIntegrationVerify(companyId, sellerId, { deep: false })
       const gmail = verify?.gmail
@@ -95,7 +95,7 @@ export function CampaignChannelsField({ value, onChange, disabled, hintClassName
     <div>
       <p className="text-xs font-medium text-nx-ink">Canales conectados</p>
       <p className={hint}>
-        Email (Gmail), LinkedIn asistido, WhatsApp Web (extensión) y Llamada (tu teléfono / softphone).
+        Email (Gmail), LinkedIn asistido y WhatsApp Web (extensión).
         Si falta conectar alguno, los toques de ese canal se omiten hasta que esté listo.
       </p>
       <div className="mt-2 flex flex-wrap gap-2">

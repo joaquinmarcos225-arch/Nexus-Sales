@@ -248,7 +248,7 @@ ResponseClass = Literal[
 
 class SimulateSequenceResponseBody(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
-    channel: Literal["email", "linkedin", "whatsapp", "call"] | None = None
+    channel: Literal["email", "linkedin", "whatsapp"] | None = None
 
 
 class CommercialStateDebugRead(BaseModel):

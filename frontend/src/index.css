@@ -793,28 +793,6 @@ body {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, #ea580c 30%, transparent);
 }
 
-.nx-fold-panel[data-tone='call'] {
-  border-color: color-mix(in srgb, #7c3aed 28%, transparent);
-}
-.nx-fold-panel[data-tone='call'] .nx-fold-header {
-  background: color-mix(in srgb, #ede9fe 55%, white);
-}
-.nx-fold-panel[data-tone='call'] .nx-fold-header:hover {
-  background: color-mix(in srgb, #ddd6fe 45%, white);
-}
-.nx-fold-panel[data-tone='call'] .nx-fold-title {
-  color: #5b21b6;
-}
-.nx-fold-panel[data-tone='call'] .nx-fold-chevron {
-  border-color: color-mix(in srgb, #7c3aed 40%, transparent);
-  color: #5b21b6;
-}
-.nx-fold-panel[data-tone='call'] .nx-fold-badge {
-  background: color-mix(in srgb, #7c3aed 14%, white);
-  color: #5b21b6;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, #7c3aed 30%, transparent);
-}
-
 .nx-input {
   width: 100%;
   border-radius: 0.5rem;

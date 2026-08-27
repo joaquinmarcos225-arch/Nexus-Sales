@@ -1,15 +1,14 @@
 /** Orden de canales: preserva el orden en que el usuario los eligió / guardó. */
-export const CHANNEL_ORDER = ['linkedin', 'email', 'whatsapp', 'call']
+export const CHANNEL_ORDER = ['linkedin', 'email', 'whatsapp']
 
 export const CHANNEL_LABELS = {
   linkedin: 'LinkedIn',
   email: 'Email',
   whatsapp: 'WhatsApp',
-  call: 'Llamada',
 }
 
-/** Canales por defecto: LinkedIn → Email → WhatsApp → Llamada asistida. */
-export const DEFAULT_ALLOWED_CHANNELS = ['linkedin', 'email', 'whatsapp', 'call']
+/** Canales por defecto: LinkedIn → Email → WhatsApp. */
+export const DEFAULT_ALLOWED_CHANNELS = ['linkedin', 'email', 'whatsapp']
 
 /** Devuelve la lista en el orden dado (sin forzar LinkedIn→Email→WhatsApp). */
 export function orderChannels(selected) {

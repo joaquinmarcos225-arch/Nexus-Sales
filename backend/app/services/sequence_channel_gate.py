@@ -20,7 +20,6 @@ BLOCK_RESOLVED_KIND = "integration_block_resolved"
 _CHANNEL_LABELS = {
     "linkedin": "LinkedIn",
     "whatsapp": "WhatsApp",
-    "call": "Llamada",
     "email": "email",
 }
 

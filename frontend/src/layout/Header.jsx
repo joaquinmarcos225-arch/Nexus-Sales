@@ -4,7 +4,6 @@ import { GlobalSearch, useGlobalSearchHotkey } from '../components/search/Global
 import { useCompany } from '../context/CompanyContext.jsx'
 import { useLinkedInPending } from '../hooks/useLinkedInPending.js'
 import { useWhatsAppPending } from '../hooks/useWhatsAppPending.js'
-import { useCallPending } from '../hooks/useCallPending.js'
 import { useMeetingsPending } from '../hooks/useMeetingsPending.js'
 import { usePageBreadcrumbs } from '../hooks/usePageBreadcrumbs.js'
 import { requestDesktopNotificationPermission } from '../utils/desktopNotifications.js'
@@ -29,17 +28,15 @@ export function Header({ onMenuClick, onToggleSidebar, collapsed = false, compac
   const { companyId } = useCompany()
   const { count: linkedInPending, href: linkedInHref } = useLinkedInPending(companyId)
   const { count: whatsAppPending, href: whatsAppHref } = useWhatsAppPending(companyId)
-  const { count: callPending, href: callHref } = useCallPending(companyId)
   const { count: meetingsPending, href: meetingsHref } = useMeetingsPending(companyId)
-  const notifyPending = linkedInPending + whatsAppPending + callPending + meetingsPending
+  const notifyPending = linkedInPending + whatsAppPending + meetingsPending
   const notifyHref = (() => {
     const ranked = [
       { n: whatsAppPending, href: whatsAppHref },
       { n: linkedInPending, href: linkedInHref },
-      { n: callPending, href: callHref },
       { n: meetingsPending, href: meetingsHref },
     ].sort((a, b) => b.n - a.n)
-    return ranked[0]?.href || linkedInHref || whatsAppHref || callHref || meetingsHref
+    return ranked[0]?.href || linkedInHref || whatsAppHref || meetingsHref
   })()
   const { startTutorial, active: tutorialActive } = useTutorial()
   const [searchOpen, setSearchOpen] = useState(false)
@@ -153,7 +150,7 @@ export function Header({ onMenuClick, onToggleSidebar, collapsed = false, compac
             className="nx-topbar-icon-btn relative"
             aria-label={
               notifyPending > 0
-                ? `${notifyPending} pendiente${notifyPending === 1 ? '' : 's'} (LinkedIn ${linkedInPending}, WhatsApp ${whatsAppPending}, Llamadas ${callPending}, Reuniones ${meetingsPending})`
+                ? `${notifyPending} pendiente${notifyPending === 1 ? '' : 's'} (LinkedIn ${linkedInPending}, WhatsApp ${whatsAppPending}, Reuniones ${meetingsPending})`
                 : 'Notificaciones'
             }
             onClick={handleNotifications}

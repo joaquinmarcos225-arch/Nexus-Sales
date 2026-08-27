@@ -38,7 +38,6 @@ PLAYBOOK_WHATSAPP_DAYS = frozenset(s.day for s in DEFAULT_MVP_PLAYBOOK if s.chan
 _CHANNEL_FALLBACK: dict[Channel, tuple[Channel, ...]] = {
     "linkedin": ("email",),
     "whatsapp": ("email",),
-    "call": ("email",),
     "email": (),
 }
 
@@ -118,6 +117,9 @@ def resolve_touch_channel(
         whatsapp_number=whatsapp_number,
     )
     primary: Channel = planned or (step.channel if step else "email")  # type: ignore[assignment]
+    if str(primary) == "call":
+        # Legacy assisted-call channel removed; fall back to email.
+        primary = "email"
     candidates: list[Channel] = [primary, *_CHANNEL_FALLBACK.get(primary, ())]
     for ch in candidates:
         if ch not in available:

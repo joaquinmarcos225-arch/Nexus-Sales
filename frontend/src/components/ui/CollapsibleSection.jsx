@@ -29,7 +29,7 @@ export function CollapsibleSection({
   }
 
   const toneAttr =
-    tone === 'linkedin' || tone === 'whatsapp' || tone === 'mail' || tone === 'call' ? tone : undefined
+    tone === 'linkedin' || tone === 'whatsapp' || tone === 'mail' ? tone : undefined
 
   return (
     <section

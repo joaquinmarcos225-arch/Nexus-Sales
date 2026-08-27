@@ -18,7 +18,7 @@ from app.services.lead_sourcing.mvp_outreach_playbook import (
     Channel,
 )
 
-VALID_CHANNELS: tuple[Channel, ...] = ("email", "linkedin", "whatsapp", "call")
+VALID_CHANNELS: tuple[Channel, ...] = ("email", "linkedin", "whatsapp")
 VALID_FOLLOWUP_CHANNELS: tuple[str, ...] = ("auto", *VALID_CHANNELS)
 SequenceMode = Literal["fixed", "ia"]
 
@@ -28,7 +28,6 @@ IA_MIN_CHANNELS = 2
 SYSTEM_TEMPLATE_NEXUS_7 = "nexus_7"
 SYSTEM_TEMPLATE_NEXUS_IA = "nexus_ia"
 SYSTEM_TEMPLATE_NEXUS_3_LI_EMAIL_WA = "nexus_3_li_email_wa"
-SYSTEM_TEMPLATE_NEXUS_4_LI_EMAIL_CALL = "nexus_4_li_email_call"
 
 
 def _default_steps() -> list[dict[str, Any]]:
@@ -46,22 +45,6 @@ def nexus_3_li_email_wa_plan() -> dict[str, Any]:
             {"day": 1, "channel": "linkedin"},
             {"day": 4, "channel": "email"},
             {"day": 7, "channel": "whatsapp"},
-        ],
-        "follow_up": {"enabled": True, "channel": "auto"},
-    }
-
-
-def nexus_4_li_email_call_plan() -> dict[str, Any]:
-    """Plantilla SDR con llamada: LinkedIn → Email → Llamada (3 toques)."""
-    return {
-        "template_id": SYSTEM_TEMPLATE_NEXUS_4_LI_EMAIL_CALL,
-        "template_name": "LinkedIn → Email → Llamada",
-        "mode": "fixed",
-        "is_system": True,
-        "steps": [
-            {"day": 1, "channel": "linkedin"},
-            {"day": 4, "channel": "email"},
-            {"day": 7, "channel": "call"},
         ],
         "follow_up": {"enabled": True, "channel": "auto"},
     }
@@ -94,7 +77,7 @@ def nexus_ia_plan() -> dict[str, Any]:
 
 
 def system_templates() -> list[dict[str, Any]]:
-    return [nexus_3_li_email_wa_plan(), nexus_4_li_email_call_plan(), nexus_7_plan(), nexus_ia_plan()]
+    return [nexus_3_li_email_wa_plan(), nexus_7_plan(), nexus_ia_plan()]
 
 
 def default_plan() -> dict[str, Any]:
@@ -273,7 +256,7 @@ def resolve_ia_touch_channel(
         whatsapp_number=whatsapp_number,
     )
     allowed = [str(c).lower() for c in (allowed_channels or [])]
-    for ch in ("email", "linkedin", "whatsapp", "call"):
+    for ch in ("email", "linkedin", "whatsapp"):
         if ch not in available:
             continue
         if allowed and ch not in allowed:

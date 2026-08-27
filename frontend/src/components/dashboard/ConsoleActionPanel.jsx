@@ -13,7 +13,7 @@ function ArrowIcon() {
  * Las filas se muestran siempre (también con count 0).
  *
  * @param {{
- *   todos: { id: string, label: string, count: number, to: string, tone?: 'alert' | 'default' | 'linkedin' | 'whatsapp' | 'call' | 'meeting' }[],
+ *   todos: { id: string, label: string, count: number, to: string, tone?: 'alert' | 'default' | 'linkedin' | 'whatsapp' | 'meeting' }[],
  * }} props
  */
 export function ConsoleActionPanel({ todos = [] }) {
@@ -21,7 +21,6 @@ export function ConsoleActionPanel({ todos = [] }) {
     if (count <= 0) return 'bg-nx-bg text-nx-muted border border-nx-border'
     if (tone === 'linkedin') return 'bg-[#0A66C2]/15 text-[#0A66C2]'
     if (tone === 'whatsapp') return 'bg-[#25D366]/20 text-[#075E54]'
-    if (tone === 'call') return 'bg-violet-100 text-violet-800'
     if (tone === 'meeting') return 'bg-amber-100 text-amber-800'
     if (tone === 'alert') return 'bg-red-100 text-red-700'
     return 'bg-nx-brand/10 text-nx-brand'

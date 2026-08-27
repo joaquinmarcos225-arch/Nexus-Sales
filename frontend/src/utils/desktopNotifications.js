@@ -110,11 +110,9 @@ export function notifyQueueDesktopAlert(payload) {
       ? 'LinkedIn'
       : channel === 'whatsapp'
         ? 'WhatsApp'
-        : channel === 'call'
-          ? 'llamada'
-          : channel === 'meetings'
-            ? 'reuniones'
-            : 'outreach'
+        : channel === 'meetings'
+          ? 'reuniones'
+          : 'outreach'
   let title
   if (channel === 'meetings') {
     if (reason === 'login') {

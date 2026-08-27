@@ -2,7 +2,6 @@ const CHANNEL_LABELS = {
   email: 'Email',
   linkedin: 'LinkedIn',
   whatsapp: 'WhatsApp',
-  call: 'Llamada',
 }
 
 function stepIcon(status) {

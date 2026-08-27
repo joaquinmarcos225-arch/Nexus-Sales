@@ -706,10 +706,6 @@ export async function fetchWhatsAppAssistQueue(campaignId) {
   return request(`/campaigns/${campaignId}/whatsapp-assisted/queue`)
 }
 
-export async function fetchCallAssistQueue(campaignId) {
-  return request(`/campaigns/${campaignId}/call-assisted/queue`)
-}
-
 export async function fetchMailQueue(campaignId) {
   return request(`/campaigns/${campaignId}/mail-queue`)
 }
@@ -728,12 +724,6 @@ export async function abandonWhatsAppAssistedSession(prospectId) {
 
 export async function markWhatsAppAssistedSent(prospectId) {
   return request(`/prospects/${prospectId}/whatsapp-assisted/mark-sent`, {
-    method: 'POST',
-  })
-}
-
-export async function markCallAssistedDone(prospectId) {
-  return request(`/prospects/${prospectId}/call-assisted/mark-done`, {
     method: 'POST',
   })
 }

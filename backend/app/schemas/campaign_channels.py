@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import json
 
-CHANNEL_PRIORITY = ("linkedin", "email", "whatsapp", "call")
+CHANNEL_PRIORITY = ("linkedin", "email", "whatsapp")
 
-# Canales por defecto: LinkedIn + Email + WhatsApp + Llamada asistida.
-DEFAULT_MVP_CHANNELS = ("linkedin", "email", "whatsapp", "call")
+# Canales por defecto: LinkedIn + Email + WhatsApp.
+DEFAULT_MVP_CHANNELS = ("linkedin", "email", "whatsapp")
 
 
 def normalize_allowed_channels(channels: list[str] | None) -> list[str]:
     """Preserva el orden que eligió el usuario (no reordenar por prioridad fija)."""
-    allowed = {"linkedin", "email", "whatsapp", "call"}
+    allowed = {"linkedin", "email", "whatsapp"}
     if channels is None:
         return list(DEFAULT_MVP_CHANNELS)
     if not channels:
@@ -19,11 +19,16 @@ def normalize_allowed_channels(channels: list[str] | None) -> list[str]:
     raw: list[str] = []
     for c in channels:
         lc = str(c).strip().lower()
+        if lc == "call":
+            # Retired assisted-call channel; ignore in stored campaign configs.
+            continue
         if lc not in allowed:
             raise ValueError(f"Canal inválido: {c}")
         if lc not in seen:
             seen.add(lc)
             raw.append(lc)
+    if not raw:
+        raise ValueError("Debe habilitarse al menos un canal.")
     return raw
 
 

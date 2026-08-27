@@ -7,7 +7,7 @@ import {
 import { CHANNEL_LABELS } from '../../utils/campaignChannels.js'
 import { SEQUENCE_TOUCH_DAYS } from '../../utils/sequenceUi.js'
 
-const CHANNELS = ['email', 'linkedin', 'whatsapp', 'call']
+const CHANNELS = ['email', 'linkedin', 'whatsapp']
 const FOLLOWUP_CHANNELS = ['auto', ...CHANNELS]
 const MAX_TOUCHES = SEQUENCE_TOUCH_DAYS.length
 
@@ -16,14 +16,12 @@ const CHANNEL_DOT = {
   email: 'bg-[#EA4335]',
   linkedin: 'bg-[#0A66C2]',
   whatsapp: 'bg-[#25D366]',
-  call: 'bg-violet-600',
 }
 
 const CHANNEL_SELECTED = {
   email: 'border-[#EA4335] bg-[#EA4335]/10 text-nx-ink',
   linkedin: 'border-[#0A66C2] bg-[#0A66C2]/10 text-nx-ink',
   whatsapp: 'border-[#25D366] bg-[#25D366]/10 text-nx-ink',
-  call: 'border-violet-600 bg-violet-600/10 text-nx-ink',
 }
 
 function channelLabel(ch) {
@@ -57,9 +55,6 @@ function planFromTemplate(t, campaignFollowupEnabled = true) {
 function successBadge(t) {
   if (t.template_id === 'nexus_3_li_email_wa') {
     return { text: 'Recomendada SDR', tone: 'good', sample: t.sample_size || 0 }
-  }
-  if (t.template_id === 'nexus_4_li_email_call') {
-    return { text: 'Con llamada', tone: 'good', sample: t.sample_size || 0 }
   }
   if (t.template_id === 'nexus_7') {
     return { text: 'Éxito: 36%', tone: 'good', sample: t.sample_size || 30 }

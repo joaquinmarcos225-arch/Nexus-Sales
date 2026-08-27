@@ -9,7 +9,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Literal
 
-Channel = Literal["email", "linkedin", "whatsapp", "call"]
+Channel = Literal["email", "linkedin", "whatsapp"]
 
 
 @dataclass(frozen=True)
@@ -92,10 +92,7 @@ def lead_available_channels(
     landline_phone: str | None = None,
 ) -> set[Channel]:
     from app.services.lead_sourcing.linkedin_identity import is_personal_linkedin_url
-    from app.services.whatsapp_phone_validation import (
-        sanitize_landline_phone,
-        sanitize_whatsapp_mobile,
-    )
+    from app.services.whatsapp_phone_validation import sanitize_whatsapp_mobile
 
     channels: set[Channel] = set()
     if (email or "").strip() and "@" in (email or ""):
@@ -105,8 +102,7 @@ def lead_available_channels(
     mobile = sanitize_whatsapp_mobile(whatsapp_number) or sanitize_whatsapp_mobile(phone)
     if mobile:
         channels.add("whatsapp")
-    if mobile or sanitize_landline_phone(landline_phone) or sanitize_landline_phone(phone):
-        channels.add("call")
+    # landline_phone remains an enrichment/contact field; call is not a sequence channel.
     return channels
 
 

@@ -67,7 +67,7 @@ export function planChannelByDay(campaign) {
       .trim()
       .toLowerCase()
     if (!Number.isFinite(day) || day < 1) continue
-    if (channel === 'email' || channel === 'linkedin' || channel === 'whatsapp' || channel === 'call') {
+    if (channel === 'email' || channel === 'linkedin' || channel === 'whatsapp') {
       out[day] = channel
     }
   }
@@ -180,11 +180,6 @@ function channelAvailable(prospect, channel, allowed) {
   }
   if (ch === 'whatsapp') {
     return Boolean((prospect.phone || prospect.whatsapp_number || prospect.whatsapp || '').trim())
-  }
-  if (ch === 'call') {
-    return Boolean(
-      (prospect.landline_phone || prospect.phone || prospect.whatsapp || prospect.whatsapp_number || '').trim(),
-    )
   }
   return false
 }
@@ -399,7 +394,7 @@ export function milestoneChannelKey(day, campaign = null) {
   const d = normalizeMilestoneDay(day)
   if (d === REACTIVATION_DAY) {
     const fuCh = String(campaign?.sequence_plan?.follow_up?.channel || 'auto').toLowerCase()
-    if (fuCh === 'email' || fuCh === 'linkedin' || fuCh === 'whatsapp' || fuCh === 'call') return fuCh
+    if (fuCh === 'email' || fuCh === 'linkedin' || fuCh === 'whatsapp') return fuCh
     return 'followup'
   }
   const planMap = planChannelByDay(campaign)
@@ -408,7 +403,7 @@ export function milestoneChannelKey(day, campaign = null) {
 
 /**
  * Estilos del chip de día según canal.
- * WhatsApp verde · LinkedIn azul · Email naranja · Llamada violeta · follow-up violeta suave.
+ * WhatsApp verde · LinkedIn azul · Email naranja · follow-up violeta suave.
  */
 export function milestoneChannelChipClass(day, campaign = null, { completed = false } = {}) {
   const ch = milestoneChannelKey(day, campaign)
@@ -427,11 +422,6 @@ export function milestoneChannelChipClass(day, campaign = null, { completed = fa
     return completed
       ? `${base} border-orange-300 bg-orange-50 text-orange-950 shadow-sm shadow-orange-900/5`
       : `${base} border-orange-200/90 bg-orange-50/70 text-orange-900`
-  }
-  if (ch === 'call') {
-    return completed
-      ? `${base} border-violet-400 bg-violet-50 text-violet-950 shadow-sm shadow-violet-900/5`
-      : `${base} border-violet-300/90 bg-violet-50/70 text-violet-900`
   }
   // follow-up / desconocido
   return completed

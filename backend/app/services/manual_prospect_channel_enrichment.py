@@ -196,7 +196,7 @@ def channels_needed_from_sequence_plan(plan: dict[str, Any] | None) -> set[str]:
             needed.add("email")
         elif ch == "linkedin":
             needed.add("linkedin")
-        elif ch in ("whatsapp", "wa", "phone", "call"):
+        elif ch in ("whatsapp", "wa", "phone"):
             needed.add("phone")
 
     fu = plan.get("follow_up") or {}

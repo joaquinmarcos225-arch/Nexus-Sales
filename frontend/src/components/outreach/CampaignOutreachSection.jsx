@@ -9,7 +9,6 @@ import {
   LinkedInRespondieronPanel,
 } from './LinkedInRespondieronPanel.jsx'
 import { WhatsAppAssistQueue } from './WhatsAppAssistQueue.jsx'
-import { CallAssistQueue } from './CallAssistQueue.jsx'
 import { MailSentQueue } from './MailSentQueue.jsx'
 import { AlertBanner } from '../AlertBanner.jsx'
 import {
@@ -22,7 +21,6 @@ import {
   fetchCampaignProspects,
   fetchLinkedInAssistQueue,
   fetchWhatsAppAssistQueue,
-  fetchCallAssistQueue,
   fetchMailQueue,
   fetchCompanyOutreachTasks,
   fetchGoogleIntegrationVerify,
@@ -32,7 +30,6 @@ import {
   markLinkedInAssistedSent,
   beginWhatsAppAssistedSession,
   markWhatsAppAssistedSent,
-  markCallAssistedDone,
   markLinkedInConnectSent,
   reportLinkedInConnectionStatus,
   regenerateLinkedInAssistedReply,
@@ -88,7 +85,6 @@ import {
 import { waWebSendUrl } from '../../utils/whatsappAssist.js'
 import { notifyLinkedInQueueChanged } from '../../hooks/useLinkedInPending.js'
 import { notifyWhatsAppQueueChanged } from '../../hooks/useWhatsAppPending.js'
-import { notifyCallQueueChanged } from '../../hooks/useCallPending.js'
 import { notifyMeetingsChanged } from '../../hooks/useMeetingsPending.js'
 import { ProspectQuotaBar } from '../campaigns/ProspectQuotaBar.jsx'
 import { CampaignSetupChecklist } from '../campaigns/CampaignSetupChecklist.jsx'
@@ -387,10 +383,8 @@ export function CampaignOutreachSection({
   const [liRegenerating, setLiRegenerating] = useState(null)
   const [liQueue, setLiQueue] = useState({ tasks: [], total_pending: 0 })
   const [waQueue, setWaQueue] = useState({ tasks: [], total_pending: 0 })
-  const [callQueue, setCallQueue] = useState({ tasks: [], total_pending: 0 })
   const [mailQueue, setMailQueue] = useState({ items: [], total: 0 })
   const [waBusy, setWaBusy] = useState(null)
-  const [callBusy, setCallBusy] = useState(null)
   const [gmailDraftOk, setGmailDraftOk] = useState(null)
   const [gmailSendOk, setGmailSendOk] = useState(null)
   const [gmailSyncOk, setGmailSyncOk] = useState(null)
@@ -470,7 +464,7 @@ export function CampaignOutreachSection({
     setLoading(true)
     setError(null)
     try {
-      const [data, mrows, tasks, prospectsRows, queue, waQ, callQ, mailQ, googleVerify] = await Promise.all([
+      const [data, mrows, tasks, prospectsRows, queue, waQ, mailQ, googleVerify] = await Promise.all([
         fetchCampaignOutreach(campaignId),
         fetchCampaignMeetings(campaignId).catch(() => []),
         companyId
@@ -483,7 +477,6 @@ export function CampaignOutreachSection({
         fetchCampaignProspects(campaignId).catch(() => null),
         fetchLinkedInAssistQueue(campaignId).catch(() => ({ tasks: [], total_pending: 0 })),
         fetchWhatsAppAssistQueue(campaignId).catch(() => ({ tasks: [], total_pending: 0 })),
-        fetchCallAssistQueue(campaignId).catch(() => ({ tasks: [], total_pending: 0 })),
         fetchMailQueue(campaignId).catch(() => ({ items: [], total: 0 })),
         companyId && campaign?.seller_id
           ? fetchGoogleIntegrationVerify(companyId, campaign.seller_id, { deep: false }).catch(() => null)
@@ -543,14 +536,6 @@ export function CampaignOutreachSection({
           ? {
               tasks: Array.isArray(waQ.tasks) ? waQ.tasks : [],
               total_pending: Number(waQ.total_pending) || 0,
-            }
-          : { tasks: [], total_pending: 0 },
-      )
-      setCallQueue(
-        callQ && typeof callQ === 'object'
-          ? {
-              tasks: Array.isArray(callQ.tasks) ? callQ.tasks : [],
-              total_pending: Number(callQ.total_pending) || 0,
             }
           : { tasks: [], total_pending: 0 },
       )
@@ -933,12 +918,6 @@ export function CampaignOutreachSection({
   const liPending = Number(liQueue.total_pending) || (liQueue.tasks ?? []).length
   const liVerifying = Number(liQueue.pending_verify) || 0
   const waPending = Number(waQueue.total_pending) || (waQueue.tasks ?? []).length
-  const callPending = Number(callQueue.total_pending) || (callQueue.tasks ?? []).length
-  const sequenceHasCall = useMemo(() => {
-    const steps = campaign?.sequence_plan?.steps
-    if (!Array.isArray(steps)) return false
-    return steps.some((s) => String(s?.channel || '').toLowerCase() === 'call')
-  }, [campaign?.sequence_plan])
   const realMode = outreach?.real_mode === true
   const allowedChannels = Array.isArray(campaign?.allowed_channels)
     ? campaign.allowed_channels.map((c) => String(c || '').toLowerCase())
@@ -1322,11 +1301,9 @@ export function CampaignOutreachSection({
         ? 'LinkedIn'
         : channel === 'whatsapp'
           ? 'WhatsApp'
-          : channel === 'call'
-            ? 'Llamada'
-            : channel === 'email'
-              ? 'email'
-              : channel
+          : channel === 'email'
+            ? 'email'
+            : channel
     const exactError = String(effectiveSequenceBlock?.error || sequenceBlock?.error || '').trim()
     const ok = window.confirm(
       [
@@ -1933,31 +1910,8 @@ async function handleAbrirWhatsAppWeb(task) {
     }
   }
 
-  async function handleMarkCallDone(task) {
-    const prospectId = Number(task?.prospect_id || 0)
-    if (!prospectId) return
-    setCallBusy(prospectId)
-    setCallQueue((prev) => {
-      const tasks = (prev.tasks || []).filter((t) => Number(t.prospect_id) !== prospectId)
-      return { ...prev, tasks, total_pending: tasks.length }
-    })
-    try {
-      await markCallAssistedDone(prospectId)
-      notifyCallQueueChanged({ done: true, prospectId })
-      setActivationNote('Llamada confirmada. La secuencia sigue al próximo toque.')
-      onChanged?.()
-      await load()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-      await load()
-    } finally {
-      setCallBusy(null)
-    }
-  }
-
   const liTasks = liQueue.tasks ?? []
   const waTasks = waQueue.tasks ?? []
-  const callTasks = callQueue.tasks ?? []
   const mailItems = mailQueue.items ?? []
 
   /** Enviados LI sin reply en cola: el SDR puede registrar Respondieron. */
@@ -2148,11 +2102,9 @@ async function handleAbrirWhatsAppWeb(task) {
   const postergados = list.filter((p) => (p.sequence_group || '') === 'postergado')
   const liNotifCount = liTasks.length
   const waNotifCount = waTasks.length
-  const callNotifCount = callTasks.length
   const mailNotifCount = Number(mailQueue.total) || mailItems.length
   const [liSectionOpen, setLiSectionOpen] = useState(true)
   const [waSectionOpen, setWaSectionOpen] = useState(true)
-  const [callSectionOpen, setCallSectionOpen] = useState(true)
   const [mailSectionOpen, setMailSectionOpen] = useState(true)
 
   useEffect(() => {
@@ -2161,9 +2113,6 @@ async function handleAbrirWhatsAppWeb(task) {
     }
     if (focusNotificaciones === 'whatsapp') {
       setWaSectionOpen(true)
-    }
-    if (focusNotificaciones === 'call') {
-      setCallSectionOpen(true)
     }
     if (focusNotificaciones === 'mail') {
       setMailSectionOpen(true)
@@ -2240,7 +2189,7 @@ async function handleAbrirWhatsAppWeb(task) {
           </div>
         ) : null}
 
-        <div className="grid gap-3 px-5 py-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <div className="grid gap-3 px-5 py-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <div className="rounded-xl border border-nx-border bg-nx-card-muted/80 px-4 py-3">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-ink">
               En esta campaña
@@ -2303,23 +2252,6 @@ async function handleAbrirWhatsAppWeb(task) {
             </p>
             <p className="mt-0.5 text-[11px] text-nx-ink">
               {waPending > 0 ? 'Cola WhatsApp' : 'Cola al día'}
-            </p>
-          </div>
-          <div
-            className={`rounded-xl border px-4 py-3 ${
-              callPending > 0
-                ? 'border-violet-300/70 bg-violet-50/80'
-                : 'border-nx-border bg-nx-card-muted/80'
-            }`}
-          >
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-800">
-              Llamadas pendientes
-            </p>
-            <p className={`mt-1 text-2xl font-bold tabular-nums ${callPending > 0 ? 'text-violet-900' : 'text-nx-ink'}`}>
-              {callPending}
-            </p>
-            <p className="mt-0.5 text-[11px] text-nx-ink">
-              {callPending > 0 ? 'Cola de llamadas' : sequenceHasCall ? 'Cola al día' : 'Sin toque Llamada en secuencia'}
             </p>
           </div>
           <div className="rounded-xl border border-nx-border bg-nx-card-muted/80 px-4 py-3">
@@ -3017,24 +2949,6 @@ async function handleAbrirWhatsAppWeb(task) {
           busyProspectId={waBusy}
           onOpenWhatsAppWeb={(task) => void handleAbrirWhatsAppWeb(task)}
           onMarkSent={(task) => void handleMarkWaSent(task)}
-        />
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        id="campaign-call"
-        title="Llamadas"
-        subtitle="Toques de secuencia · guion listo · marcador integrado"
-        tone="call"
-        badge={callNotifCount > 0 ? callNotifCount : null}
-        open={callSectionOpen}
-        onOpenChange={setCallSectionOpen}
-      >
-        <CallAssistQueue
-          tasks={callTasks}
-          freeze={freeze}
-          busyProspectId={callBusy}
-          sequenceHasCall={sequenceHasCall}
-          onMarkDone={(task) => void handleMarkCallDone(task)}
         />
       </CollapsibleSection>
 

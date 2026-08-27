@@ -35,7 +35,6 @@ from app.schemas.linkedin_assisted import (
 )
 from app.services import linkedin_assisted_service
 from app.services import whatsapp_assisted_service
-from app.services import call_assisted_service
 from app.services import mail_queue_service
 from app.schemas.mail_queue import MailQueueRead
 from app.schemas.whatsapp_assisted import (
@@ -47,7 +46,6 @@ from app.schemas.whatsapp_assisted import (
     WhatsAppInboundRegisterRead,
     WhatsAppResolveProspectRead,
 )
-from app.schemas.call_assisted import CallAssistMarkDoneRead, CallAssistQueueRead
 from app.services.linkedin_inbound_sync import register_linkedin_inbound as register_linkedin_inbound_message
 from app.services.whatsapp_inbound_sync import (
     register_whatsapp_inbound as register_whatsapp_inbound_message,
@@ -1720,56 +1718,6 @@ def whatsapp_assisted_queue(
     user: User = Depends(get_current_user),
 ) -> WhatsAppAssistQueueRead:
     return whatsapp_assisted_service.build_campaign_queue(db, campaign_id, viewer=user)
-
-
-@router.get(
-    "/campaigns/{campaign_id}/call-assisted/queue",
-    response_model=CallAssistQueueRead,
-)
-def call_assisted_queue(
-    campaign_id: int,
-    db: Session = Depends(get_db),
-    campaign: Campaign = Depends(get_campaign),
-    user: User = Depends(get_current_user),
-) -> CallAssistQueueRead:
-    return call_assisted_service.build_campaign_queue(db, campaign_id, viewer=user)
-
-
-@router.post(
-    "/prospects/{prospect_id}/call-assisted/mark-done",
-    response_model=CallAssistMarkDoneRead,
-)
-def mark_call_assisted_done(
-    prospect_id: int,
-    db: Session = Depends(get_db),
-    prospect: Prospect = Depends(get_prospect),
-) -> CallAssistMarkDoneRead:
-    brief = (prospect.call_assisted_brief or "").strip()
-    if not brief:
-        status = call_assisted_service.read_assist_status(prospect)
-        if status == call_assisted_service.STATUS_DONE or getattr(
-            prospect, "call_sdr_marked_done_at", None
-        ):
-            return CallAssistMarkDoneRead(
-                ok=True,
-                detail="Llamada ya confirmada.",
-                assist_status=status,
-            )
-        raise HTTPException(
-            status_code=400,
-            detail="No hay llamada pendiente para este prospecto.",
-        )
-    try:
-        detail = call_assisted_service.confirm_call_done(db, prospect)
-        db.commit()
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    db.refresh(prospect)
-    return CallAssistMarkDoneRead(
-        ok=True,
-        detail=detail,
-        assist_status=call_assisted_service.read_assist_status(prospect),
-    )
 
 
 @router.get(

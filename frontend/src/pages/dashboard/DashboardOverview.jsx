@@ -20,7 +20,6 @@ import { PageSection } from '../../components/ui/PageSection.jsx'
 import { userDisplayFirstName } from '../../utils/userDisplayName.js'
 import { useLinkedInPending } from '../../hooks/useLinkedInPending.js'
 import { useWhatsAppPending } from '../../hooks/useWhatsAppPending.js'
-import { useCallPending } from '../../hooks/useCallPending.js'
 import { useMeetingsPending } from '../../hooks/useMeetingsPending.js'
 import { useResponderPending } from '../../hooks/useResponderPending.js'
 
@@ -52,7 +51,6 @@ export default function DashboardOverview() {
   const { rows: pulseRows, loading: loadingPulse } = useFlattenedProspects(companyId)
   const { count: linkedInPending, href: linkedInHref } = useLinkedInPending(companyId)
   const { count: whatsAppPending, href: whatsAppHref } = useWhatsAppPending(companyId)
-  const { count: callPending, href: callHref } = useCallPending(companyId)
   const { count: meetingsPending, href: meetingsHref } = useMeetingsPending(companyId)
   const { count: responderPending, href: responderHref } = useResponderPending(companyId)
   const t = data?.totals
@@ -133,11 +131,6 @@ export default function DashboardOverview() {
                     hint="Cola real de WhatsApp (asistido)."
                   />
                   <StatCard
-                    label="Llamadas pendientes"
-                    value={String(callPending)}
-                    hint="Toques de llamada en secuencia (guion listo)."
-                  />
-                  <StatCard
                     label="Reuniones programadas"
                     value={String(
                       (commercial?.meetings_pending ?? 0) + (commercial?.meetings_confirmed ?? 0),
@@ -182,13 +175,6 @@ export default function DashboardOverview() {
                     count: whatsAppPending,
                     to: whatsAppHref,
                     tone: 'whatsapp',
-                  },
-                  {
-                    id: 'call',
-                    label: 'Llamadas pendientes',
-                    count: callPending,
-                    to: callHref,
-                    tone: 'call',
                   },
                   {
                     id: 'meetings',

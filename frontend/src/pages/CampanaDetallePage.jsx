@@ -167,7 +167,6 @@ export default function CampanaDetallePage() {
     focusParam === 'notificaciones' ||
     focusParam === 'linkedin' ||
     focusParam === 'whatsapp' ||
-    focusParam === 'call' ||
     focusParam === 'mail'
       ? focusParam === 'notificaciones'
         ? 'linkedin'
@@ -211,11 +210,9 @@ export default function CampanaDetallePage() {
         const targetId =
           focusNotificaciones === 'whatsapp'
             ? 'campaign-whatsapp'
-            : focusNotificaciones === 'call'
-              ? 'campaign-call'
-              : focusNotificaciones === 'mail'
-                ? 'campaign-mail'
-                : 'campaign-linkedin'
+            : focusNotificaciones === 'mail'
+              ? 'campaign-mail'
+              : 'campaign-linkedin'
         window.setTimeout(() => {
           document.getElementById(targetId)?.scrollIntoView({
             behavior: 'smooth',

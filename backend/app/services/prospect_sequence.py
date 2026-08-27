@@ -337,10 +337,7 @@ def _channel_ready(prospect: Prospect, channel: str) -> bool:
         return _has_valid_linkedin(prospect.linkedin_url)
     if channel == "whatsapp":
         return _has_valid_whatsapp(prospect.phone, prospect.whatsapp)
-    if channel == "call":
-        from app.services.call_assisted_service import prospect_has_callable_number
-
-        return prospect_has_callable_number(prospect)
+    # Legacy "call" channel is no longer an outreach path.
     return False
 
 
@@ -656,13 +653,10 @@ def _has_valid_whatsapp(phone: str | None, whatsapp: str | None) -> bool:
 
 
 def _has_valid_contact(prospect: Prospect) -> bool:
-    from app.services.call_assisted_service import prospect_has_callable_number
-
     return (
         _has_valid_email(prospect.email)
         or _has_valid_linkedin(prospect.linkedin_url)
         or _has_valid_whatsapp(prospect.phone, prospect.whatsapp)
-        or prospect_has_callable_number(prospect)
     )
 
 
@@ -670,11 +664,10 @@ CHANNEL_LABELS: dict[str, str] = {
     "email": "Email",
     "linkedin": "LinkedIn",
     "whatsapp": "WhatsApp",
-    "call": "Llamada",
 }
 
 CHANNELS_REQUIRED = 1
-CHANNELS_TOTAL = 4
+CHANNELS_TOTAL = 3
 
 
 def _channels_still_needed(channel_count: int) -> int:
@@ -692,11 +685,11 @@ def _format_channels_requirement_message(*, channel_count: int) -> str:
     if still == 1:
         return (
             f"Falta 1 canal más: tenés {channel_count} de {CHANNELS_REQUIRED} requeridos "
-            f"({CHANNELS_TOTAL} posibles: email, LinkedIn, WhatsApp, llamada)."
+            f"({CHANNELS_TOTAL} posibles: email, LinkedIn, WhatsApp)."
         )
     return (
         f"Faltan {still} canales: tenés {channel_count} de {CHANNELS_REQUIRED} requeridos "
-        f"({CHANNELS_TOTAL} posibles: email, LinkedIn, WhatsApp, llamada)."
+        f"({CHANNELS_TOTAL} posibles: email, LinkedIn, WhatsApp)."
     )
 
 
@@ -704,10 +697,6 @@ def _build_channels_detail(prospect: Prospect) -> list[dict[str, Any]]:
     email_ok = _has_valid_email(prospect.email)
     linkedin_ok = _has_valid_linkedin(prospect.linkedin_url)
     whatsapp_ok = _has_valid_whatsapp(prospect.phone, prospect.whatsapp)
-    from app.services.call_assisted_service import prospect_call_target, prospect_has_callable_number
-
-    call_ok = prospect_has_callable_number(prospect)
-    _, call_kind, call_display = prospect_call_target(prospect)
     return [
         {
             "key": "email",
@@ -726,16 +715,6 @@ def _build_channels_detail(prospect: Prospect) -> list[dict[str, Any]]:
             "label": CHANNEL_LABELS["whatsapp"],
             "ok": whatsapp_ok,
             "detail": (prospect.whatsapp or prospect.phone) if whatsapp_ok else "Sin celular/WhatsApp",
-        },
-        {
-            "key": "call",
-            "label": CHANNEL_LABELS["call"],
-            "ok": call_ok,
-            "detail": (
-                f"{'Fijo' if call_kind == 'landline' else 'Celular'} · {call_display}"
-                if call_ok
-                else "Sin teléfono para llamar"
-            ),
         },
     ]
 
@@ -2525,7 +2504,6 @@ def execute_sequence_touch(
     whatsapp_delivery: dict[str, Any] | None = None
     linkedin_assisted = False
     whatsapp_assisted = False
-    call_assisted = False
     gmail_assisted = False  # borrador Gmail pendiente de envío manual
     gmail_sent_now = False  # auto_send: ya salió por Gmail API
     msg = None
@@ -2617,39 +2595,24 @@ def execute_sequence_touch(
                 )
             whatsapp_assisted = True
         elif step.channel == "call":
-            from app.services.call_assisted_service import (
-                prospect_has_callable_number,
-                queue_call_sequence_touch,
+            # Legacy call channel removed: omit and continue the sequence.
+            result = _auto_omit_sequence_touch(
+                db,
+                prospect=prospect,
+                day=day,
+                reason="call_channel_removed",
             )
-
-            call_action = queue_call_sequence_touch(
-                db, prospect, campaign, message_body, log_event=True
-            )
-            if call_action == "skip":
-                if not prospect_has_callable_number(prospect):
-                    result = _auto_omit_sequence_touch(
-                        db,
-                        prospect=prospect,
-                        day=day,
-                        reason="call_sin_dato",
-                    )
-                    db.commit()
-                    tracking = build_sequence_tracking(db, prospect=prospect)
-                    return {
-                        "prospect_id": prospect.id,
-                        "day": day,
-                        "channel": step.channel,
-                        "call_assisted": False,
-                        "skipped": True,
-                        "omitted": True,
-                        "message": result["message"],
-                        "tracking": tracking,
-                    }
-                raise HTTPException(
-                    status_code=400,
-                    detail="No se pudo preparar el guion de llamada. Reintentá el toque.",
-                )
-            call_assisted = True
+            db.commit()
+            tracking = build_sequence_tracking(db, prospect=prospect)
+            return {
+                "prospect_id": prospect.id,
+                "day": day,
+                "channel": step.channel,
+                "skipped": True,
+                "omitted": True,
+                "message": result["message"],
+                "tracking": tracking,
+            }
         else:
             msg = sim.make_message(
                 prospect_id=prospect.id,
@@ -2668,7 +2631,7 @@ def execute_sequence_touch(
                 campaign_calendar_link=campaign.calendar_link or "",
                 outbound_text=message_body,
             )
-        if linkedin_assisted or gmail_assisted or whatsapp_assisted or call_assisted:
+        if linkedin_assisted or gmail_assisted or whatsapp_assisted:
             prev_touch = _touch_entry(prospect, day)
             touch_fields: dict[str, Any] = {
                 "status": TOUCH_GENERADO,
@@ -2682,7 +2645,7 @@ def execute_sequence_touch(
                 "generation_context": None,
                 "fallback_test": bool(content.get("fallback_test")),
             }
-            if linkedin_assisted or whatsapp_assisted or call_assisted:
+            if linkedin_assisted or whatsapp_assisted:
                 touch_fields["generated_at"] = prev_touch.get("generated_at") or now.isoformat()
                 touch_fields["channel"] = step.channel
             if gmail_assisted:
@@ -2777,33 +2740,6 @@ def execute_sequence_touch(
             "gmail_message_id": None,
             "linkedin_assisted": False,
             "whatsapp_assisted": True,
-            "call_assisted": False,
-            "message": touch_message,
-            "tracking": tracking,
-        }
-
-    if call_assisted:
-        from app.services.call_assisted_service import prospect_call_target
-
-        _, call_kind, call_display = prospect_call_target(prospect)
-        kind_label = "fijo" if call_kind == "landline" else "celular"
-        touch_message = (
-            f"Día {day} — tenés que llamar hoy al {kind_label} {call_display}. "
-            "En Centro de outreach → Llamadas: seguí el guion y marcá como hecha."
-        )
-        return {
-            "prospect_id": prospect.id,
-            "day": day,
-            "channel": step.channel,
-            "touch_status": TOUCH_GENERADO,
-            "status_label": "Llamada pendiente",
-            "fallback_test": bool(content.get("fallback_test")),
-            "gmail_sent": False,
-            "gmail_draft_created": False,
-            "gmail_message_id": None,
-            "linkedin_assisted": False,
-            "whatsapp_assisted": False,
-            "call_assisted": True,
             "message": touch_message,
             "tracking": tracking,
         }
@@ -2968,58 +2904,6 @@ def complete_pending_whatsapp_sequence_touch(
     return chosen_day
 
 
-def complete_pending_call_sequence_touch(
-    db: Session,
-    *,
-    prospect: Prospect,
-    sent_at: datetime | None = None,
-) -> int | None:
-    """Tras confirmar llamada manual, avanza el toque de secuencia pendiente."""
-    log = _touch_log(prospect)
-    when = sent_at or _now()
-    campaign = _resolve_campaign(db, prospect)
-    chosen_day: int | None = None
-    for day in _planned_days(prospect, campaign):
-        entry = log.get(str(day), {})
-        if entry.get("status") != TOUCH_GENERADO:
-            continue
-        step = _playbook_step(day, campaign)
-        ch = str(entry.get("channel") or (getattr(step, "channel", None) if step else "") or "").strip().lower()
-        if ch != "call":
-            continue
-        chosen_day = day
-        break
-    if chosen_day is None:
-        return None
-    _append_fired(prospect, chosen_day)
-    _set_touch_entry(
-        prospect,
-        chosen_day,
-        status=TOUCH_ENVIADO,
-        sent_at=when.isoformat(),
-        error=None,
-        call_assisted_sent=True,
-        sdr_marked_sent=True,
-    )
-    entry = log.get(str(chosen_day), {})
-    try:
-        from app.services.crm import sync as crm_sync
-
-        crm_sync.sync_touch_sent(
-            db,
-            prospect=prospect,
-            day=chosen_day,
-            channel="call",
-            message_body=entry.get("message_body") or entry.get("body"),
-        )
-    except Exception:
-        pass
-    next_at, _ = compute_next_touch(prospect)
-    prospect.next_touch_at = next_at
-    _sync_sequence_completion(db, prospect=prospect)
-    return chosen_day
-
-
 def mark_sequence_gmail_touch_sent(
     db: Session,
     *,
@@ -3147,13 +3031,11 @@ def _auto_omit_sequence_touch(
 
 
 def _assisted_touch_was_sent(prospect: Prospect, channel: str, entry: dict[str, Any]) -> bool:
-    if entry.get("sdr_marked_sent") or entry.get("whatsapp_assisted_sent") or entry.get("call_assisted_sent"):
+    if entry.get("sdr_marked_sent") or entry.get("whatsapp_assisted_sent"):
         return True
     if channel == "linkedin" and getattr(prospect, "linkedin_sdr_marked_sent_at", None):
         return True
     if channel == "whatsapp" and getattr(prospect, "whatsapp_sdr_marked_sent_at", None):
-        return True
-    if channel == "call" and getattr(prospect, "call_sdr_marked_done_at", None):
         return True
     return False
 
@@ -3172,12 +3054,6 @@ def _clear_assisted_live_queue(prospect: Prospect, channel: str) -> None:
         if (getattr(prospect, "whatsapp_assist_status", None) or "").strip().lower() != "sent":
             prospect.whatsapp_assist_status = None
         return
-    if channel == "call":
-        prospect.call_assisted_brief = None
-        from app.services.call_assisted_service import read_assist_status
-
-        if read_assist_status(prospect) != "done":
-            prospect.call_assist_status = None
 
 
 def _assisted_queue_is_live(prospect: Prospect, channel: str) -> bool:
@@ -3195,13 +3071,6 @@ def _assisted_queue_is_live(prospect: Prospect, channel: str) -> bool:
             return False
         status = (getattr(prospect, "whatsapp_assist_status", None) or "").strip().lower()
         return status in {"", "none", "suggested", "prepared", "opened"}
-    if ch == "call":
-        brief = (getattr(prospect, "call_assisted_brief", None) or "").strip()
-        if not brief:
-            return False
-        from app.services.call_assisted_service import read_assist_status
-
-        return read_assist_status(prospect) in {"", "none", "suggested"}
     return False
 
 
@@ -3308,7 +3177,6 @@ def ensure_single_assisted_live_queue(
     """
     li_draft = (getattr(prospect, "linkedin_assisted_draft", None) or "").strip()
     wa_draft = (getattr(prospect, "whatsapp_assisted_draft", None) or "").strip()
-    call_brief = (getattr(prospect, "call_assisted_brief", None) or "").strip()
     changed = False
 
     if _sequence_held_for_conversation(prospect):
@@ -3325,33 +3193,17 @@ def ensure_single_assisted_live_queue(
         if li_draft:
             _clear_assisted_live_queue(prospect, "linkedin")
             changed = True
-        if call_brief:
-            _clear_assisted_live_queue(prospect, "call")
-            changed = True
     elif channel == "linkedin":
         if wa_draft:
             _clear_assisted_live_queue(prospect, "whatsapp")
             changed = True
-        if call_brief:
-            _clear_assisted_live_queue(prospect, "call")
-            changed = True
-    elif channel == "call":
-        if li_draft:
-            _clear_assisted_live_queue(prospect, "linkedin")
-            changed = True
-        if wa_draft:
-            _clear_assisted_live_queue(prospect, "whatsapp")
-            changed = True
     else:
-        # Email u otro: las colas asistidas LI/WA/Call no deben mostrar cards.
+        # Email u otro: las colas asistidas LI/WA no deben mostrar cards.
         if li_draft:
             _clear_assisted_live_queue(prospect, "linkedin")
             changed = True
         if wa_draft:
             _clear_assisted_live_queue(prospect, "whatsapp")
-            changed = True
-        if call_brief:
-            _clear_assisted_live_queue(prospect, "call")
             changed = True
     return changed
 
@@ -3395,7 +3247,7 @@ def expire_unsent_assisted_touches_for_calendar(
                 or (getattr(step, "channel", None) if step else "")
                 or ""
             ).strip().lower()
-            if ch in ("linkedin", "whatsapp", "call"):
+            if ch in ("linkedin", "whatsapp"):
                 return True
         return False
 
@@ -3435,7 +3287,7 @@ def expire_unsent_assisted_touches_for_calendar(
         status = entry.get("status")
 
         if status == TOUCH_OMITIDO:
-            if channel in ("linkedin", "whatsapp", "call") and not _assisted_touch_was_sent(
+            if channel in ("linkedin", "whatsapp") and not _assisted_touch_was_sent(
                 prospect, channel, entry
             ):
                 live = _assisted_queue_is_live(prospect, channel)
@@ -3451,11 +3303,7 @@ def expire_unsent_assisted_touches_for_calendar(
                         or (
                             (getattr(prospect, "linkedin_assisted_draft", None) or "").strip()
                             if channel == "linkedin"
-                            else (
-                                (getattr(prospect, "whatsapp_assisted_draft", None) or "").strip()
-                                if channel == "whatsapp"
-                                else (getattr(prospect, "call_assisted_brief", None) or "").strip()
-                            )
+                            else (getattr(prospect, "whatsapp_assisted_draft", None) or "").strip()
                         )
                     )
                     _set_touch_entry(
@@ -3475,7 +3323,7 @@ def expire_unsent_assisted_touches_for_calendar(
             continue
         if status != TOUCH_GENERADO:
             continue
-        if channel not in ("linkedin", "whatsapp", "call"):
+        if channel not in ("linkedin", "whatsapp"):
             continue
         if _assisted_touch_was_sent(prospect, channel, entry):
             continue
@@ -3668,7 +3516,7 @@ def simulate_sequence_response(
 
     step = _playbook_step(affected_day)
     touch_channel = channel or (step.channel if step else "email")
-    if touch_channel not in ("email", "linkedin", "whatsapp", "call"):
+    if touch_channel not in ("email", "linkedin", "whatsapp"):
         raise HTTPException(status_code=400, detail="Canal inválido")
 
     inbound_text = message.strip()

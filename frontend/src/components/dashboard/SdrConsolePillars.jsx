@@ -4,7 +4,7 @@ const PILLARS = [
   {
     key: 'outreach',
     title: 'Contactar en masa',
-    description: 'Secuencias · email, LinkedIn, WhatsApp y llamadas.',
+    description: 'Secuencias · email, LinkedIn y WhatsApp.',
     to: '/campanas',
     icon: (
       <path
