@@ -60,6 +60,48 @@ def test_followup_bridge_accepts_new_phrases():
     assert _has_followup_bridge("Olvidé mencionarte que ayudamos a equipos similares.")
 
 
+def test_li_and_wa_first_touch_prefer_paragraphs():
+    """LinkedIn y WhatsApp: párrafos; WA más corto / LI puede desarrollar más."""
+    from app.services.cold_message_bank import render_cold_bank_touch
+
+    prospect = {
+        "id": 501,
+        "name": "Ana Lopez",
+        "company_name": "Acme SA",
+        "role": "CEO",
+    }
+    campaign = {
+        "id": 9,
+        "sender_name": "Joaquin",
+        "brand_name": "CostGuard",
+        "outreach_mode": "b2b",
+    }
+    product = {
+        "name": "Nexus Sales",
+        "value_proposition": (
+            "Automatizamos el outreach multicanal para agendar más reuniones "
+            "con menos trabajo manual"
+        ),
+    }
+    li = render_cold_bank_touch(
+        channel="linkedin",
+        prospect=prospect,
+        campaign=campaign,
+        product=product,
+        first_touch=True,
+    )
+    wa = render_cold_bank_touch(
+        channel="whatsapp",
+        prospect=prospect,
+        campaign=campaign,
+        product=product,
+        first_touch=True,
+    )
+    assert "\n\n" in li.body
+    assert "\n\n" in wa.body
+    assert len(wa.body) < len(li.body) or len(wa.body.split()) <= len(li.body.split())
+
+
 def test_validate_day13_rejects_guilt_accepts_bridge():
     bad = (
         "Hola Ana, ¿cómo estás?\n"

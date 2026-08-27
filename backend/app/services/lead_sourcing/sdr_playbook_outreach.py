@@ -940,13 +940,17 @@ def _channel_rules(channel: Channel, *, first_touch: bool, step_day: int = 1) ->
             )
         if channel == "linkedin":
             return (
-                "CANAL LinkedIn primer toque: body 180-280 caracteres (máx ~320). "
-                "Más directo que email. Sin subject. Variante automática. "
-                "PROHIBIDO pegar ficha de producto; reescribir valor en 1–2 oraciones.\n"
+                "CANAL LinkedIn primer toque: corto pero podés explayarte más que WhatsApp. "
+                "Ideal ~280-480 caracteres (máx ~550). Sin subject. "
+                "Dividí en párrafos cortos (línea en blanco entre saludo/presentación, valor y CTA). "
+                "PROHIBIDO un solo bloque enorme. PROHIBIDO pegar ficha de producto; "
+                "reescribir valor en 2–3 oraciones conversacionales.\n"
             )
         return (
-            "CANAL WhatsApp primer toque: 30-50 palabras ideal (máx ~70). "
-            "Un solo bloque, informal, legible de un vistazo. CTA reunión corta.\n"
+            "CANAL WhatsApp primer toque: MÁS CORTO que LinkedIn. "
+            "Ideal 20-35 palabras (máx ~45 / ~260 caracteres). "
+            "Informal, chill, rioplatense. Dividí en 2–3 micro-párrafos "
+            "(saludo; idea de valor corta; CTA). PROHIBIDO párrafo muro. CTA reunión corta.\n"
         )
     if channel == "email":
         return (
@@ -955,12 +959,12 @@ def _channel_rules(channel: Channel, *, first_touch: bool, step_day: int = 1) ->
         )
     if channel == "linkedin":
         return (
-            "CANAL LinkedIn follow-up: corto, despedida suave, sin culpa, "
-            "«Quedo atento». Sin subject.\n"
+            "CANAL LinkedIn follow-up: corto (podés 2 párrafos breves), despedida suave, "
+            "sin culpa, «Quedo atento». Sin subject.\n"
         )
     return (
-        "CANAL WhatsApp follow-up: 1-3 líneas, despedida suave, "
-        "«Quedo atento». Sin culpa.\n"
+        "CANAL WhatsApp follow-up: ultra corto, chill, 2 micro-párrafos máx, "
+        "despedida suave, «Quedo atento». Sin culpa.\n"
     )
 
 
@@ -1387,7 +1391,7 @@ def _validate_follow_up_body(
         text = body.strip()
         if len(text) < 10:
             acc.issues.append("body vacío o demasiado corto")
-        elif len(text) > 500:
+        elif len(text) > 280:
             acc.issues.append(f"Día {step_day}: WhatsApp demasiado largo ({len(text)} caracteres)")
         acc.extend(
             _collect_pattern_matches(
@@ -1430,12 +1434,12 @@ def _validate_follow_up_body(
             )
     elif channel == "linkedin":
         n = len(body)
-        if n < 40 or n > 420:
+        if n < 40 or n > 520:
             acc.issues.append(
-                f"Día {step_day}: LinkedIn follow-up ~80-320 caracteres (tiene {n})"
+                f"Día {step_day}: LinkedIn follow-up ~80-450 caracteres (tiene {n})"
             )
     else:
-        if len(body) > 380:
+        if len(body) > 280:
             acc.issues.append(
                 f"Día {step_day}: WhatsApp follow-up demasiado largo ({len(body)} caracteres)"
             )
@@ -1459,7 +1463,8 @@ def _first_touch_retry_hint() -> str:
         " Primer toque: usá la VARIANTE automática indicada (bloques grandes editables). "
         "PROHIBIDO plantillas rígidas tipo «ayudamos a equipos comerciales a …». "
         "Hola [Nombre] + presentación + valor anclado al PRODUCTO/ICP + CTA reunión. "
-        "Email: subject breve. LinkedIn/WhatsApp: más cortos."
+        "Email: subject breve. LinkedIn: párrafos cortos (más desarrollado que WA). "
+        "WhatsApp: más corto, informal/chill, micro-párrafos."
     )
 
 
@@ -1967,13 +1972,30 @@ def _validate_body(
             )
     elif first_touch and channel == "linkedin":
         n = len(body)
-        if n < 250 or n > 380:
-            acc.issues.append(f"longitud: LinkedIn primer toque tiene {n} caracteres (obligatorio 250-380)")
-    elif first_touch and channel == "whatsapp":
-        line_count = len([ln for ln in body.splitlines() if ln.strip()])
-        if line_count > 6 or len(body) > 450:
+        paras = [p for p in re.split(r"\n\s*\n", body) if p.strip()]
+        if n < 200 or n > 550:
             acc.issues.append(
-                f"longitud: WhatsApp primer toque demasiado largo ({line_count} líneas, {len(body)} caracteres)"
+                f"longitud: LinkedIn primer toque tiene {n} caracteres (obligatorio 200-550)"
+            )
+        elif len(paras) < 2:
+            acc.issues.append(
+                "formato: LinkedIn primer toque debe dividirse en párrafos "
+                "(línea en blanco entre bloques; no un solo muro de texto)"
+            )
+    elif first_touch and channel == "whatsapp":
+        wc = _word_count(body)
+        paras = [p for p in re.split(r"\n\s*\n", body) if p.strip()]
+        line_count = len([ln for ln in body.splitlines() if ln.strip()])
+        if wc > 45 or len(body) > 280 or line_count > 6:
+            acc.issues.append(
+                f"longitud: WhatsApp primer toque demasiado largo "
+                f"({wc} palabras, {line_count} líneas, {len(body)} caracteres; "
+                f"máx ~45 palabras / ~280 caracteres)"
+            )
+        elif len(paras) < 2:
+            acc.issues.append(
+                "formato: WhatsApp primer toque debe ir en 2–3 micro-párrafos "
+                "(no un solo bloque)"
             )
     return acc
 

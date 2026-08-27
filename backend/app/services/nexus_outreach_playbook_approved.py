@@ -44,18 +44,23 @@ Ayudamos a [rol] en tu sector a [beneficio concreto del Producto], eliminando [d
 
 Sin research: "Soy [SDR]. Te escribo por tu rol en [Empresa]." — NUNCA inventes crecimiento ni news.
 
-Reglas: más corto y directo que email. Gancho solo con evidencia + problema/solución + CTA.
+Reglas: más corto que email, pero podés explayarte más que WhatsApp.
+Párrafos cortos (línea en blanco). Gancho solo con evidencia + problema/solución + CTA.
+Ideal ~280-480 caracteres.
 """
 
 # Día 1 · WhatsApp — primer contacto ultra breve
 DAY1_WHATSAPP_REFERENCE = """
-Hola, [Nombre]. Soy [SDR].
+Hola [Nombre],
+
+Soy [SDR] de [Tuempresa]. ¿Cómo va?
 
 Te escribo porque ayudamos a empresas de tu sector a [beneficio concreto del Producto].
 
-¿Tendrás 5 minutos libres este jueves a las 11:00 am para una llamada rápida? Te muestro brevemente cómo lo logramos.
+¿Tenés 5 minutos esta semana para una llamada rápida?
 
-Reglas: 30–50 palabras, un solo bloque, informal, legible de un vistazo.
+Reglas: MÁS corto que LinkedIn. Informal, chill. Ideal 20–35 palabras.
+OBLIGATORIO 2–3 micro-párrafos (no un solo bloque).
 """
 
 # Día 4 · LinkedIn — seguimiento sin culpa

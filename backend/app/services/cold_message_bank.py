@@ -302,61 +302,329 @@ Quedo atento.""",
 )
 
 _B2B_LI_COLD = (
-    "Hola {nombre}, soy {sdr} de {marca}. {como_estas}{hook} {valor} ¿Te parece si coordinamos una charla corta esta semana?",
-    "Hola {nombre}, soy {sdr} ({marca}). {como_estas}{hook} {valor} ¿Te queda bien una videollamada breve para verlo juntos?",
-    "Hola {nombre}. {sdr} de {marca} por acá. {como_estas}{hook} {valor} ¿Tiene sentido una reunión corta esta semana?",
-    "Hola {nombre}, te contacto desde {marca}. Soy {sdr}. {como_estas}{hook} {valor} ¿Podemos coordinar 10 o 15 minutos?",
-    "Hola {nombre}, soy {sdr}. {como_estas}{hook} {valor} ¿Te parece si agendamos 15 minutos para charlarlo?",
-    "Hola {nombre}. Soy {sdr} de {marca}. {como_estas}{hook} {valor} Si te resuena, ¿lo vemos en una llamada breve?",
-    "Hola {nombre}, soy {sdr} ({marca}). {como_estas}{hook} {valor} ¿Te sirve una charla corta para explorar si aplica?",
-    "Hola {nombre}. Te escribo desde {marca}, soy {sdr}. {como_estas}{hook} {valor} ¿Te queda bien una videollamada corta?",
-    "Hola {nombre}, soy {sdr} de {marca}. {como_estas}{hook} {valor} ¿Coordinamos un meet rápido esta semana?",
-    "Hola {nombre}. {sdr} ({marca}). {como_estas}{hook} {valor} ¿Te parece si hablamos 15 minutos?",
-    "Hola {nombre}, soy {sdr}. {como_estas}{hook} {valor} ¿Agendamos una reunión breve para verlo con calma?",
-    "Hola {nombre}. Trabajo en {marca} y pensé en escribirte. {como_estas}{hook} {valor} ¿Te sirve una llamada de 15 minutos?",
-    "Hola {nombre}, soy {sdr} de {marca}. {como_estas}{hook} {valor} ¿Te parece útil una charla corta?",
-    "Hola {nombre}. Soy {sdr}. {como_estas}{hook} {valor} Si querés, ¿lo vemos en un meet corto esta semana?",
-    "Hola {nombre}, soy {sdr} ({marca}). {como_estas}{hook} {valor} ¿Hablamos un rato para ver si encaja?",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{hook}
+
+{valor}
+
+¿Te parece si coordinamos una charla corta esta semana?""",
+    """Hola {nombre},
+
+Soy {sdr} ({marca}). {como_estas}{hook}
+
+{valor}
+
+¿Te queda bien una videollamada breve para verlo juntos?""",
+    """Hola {nombre},
+
+{sdr} de {marca} por acá. {como_estas}{hook}
+
+{valor}
+
+¿Tiene sentido una reunión corta esta semana?""",
+    """Hola {nombre},
+
+Te contacto desde {marca}. Soy {sdr}. {como_estas}{hook}
+
+{valor}
+
+¿Podemos coordinar 10 o 15 minutos?""",
+    """Hola {nombre},
+
+Soy {sdr}. {como_estas}{hook}
+
+{valor}
+
+¿Te parece si agendamos 15 minutos para charlarlo?""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{hook}
+
+{valor}
+
+Si te resuena, ¿lo vemos en una llamada breve?""",
+    """Hola {nombre},
+
+Soy {sdr} ({marca}). {como_estas}{hook}
+
+{valor}
+
+¿Te sirve una charla corta para explorar si aplica?""",
+    """Hola {nombre},
+
+Te escribo desde {marca}, soy {sdr}. {como_estas}{hook}
+
+{valor}
+
+¿Te queda bien una videollamada corta?""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{hook}
+
+{valor}
+
+¿Coordinamos un meet rápido esta semana?""",
+    """Hola {nombre},
+
+{sdr} ({marca}). {como_estas}{hook}
+
+{valor}
+
+¿Te parece si hablamos 15 minutos?""",
+    """Hola {nombre},
+
+Soy {sdr}. {como_estas}{hook}
+
+{valor}
+
+¿Agendamos una reunión breve para verlo con calma?""",
+    """Hola {nombre},
+
+Trabajo en {marca} y pensé en escribirte. {como_estas}{hook}
+
+{valor}
+
+¿Te sirve una llamada de 15 minutos?""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{hook}
+
+{valor}
+
+¿Te parece útil una charla corta?""",
+    """Hola {nombre},
+
+Soy {sdr}. {como_estas}{hook}
+
+{valor}
+
+Si querés, ¿lo vemos en un meet corto esta semana?""",
+    """Hola {nombre},
+
+Soy {sdr} ({marca}). {como_estas}{hook}
+
+{valor}
+
+¿Hablamos un rato para ver si encaja?""",
 )
 
 _B2B_LI_FU = (
-    "Hola {nombre}, {retomo} {como_estas}La idea sigue siendo ver si {producto} suma para {empresa}. ¿Te viene bien 15 minutos esta semana? Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Tiene sentido retomar esa conversación en una llamada corta? Quedo atento.",
-    "Hola {nombre}, {retomo} Sin presión: si ahora no es momento, lo dejamos. Si sí, ¿coordinamos 10 o 15 minutos? Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Te viene mejor esta semana o la próxima para una charla breve sobre {producto}? Quedo atento.",
-    "Hola {nombre}, {retomo} Quería dejarlo arriba por si el mensaje anterior no llegó en buen momento. ¿Seguís con ganas de explorarlo? Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Vale la pena 15 minutos para {empresa} con {producto}, o preferís retomarlo más adelante? Quedo atento.",
-    "Hola {nombre}, {retomo} Sumo solo esto: {valor} ¿Hacemos una charla corta o lo dejamos por ahora? Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}Si te sirve, avisame y armamos un espacio corto. Quedo atento.",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}La idea sigue siendo ver si {producto} suma para {empresa}.
+
+¿Te viene bien 15 minutos esta semana?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Tiene sentido retomar esa conversación en una llamada corta?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+Sin presión: si ahora no es momento, lo dejamos. Si sí, ¿coordinamos 10 o 15 minutos?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Te viene mejor esta semana o la próxima para una charla breve sobre {producto}?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+Quería dejarlo arriba por si el mensaje anterior no llegó en buen momento.
+
+¿Seguís con ganas de explorarlo?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Vale la pena 15 minutos para {empresa} con {producto}, o preferís retomarlo más adelante?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+Sumo solo esto: {valor}
+
+¿Hacemos una charla corta o lo dejamos por ahora?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}Si te sirve, avisame y armamos un espacio corto.
+
+Quedo atento.""",
 )
 
 _B2B_WA_COLD = (
-    "Hola {nombre}, soy {sdr} de {marca}. {como_estas}{hook} {valor} ¿Tenés un rato esta semana para una llamada corta?",
-    "Hola {nombre}. Soy {sdr} ({marca}). {como_estas}{hook} {valor} ¿Agendamos una charla breve para ver si encaja?",
-    "Hola {nombre}, {sdr} de {marca} por acá. {como_estas}{hook} {valor} ¿Te sirve una videollamada corta?",
-    "Hola {nombre}. Te contacto desde {marca}. Soy {sdr}. {como_estas}{hook} {valor} ¿Hablamos un rato corto?",
-    "Hola {nombre}, soy {sdr}. {como_estas}{hook} {valor} ¿Lo vemos en una call de 15 minutos?",
-    "Hola {nombre}. Soy {sdr} de {marca}. {como_estas}{hook} {valor} Si te interesa, ¿coordinamos una llamada corta?",
-    "Hola {nombre}. {como_estas}{hook} Soy {sdr} ({marca}). {valor} ¿Te parece si agendamos 15 minutos esta semana?",
-    "Hola {nombre}. Trabajo en {marca}. {como_estas}{hook} {valor} ¿Te queda una llamada breve?",
-    "Hola {nombre}, soy {sdr}. {como_estas}{hook} {valor} ¿Te parece si hacemos una charla corta para ver si aplica a {empresa}?",
-    "Hola {nombre}. {sdr} acá. {como_estas}{hook} {valor} ¿Tiene sentido una reunión breve para repasarlo?",
-    "Hola {nombre}, soy {sdr} de {marca}. {como_estas}{hook} {valor} ¿Te parece si coordinamos 15 minutos para charlarlo?",
-    "Hola {nombre}. {como_estas}{hook} {valor} Soy {sdr}. ¿Te parece si hablamos un rato para verlo?",
-    "Hola {nombre}, {sdr} ({marca}). {como_estas}{hook} {valor} ¿Te parece si agendamos 15 minutos?",
-    "Hola {nombre}. Soy {sdr}. {como_estas}{hook} {valor} Si querés lo vemos rápido en una llamada corta.",
-    "Hola {nombre}, soy {sdr} de {marca}. {como_estas}{hook} {valor} ¿Te parece una videollamada breve esta semana?",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Tenés un rato esta semana para una llamada corta?""",
+    """Hola {nombre},
+
+Soy {sdr} ({marca}). {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Agendamos una charla breve?""",
+    """Hola {nombre},
+
+{sdr} de {marca} por acá. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Te sirve una videollamada corta?""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Hablamos un rato corto?""",
+    """Hola {nombre},
+
+Soy {sdr}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Lo vemos en una call de 15 minutos?""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+Si te interesa, ¿coordinamos una llamada corta?""",
+    """Hola {nombre},
+
+{como_estas}Soy {sdr} ({marca}). {te_escribo_por_corto}
+
+{valor}
+
+¿Te parece si agendamos 15 minutos?""",
+    """Hola {nombre},
+
+Trabajo en {marca}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Te queda una llamada breve?""",
+    """Hola {nombre},
+
+Soy {sdr}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Hacemos una charla corta para ver si aplica a {empresa}?""",
+    """Hola {nombre},
+
+{sdr} acá. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Tiene sentido una reunión breve?""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Coordinamos 15 minutos para charlarlo?""",
+    """Hola {nombre},
+
+{como_estas}{te_escribo_por_corto}
+
+{valor}
+
+Soy {sdr}. ¿Hablamos un rato para verlo?""",
+    """Hola {nombre},
+
+{sdr} ({marca}). {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Agendamos 15 minutos?""",
+    """Hola {nombre},
+
+Soy {sdr}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+Si querés lo vemos rápido en una llamada corta.""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Te parece una videollamada breve esta semana?""",
 )
 
 _B2B_WA_FU = (
-    "Hola {nombre}, {retomo} {como_estas}Si te sirve una llamada corta sobre {producto}, avisame. Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Te viene mejor hoy o otro día para 15 minutos? Quedo atento.",
-    "Hola {nombre}, {retomo} Sin presión. Si más adelante querés ver {producto}, escribime y lo coordinamos. Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Hacemos una charla corta o lo dejamos por ahora? Quedo atento.",
-    "Hola {nombre}, {retomo} ¿Tiene sentido para {empresa} seguir explorando {producto}? Quedo atento.",
-    "Hola {nombre}, {retomo} Sumo esto: {valor} Si no es momento, lo retomamos después. Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Esta semana o la próxima para una llamada breve? Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Seguís con ganas de ver {producto} o preferís dejarlo para más adelante? Quedo atento.",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}Si te sirve una llamada corta sobre {producto}, avisame.
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Te viene mejor hoy o otro día para 15 minutos?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+Sin presión. Si más adelante querés ver {producto}, escribime.
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Hacemos una charla corta o lo dejamos por ahora?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+¿Tiene sentido para {empresa} seguir explorando {producto}?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+Sumo esto: {valor}
+
+Si no es momento, lo retomamos después.
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Esta semana o la próxima para una llamada breve?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Seguís con ganas de ver {producto} o preferís dejarlo para más adelante?
+
+Quedo atento.""",
 )
 
 # ---------------------------------------------------------------------------
@@ -618,61 +886,329 @@ Quedo atento.""",
 )
 
 _B2C_LI_COLD = (
-    "Hola {nombre}, soy {sdr} de {marca}. {como_estas}{hook} {valor} ¿Te parece si coordinamos una charla corta esta semana?",
-    "Hola {nombre}, soy {sdr} ({marca}). {como_estas}{hook} {valor} ¿Te queda bien una videollamada breve?",
-    "Hola {nombre}. {sdr} de {marca} por acá. {como_estas}{hook} {valor} ¿Tiene sentido una reunión corta esta semana?",
-    "Hola {nombre}, te contacto desde {marca}. Soy {sdr}. {como_estas}{hook} {valor} ¿Podemos coordinar 10 o 15 minutos?",
-    "Hola {nombre}, soy {sdr}. {como_estas}{hook} {valor} ¿Te parece si agendamos 15 minutos para charlarlo?",
-    "Hola {nombre}. Soy {sdr} de {marca}. {como_estas}{hook} {valor} Si te resuena, ¿lo vemos en una llamada breve?",
-    "Hola {nombre}, soy {sdr} ({marca}). {como_estas}{hook} {valor} ¿Te sirve una charla corta para explorarlo?",
-    "Hola {nombre}. Te escribo desde {marca}, soy {sdr}. {como_estas}{hook} {valor} ¿Te queda bien una videollamada corta?",
-    "Hola {nombre}, soy {sdr} de {marca}. {como_estas}{hook} {valor} ¿Coordinamos un meet rápido esta semana?",
-    "Hola {nombre}. {sdr} ({marca}). {como_estas}{hook} {valor} ¿Te parece si hablamos 15 minutos?",
-    "Hola {nombre}, soy {sdr}. {como_estas}{hook} {valor} ¿Agendamos una reunión breve para verlo con calma?",
-    "Hola {nombre}. Trabajo en {marca} y pensé en escribirte. {como_estas}{hook} {valor} ¿Te sirve una llamada de 15 minutos?",
-    "Hola {nombre}, soy {sdr} de {marca}. {como_estas}{hook} {valor} ¿Te parece útil una charla corta?",
-    "Hola {nombre}. Soy {sdr}. {como_estas}{hook} {valor} Si querés, ¿lo vemos en un meet corto esta semana?",
-    "Hola {nombre}, soy {sdr} ({marca}). {como_estas}{hook} {valor} ¿Hablamos un rato para ver si te aplica?",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{hook}
+
+{valor}
+
+¿Te parece si coordinamos una charla corta esta semana?""",
+    """Hola {nombre},
+
+Soy {sdr} ({marca}). {como_estas}{hook}
+
+{valor}
+
+¿Te queda bien una videollamada breve?""",
+    """Hola {nombre},
+
+{sdr} de {marca} por acá. {como_estas}{hook}
+
+{valor}
+
+¿Tiene sentido una reunión corta esta semana?""",
+    """Hola {nombre},
+
+Te contacto desde {marca}. Soy {sdr}. {como_estas}{hook}
+
+{valor}
+
+¿Podemos coordinar 10 o 15 minutos?""",
+    """Hola {nombre},
+
+Soy {sdr}. {como_estas}{hook}
+
+{valor}
+
+¿Te parece si agendamos 15 minutos para charlarlo?""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{hook}
+
+{valor}
+
+Si te resuena, ¿lo vemos en una llamada breve?""",
+    """Hola {nombre},
+
+Soy {sdr} ({marca}). {como_estas}{hook}
+
+{valor}
+
+¿Te sirve una charla corta para explorarlo?""",
+    """Hola {nombre},
+
+Te escribo desde {marca}, soy {sdr}. {como_estas}{hook}
+
+{valor}
+
+¿Te queda bien una videollamada corta?""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{hook}
+
+{valor}
+
+¿Coordinamos un meet rápido esta semana?""",
+    """Hola {nombre},
+
+{sdr} ({marca}). {como_estas}{hook}
+
+{valor}
+
+¿Te parece si hablamos 15 minutos?""",
+    """Hola {nombre},
+
+Soy {sdr}. {como_estas}{hook}
+
+{valor}
+
+¿Agendamos una reunión breve para verlo con calma?""",
+    """Hola {nombre},
+
+Trabajo en {marca} y pensé en escribirte. {como_estas}{hook}
+
+{valor}
+
+¿Te sirve una llamada de 15 minutos?""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{hook}
+
+{valor}
+
+¿Te parece útil una charla corta?""",
+    """Hola {nombre},
+
+Soy {sdr}. {como_estas}{hook}
+
+{valor}
+
+Si querés, ¿lo vemos en un meet corto esta semana?""",
+    """Hola {nombre},
+
+Soy {sdr} ({marca}). {como_estas}{hook}
+
+{valor}
+
+¿Hablamos un rato para ver si te aplica?""",
 )
 
 _B2C_LI_FU = (
-    "Hola {nombre}, {retomo} {como_estas}La idea sigue siendo ver si {producto} te suma. ¿Te viene bien 15 minutos esta semana? Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Tiene sentido retomar esa conversación en una llamada corta? Quedo atento.",
-    "Hola {nombre}, {retomo} Sin presión: si ahora no es momento, lo dejamos. Si sí, ¿coordinamos 10 o 15 minutos? Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Te viene mejor esta semana o la próxima para una charla breve? Quedo atento.",
-    "Hola {nombre}, {retomo} Quería dejarlo arriba por si el mensaje anterior no llegó en buen momento. ¿Seguís con ganas de explorarlo? Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Vale la pena 15 minutos con {producto}, o preferís retomarlo más adelante? Quedo atento.",
-    "Hola {nombre}, {retomo} Sumo solo esto: {valor} ¿Hacemos una charla corta o lo dejamos por ahora? Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}Si te sirve, avisame y armamos un espacio corto. Quedo atento.",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}La idea sigue siendo ver si {producto} te suma.
+
+¿Te viene bien 15 minutos esta semana?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Tiene sentido retomar esa conversación en una llamada corta?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+Sin presión: si ahora no es momento, lo dejamos. Si sí, ¿coordinamos 10 o 15 minutos?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Te viene mejor esta semana o la próxima para una charla breve?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+Quería dejarlo arriba por si el mensaje anterior no llegó en buen momento.
+
+¿Seguís con ganas de explorarlo?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Vale la pena 15 minutos con {producto}, o preferís retomarlo más adelante?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+Sumo solo esto: {valor}
+
+¿Hacemos una charla corta o lo dejamos por ahora?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}Si te sirve, avisame y armamos un espacio corto.
+
+Quedo atento.""",
 )
 
 _B2C_WA_COLD = (
-    "Hola {nombre}, soy {sdr} de {marca}. {como_estas}{hook} {valor} ¿Tenés un rato esta semana para una llamada corta?",
-    "Hola {nombre}. Soy {sdr} ({marca}). {como_estas}{hook} {valor} ¿Agendamos una charla breve para ver si te sirve?",
-    "Hola {nombre}, {sdr} de {marca} por acá. {como_estas}{hook} {valor} ¿Te sirve una videollamada corta?",
-    "Hola {nombre}. Te contacto desde {marca}. Soy {sdr}. {como_estas}{hook} {valor} ¿Hablamos un rato corto?",
-    "Hola {nombre}, soy {sdr}. {como_estas}{hook} {valor} ¿Lo vemos en una call de 15 minutos?",
-    "Hola {nombre}. Soy {sdr} de {marca}. {como_estas}{hook} {valor} Si te interesa, ¿coordinamos una llamada corta?",
-    "Hola {nombre}. {como_estas}{hook} Soy {sdr} ({marca}). {valor} ¿Te parece si agendamos 15 minutos esta semana?",
-    "Hola {nombre}. Trabajo en {marca}. {como_estas}{hook} {valor} ¿Te queda una llamada breve?",
-    "Hola {nombre}, soy {sdr}. {como_estas}{hook} {valor} ¿Te parece si hacemos una charla corta para ver si te aplica?",
-    "Hola {nombre}. {sdr} acá. {como_estas}{hook} {valor} ¿Tiene sentido una reunión breve para repasarlo?",
-    "Hola {nombre}, soy {sdr} de {marca}. {como_estas}{hook} {valor} ¿Te parece si coordinamos 15 minutos para charlarlo?",
-    "Hola {nombre}. {como_estas}{hook} {valor} Soy {sdr}. ¿Te parece si hablamos un rato para verlo?",
-    "Hola {nombre}, {sdr} ({marca}). {como_estas}{hook} {valor} ¿Te parece si agendamos 15 minutos?",
-    "Hola {nombre}. Soy {sdr}. {como_estas}{hook} {valor} Si querés lo vemos rápido en una llamada corta.",
-    "Hola {nombre}, soy {sdr} de {marca}. {como_estas}{hook} {valor} ¿Te parece una videollamada breve esta semana?",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Tenés un rato esta semana para una llamada corta?""",
+    """Hola {nombre},
+
+Soy {sdr} ({marca}). {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Agendamos una charla breve?""",
+    """Hola {nombre},
+
+{sdr} de {marca} por acá. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Te sirve una videollamada corta?""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Hablamos un rato corto?""",
+    """Hola {nombre},
+
+Soy {sdr}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Lo vemos en una call de 15 minutos?""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+Si te interesa, ¿coordinamos una llamada corta?""",
+    """Hola {nombre},
+
+{como_estas}Soy {sdr} ({marca}). {te_escribo_por_corto}
+
+{valor}
+
+¿Agendamos 15 minutos?""",
+    """Hola {nombre},
+
+Trabajo en {marca}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Te queda una llamada breve?""",
+    """Hola {nombre},
+
+Soy {sdr}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Hacemos una charla corta para ver si te aplica?""",
+    """Hola {nombre},
+
+{sdr} acá. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Tiene sentido una reunión breve?""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Coordinamos 15 minutos?""",
+    """Hola {nombre},
+
+{como_estas}{te_escribo_por_corto}
+
+{valor}
+
+Soy {sdr}. ¿Hablamos un rato para verlo?""",
+    """Hola {nombre},
+
+{sdr} ({marca}). {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Agendamos 15 minutos?""",
+    """Hola {nombre},
+
+Soy {sdr}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+Si querés lo vemos rápido en una llamada corta.""",
+    """Hola {nombre},
+
+Soy {sdr} de {marca}. {como_estas}{te_escribo_por_corto}
+
+{valor}
+
+¿Te parece una videollamada breve esta semana?""",
 )
 
 _B2C_WA_FU = (
-    "Hola {nombre}, {retomo} {como_estas}Si te sirve una llamada corta sobre {producto}, avisame. Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Te viene mejor hoy o otro día para 15 minutos? Quedo atento.",
-    "Hola {nombre}, {retomo} Sin presión. Si más adelante querés ver {producto}, escribime y lo coordinamos. Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Hacemos una charla corta o lo dejamos por ahora? Quedo atento.",
-    "Hola {nombre}, {retomo} ¿Tiene sentido seguir explorando {producto}? Quedo atento.",
-    "Hola {nombre}, {retomo} Sumo esto: {valor} Si no es momento, lo retomamos después. Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Esta semana o la próxima para una llamada breve? Quedo atento.",
-    "Hola {nombre}, {retomo} {como_estas}¿Seguís con ganas de ver {producto} o preferís dejarlo para más adelante? Quedo atento.",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}Si te sirve una llamada corta sobre {producto}, avisame.
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Te viene mejor hoy o otro día para 15 minutos?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+Sin presión. Si más adelante querés ver {producto}, escribime.
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Hacemos una charla corta o lo dejamos por ahora?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+¿Tiene sentido seguir explorando {producto}?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+Sumo esto: {valor}
+
+Si no es momento, lo retomamos después.
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Esta semana o la próxima para una llamada breve?
+
+Quedo atento.""",
+    """Hola {nombre},
+
+{retomo}
+{como_estas}¿Seguís con ganas de ver {producto} o preferís dejarlo para más adelante?
+
+Quedo atento.""",
 )
 
 _BANKS: dict[tuple[Market, Channel, str], tuple[str, ...]] = {
@@ -772,20 +1308,24 @@ def _valor_one_liner(
 ) -> str:
     """
     Valor desde ficha, moldeado para leer bien en el mensaje.
-    Si explain_more (1.er toque de secuencia): qué es + qué hace, un poco más largo.
+    Si explain_more (1.er toque de secuencia): qué es + qué hace, un poco más largo
+    (excepto WhatsApp: siempre corto/chill).
     """
     from app.services.message_structure_variants import _conversational_value_blurb
 
+    ch = _norm_channel(channel)
+    # WA siempre corto; LI/email pueden alargar un poco en el 1.er toque de secuencia.
+    blurb_channel = "email" if (explain_more and ch != "whatsapp") else ch
     blurb = (
         _conversational_value_blurb(
-            product, product_name=product_name, channel=("email" if explain_more else channel)
+            product, product_name=product_name, channel=blurb_channel
         )
         or ""
     ).strip()
     desc = re.sub(
         r"\s+", " ", ((product or {}).get("description") or "").strip()
     ).rstrip(".")
-    if explain_more:
+    if explain_more and ch != "whatsapp":
         parts: list[str] = []
         if blurb and len(blurb) >= 12:
             parts.append(blurb if blurb.endswith((".", "!", "?")) else f"{blurb}.")
@@ -1015,7 +1555,7 @@ def _insert_leverage(body: str, *, channel: Channel, line: str) -> str:
     # Evitar duplicar si la plantilla ya trae {retomo}.
     if line.rstrip(".")[:24].lower() in body.lower():
         return body
-    if channel == "email":
+    if channel == "email" or "\n\n" in body:
         parts = body.split("\n\n", 2)
         if len(parts) >= 3:
             return f"{parts[0]}\n\n{parts[1]}\n\n{line}\n\n{parts[2]}"

@@ -28,7 +28,7 @@ from app.services.multichannel_sequence import (
 
 logger = logging.getLogger(__name__)
 
-_WHATSAPP_REPLY_MAX_WORDS = 55
+_WHATSAPP_REPLY_MAX_WORDS = 45
 
 _WA_PREFIX_RE = re.compile(
     r"^\[WhatsApp[^\]]*\]\s*",
@@ -62,7 +62,8 @@ _WA_REPLY_RULES = (
     "qué hace / cómo funciona / precio / diferencia. "
     "Si pide agenda con hora concreta (ej. 'agendame a las 15'), confirmá o "
     "proponé alternativa — NO vuelvas a preguntar si quiere agendar. "
-    "Máximo 55 palabras, tono chat cercano (WhatsApp es canal íntimo)."
+    "Máximo 45 palabras, tono chat cercano y chill. "
+    "Si son 2+ frases, separalas en micro-párrafos (línea en blanco)."
 )
 
 

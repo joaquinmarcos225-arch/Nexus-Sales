@@ -151,7 +151,7 @@ body = greeting + presentation + problem + solution + benefits + cta.
 FORMA (Contexto personalizado → valor → CTA):
 sections.presentation: puede ser "Soy {sender} de {brand}." O vacío si el contexto ya presenta (email/LinkedIn).
 sections.problem: BLOQUE amplio de contexto anclado a rol/empresa (dato real del brief; si no hay research: ancla CRM suave al cargo/compañía). NO inventar.
-sections.solution: BLOQUE amplio de valor (2–3 oraciones email; 2 LinkedIn; 2 WhatsApp) — qué ofrecen y para qué situación encaja. Todo libre.
+sections.solution: BLOQUE amplio de valor (2–3 oraciones email; 2–3 LinkedIn; 1 WhatsApp) — qué ofrecen y para qué situación encaja. Todo libre.
 sections.benefits: vacío o una línea extra solo si aporta.
 sections.cta: proponer charla corta / coordinar 15 min (?).
 body = greeting + (presentation si hay) + problem + solution (+ benefits) + cta.
@@ -161,7 +161,7 @@ body = greeting + (presentation si hay) + problem + solution (+ benefits) + cta.
 FORMA (Directo / corto):
 sections.presentation: "Soy {sender} de {brand}." o "Soy {sender} ({brand})." según canal.
 sections.problem: vacío preferible.
-sections.solution: BLOQUE ÚNICO amplio (mezcla por qué + qué + para qué). Email 3–5 oraciones; LinkedIn 2–3; WhatsApp 1–2. Todo libre.
+sections.solution: BLOQUE ÚNICO amplio (mezcla por qué + qué + para qué). Email 3–5 oraciones; LinkedIn 2–3; WhatsApp 1 oración corta. Todo libre.
 sections.benefits: vacío.
 sections.cta: UNA pregunta clara para agendar (?).
 body = greeting + presentation + solution + cta (máxima densidad, sin relleno).
@@ -174,18 +174,22 @@ body = greeting + presentation + solution + cta (máxima densidad, sin relleno).
         )
     elif ch == "linkedin":
         length = (
-            "LinkedIn: MÁS CORTO. Ideal 180-280 caracteres (máx ~320). Sin subject.\n"
+            "LinkedIn: corto, pero MÁS desarrollado que WhatsApp. "
+            "Ideal ~280-480 caracteres (máx ~550). Sin subject.\n"
+            "OBLIGATORIO párrafos cortos separados por línea en blanco "
+            "(saludo+presentación · valor · CTA). PROHIBIDO un solo muro de texto.\n"
             "PROHIBIDO pegar o parafrasear casi literal la ficha Producto/servicio "
             "(value_proposition + description enteras). "
-            "Reescribí en 1–2 oraciones conversacionales. "
+            "Reescribí valor en 2–3 oraciones conversacionales. "
             "Si la ficha empieza con «Automatiza…», NO lo copies: "
             "decí p.ej. «Con {producto} automatizamos…» en una frase corta.\n"
         )
     else:
         length = (
-            "WhatsApp: máxima brevedad, informal, un bloque legible. "
-            "Ideal 30-50 palabras (máx ~70). "
-            "PROHIBIDO pegar la ficha de producto; 1 idea de valor + CTA.\n"
+            "WhatsApp: MÁS CORTO que LinkedIn. Informal, chill, rioplatense. "
+            "Ideal 20-35 palabras (máx ~45 / ~260 caracteres).\n"
+            "OBLIGATORIO 2–3 micro-párrafos (línea en blanco): saludo; 1 idea de valor; CTA. "
+            "PROHIBIDO párrafo muro y PROHIBIDO pegar la ficha de producto.\n"
         )
 
     return common + shape + length
@@ -237,10 +241,10 @@ Cierre: Quedo atento a lo que te quede mejor.
             base
             + """
 LINKEDIN · LF1 — Cierre en una idea:
-1–2 oraciones: recordatorio breve + valor en una línea (más personal/corto que email).
+1–2 oraciones en 2 párrafos cortos: recordatorio breve + valor en una línea.
 Si encaja, charla corta.
 Cierre: Quedo atento.
-150-320 caracteres.
+180-400 caracteres. Más espacio que WhatsApp; sin muro de texto.
 """
         )
     if ch == "linkedin":
@@ -248,32 +252,32 @@ Cierre: Quedo atento.
             base
             + """
 LINKEDIN · LF2 — Invitación sin presión (NO binaria agresiva):
-1 oración anclada al rol/empresa o al hilo.
-Invitar: cuando le venga bien, 10–15 min.
+1 oración anclada al rol/empresa o al hilo (párrafo 1).
+Invitar: cuando le venga bien, 10–15 min (párrafo 2).
 Cierre: Quedo atento.
-150-300 caracteres.
+180-380 caracteres.
 """
         )
     if ch == "whatsapp" and variant == "soft_summary":
         return (
             base
             + """
-WHATSAPP · WF1 — Último toque corto:
+WHATSAPP · WF1 — Último toque corto y chill:
 «te escribo por última vez sobre esto» (o equivalente natural).
-1 oración de valor/contexto editable.
+1 idea de valor/contexto editable.
 Si sirve, agendar unos minutos.
 Cierre: Quedo atento.
-1–3 líneas (~25-55 palabras).
+2 micro-párrafos (~15-35 palabras). MÁS corto que LinkedIn.
 """
         )
     return (
         base
         + """
-WHATSAPP · WF2 — Directo y liviano:
+WHATSAPP · WF2 — Directo, liviano y chill:
 Pregunta corta: ¿te calza una charla corta esta semana?
 Opcional: media oración de contexto solo si aporta.
 Cierre: Quedo atento.
-Máxima brevedad (1–2 líneas).
+Máxima brevedad (2 micro-párrafos).
 """
     )
 
@@ -348,9 +352,8 @@ def _conversational_value_blurb(
     LinkedIn/WhatsApp quedan mucho más cortos que email.
     """
     ch = _norm_channel(channel)
-    # WA necesita espacio para moldear «Automatiza X…» → «Con {prod} automatizamos X…»
-    # sin cortar a mitad de frase (p.ej. «integrando.»).
-    max_chars = 220 if ch == "email" else (150 if ch == "linkedin" else 165)
+    # LinkedIn puede desarrollar un poco más; WhatsApp queda más corto/chill.
+    max_chars = 220 if ch == "email" else (200 if ch == "linkedin" else 120)
     vp = re.sub(r"\s+", " ", ((product or {}).get("value_proposition") or "").strip()).rstrip(".")
     vp = _strip_leading_product_name(vp, product_name)
     if not vp or len(vp) < 12:

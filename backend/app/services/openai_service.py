@@ -1881,7 +1881,10 @@ def generate_linkedin_sdr_draft(
     system = resolve_voice_global(campaign) + _education_block(education)
     user = (
         "Generá UN primer mensaje outbound para LinkedIn (texto plano), "
-        "como si lo fuera a pegar un SDR humano. Sin markdown. Máximo 3-4 líneas cortas.\n"
+        "como si lo fuera a pegar un SDR humano. Sin markdown.\n"
+        "Formato OBLIGATORIO: párrafos cortos separados por línea en blanco "
+        "(saludo · valor · CTA). PROHIBIDO un solo muro de texto.\n"
+        "Longitud: corto pero más desarrollado que WhatsApp (~280-480 caracteres, máx ~550).\n"
         "PROHIBIDO mensaje genérico: mencioná algo concreto de la empresa o el rol según el contexto.\n\n"
         f"Prospecto: {prospect.get('name')} | {prospect.get('company_name')} | rol {prospect.get('role')}\n"
         f"Campaña: {campaign.get('name')} | tono {campaign.get('tone')}\n"
@@ -1889,7 +1892,7 @@ def generate_linkedin_sdr_draft(
         f"Propuesta de valor (no copiar literal): {(product.get('value_proposition') or '')[:320]}\n\n"
         f"{_mvp_prospect_context_block(prospect)}"
     )
-    return _chat(system, user, temperature=random.uniform(0.72, 0.88), max_output_tokens=140)
+    return _chat(system, user, temperature=random.uniform(0.72, 0.88), max_output_tokens=220)
 
 
 def generate_whatsapp_sdr_draft(
@@ -1903,9 +1906,12 @@ def generate_whatsapp_sdr_draft(
     system = resolve_voice_global(campaign) + _education_block(education)
     pname = (prospect.get("name") or "").split()[0] or "Hola"
     user = (
-        "Generá UN primer mensaje outbound para WhatsApp (texto plano), tono conversacional B2B. "
-        "Sin markdown. Máximo 4-5 líneas cortas. PROHIBIDO copiar un email formal ni usar plantilla genérica.\n"
-        "Mencioná la empresa y el rol del prospecto con un gancho específico del contexto de prospección.\n\n"
+        "Generá UN primer mensaje outbound para WhatsApp (texto plano). "
+        "Tono informal, chill, rioplatense. Sin markdown.\n"
+        "MÁS CORTO que LinkedIn: ideal 20-35 palabras (máx ~45 / ~260 caracteres).\n"
+        "Formato OBLIGATORIO: 2–3 micro-párrafos con línea en blanco "
+        "(saludo; 1 idea de valor; CTA). PROHIBIDO párrafo muro y email formal.\n"
+        "Mencioná la empresa/rol con un gancho breve del contexto.\n\n"
         f"Primer nombre: {pname}\n"
         f"Prospecto: {prospect.get('name')} | {prospect.get('company_name')} | rol {prospect.get('role')}\n"
         f"Campaña: {campaign.get('name')} | tono {campaign.get('tone')}\n"
@@ -1913,4 +1919,4 @@ def generate_whatsapp_sdr_draft(
         f"Propuesta de valor (referencia, no copiar): {(product.get('value_proposition') or '')[:320]}\n\n"
         f"{_mvp_prospect_context_block(prospect)}"
     )
-    return _chat(system, user, temperature=random.uniform(0.7, 0.86), max_output_tokens=200)
+    return _chat(system, user, temperature=random.uniform(0.7, 0.86), max_output_tokens=140)
