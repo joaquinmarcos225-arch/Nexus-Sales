@@ -19,19 +19,10 @@ import {
   YAxis,
 } from 'recharts'
 import { NX_CHART, NX_CHART_BAR, NX_CHART_GRID, NX_CHART_LEGEND, NX_CHART_MARGIN, NX_CHART_SERIES, NX_CHART_TOOLTIP, NX_CHART_VOLUME, NX_CHART_Y_TICK, averageBy, chartAvgCaption, enrichSlicesWithPct, pieTooltipWithPct } from '../../utils/chartTheme.js'
+import { formatLocalDateTime } from '../../utils/instantFormat.js'
 
 function fmtDate(iso) {
-  if (!iso) {
-    return '—'
-  }
-  try {
-    return new Date(iso).toLocaleString('es-AR', {
-      dateStyle: 'short',
-      timeStyle: 'short',
-    })
-  } catch {
-    return '—'
-  }
+  return formatLocalDateTime(iso)
 }
 
 const STATUS_LABEL = {

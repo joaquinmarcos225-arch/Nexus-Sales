@@ -10,6 +10,7 @@ import { CampaignOutreachSection } from '../components/outreach/CampaignOutreach
 import { CollapsibleSection } from '../components/ui/CollapsibleSection.jsx'
 import { ProspectActivityBadge } from '../components/campaigns/ProspectActivityBadge.jsx'
 import { formatChannelsSummary } from '../utils/campaignChannels.js'
+import { formatLocalDateTime } from '../utils/instantFormat.js'
 import {
   deleteCampaign,
   deleteProspect,
@@ -127,17 +128,7 @@ function ProspectFoundContactLines({ prospect }) {
 }
 
 function fmtLastEdit(iso) {
-  if (!iso) {
-    return '—'
-  }
-  try {
-    return new Date(iso).toLocaleString('es-AR', {
-      dateStyle: 'short',
-      timeStyle: 'short',
-    })
-  } catch {
-    return '—'
-  }
+  return formatLocalDateTime(iso)
 }
 
 function Row({ label, value }) {
@@ -443,15 +434,21 @@ export default function CampanaDetallePage() {
           {company ? <p className="mt-1 text-sm text-nx-muted">{company.name}</p> : null}
           {campaign?.updated_at || campaign?.created_at ? (
             <p className="mt-1 text-xs text-nx-subtle">
-              Última edición:{' '}
-              <span className="font-medium text-nx-muted">
-                {campaign?.updated_at
-                  ? fmtLastEdit(campaign.updated_at)
-                  : 'Sin guardados desde la creación'}
-              </span>
-              {campaign?.updated_at ? null : (
-                <span className="text-nx-subtle"> · creada {fmtLastEdit(campaign.created_at)}</span>
-              )}
+              {campaign?.created_at ? (
+                <>
+                  Creada:{' '}
+                  <span className="font-medium text-nx-muted">{fmtLastEdit(campaign.created_at)}</span>
+                </>
+              ) : null}
+              {campaign?.created_at && campaign?.updated_at ? (
+                <span className="text-nx-subtle"> · </span>
+              ) : null}
+              {campaign?.updated_at ? (
+                <>
+                  Última edición:{' '}
+                  <span className="font-medium text-nx-muted">{fmtLastEdit(campaign.updated_at)}</span>
+                </>
+              ) : null}
             </p>
           ) : null}
         </div>

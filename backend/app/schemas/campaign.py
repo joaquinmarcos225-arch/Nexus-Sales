@@ -2,7 +2,7 @@ from datetime import datetime
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from app.models.enums import (
     INBOUND_REPLY_DELAY_CHOICES,
@@ -14,6 +14,7 @@ from app.models.enums import (
     OutreachMode,
 )
 from app.schemas.campaign_channels import normalize_allowed_channels
+from app.schemas.datetime_utc import as_utc_datetime, as_utc_datetime_optional
 from app.services.campaign_market import normalize_outreach_mode
 
 
@@ -263,3 +264,7 @@ class CampaignRead(BaseModel):
     icp_ai_last_analysis: dict | None = None
     outreach_activity_log: list[dict[str, Any]] | None = None
     sequence_plan: dict | None = None
+
+    @field_serializer("created_at", "updated_at", "autopilot_last_cycle_at")
+    def _serialize_utc_datetimes(self, value: datetime | None) -> datetime | None:
+        return as_utc_datetime_optional(value)

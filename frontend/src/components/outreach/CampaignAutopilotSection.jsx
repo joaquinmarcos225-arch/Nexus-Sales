@@ -5,6 +5,7 @@ import {
   pauseCampaignAutopilot,
   runCampaignAutopilotCycle,
 } from '../../utils/api.js'
+import { formatLocalDateTime } from '../../utils/instantFormat.js'
 
 const LABELS = {
   off: 'Off',
@@ -114,7 +115,7 @@ export function CampaignAutopilotSection({ campaign, freeze = false, onChanged }
       <div className="text-xs text-nx-muted">
         Estado: <span className="font-semibold text-nx-ink">{LABELS[status] ?? status}</span> · Último ciclo:{' '}
         {campaign?.autopilot_last_cycle_at
-          ? new Date(campaign.autopilot_last_cycle_at).toLocaleString('es-AR')
+          ? formatLocalDateTime(campaign.autopilot_last_cycle_at)
           : '—'}
       </div>
 

@@ -21,6 +21,7 @@ import {
 } from '../utils/api.js'
 import { confirmDeleteCampaign } from '../utils/confirmDeleteCampaign.js'
 import { isIndividualContainerCampaign } from '../utils/individualCampaign.js'
+import { formatLocalDateTime } from '../utils/instantFormat.js'
 import { isCompanyAdmin, isManagerOrGerente, normalizeRole } from '../data/navigation.js'
 import {
   Bar,
@@ -61,17 +62,7 @@ const STATUS_LABEL = {
 }
 
 function fmtDate(iso) {
-  if (!iso) {
-    return '—'
-  }
-  try {
-    return new Date(iso).toLocaleString('es-AR', {
-      dateStyle: 'short',
-      timeStyle: 'short',
-    })
-  } catch {
-    return '—'
-  }
+  return formatLocalDateTime(iso)
 }
 
 function shortLabel(name, max = 16) {

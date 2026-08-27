@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+from app.schemas.datetime_utc import as_utc_datetime_optional
 
 
 class CommercialSnapshot(BaseModel):
@@ -48,6 +50,10 @@ class AnalyticsTotals(BaseModel):
 
     last_activity_at: datetime | None
 
+    @field_serializer("last_activity_at")
+    def _serialize_last_activity(self, value: datetime | None) -> datetime | None:
+        return as_utc_datetime_optional(value)
+
 
 class CampaignAnalyticsRow(BaseModel):
     campaign_id: int
@@ -67,6 +73,10 @@ class CampaignAnalyticsRow(BaseModel):
     messages_sent: int
     last_activity_at: datetime | None
 
+    @field_serializer("last_activity_at")
+    def _serialize_last_activity(self, value: datetime | None) -> datetime | None:
+        return as_utc_datetime_optional(value)
+
 
 class SellerAnalyticsRow(BaseModel):
     user_id: int
@@ -85,6 +95,10 @@ class SellerAnalyticsRow(BaseModel):
     response_rate: float = Field(default=0.0, ge=0, le=1)
     interest_rate: float = Field(default=0.0, ge=0, le=1)
     last_activity_at: datetime | None = None
+
+    @field_serializer("last_activity_at")
+    def _serialize_last_activity(self, value: datetime | None) -> datetime | None:
+        return as_utc_datetime_optional(value)
 
 
 class WeeklyMeetingsPoint(BaseModel):

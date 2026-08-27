@@ -22,6 +22,7 @@ import { useLinkedInPending } from '../../hooks/useLinkedInPending.js'
 import { useWhatsAppPending } from '../../hooks/useWhatsAppPending.js'
 import { useMeetingsPending } from '../../hooks/useMeetingsPending.js'
 import { useResponderPending } from '../../hooks/useResponderPending.js'
+import { formatLocalDateTime } from '../../utils/instantFormat.js'
 
 function pct(x) {
   if (x == null || Number.isNaN(x)) {
@@ -31,17 +32,7 @@ function pct(x) {
 }
 
 function fmtDate(iso) {
-  if (!iso) {
-    return '—'
-  }
-  try {
-    return new Date(iso).toLocaleString('es-AR', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    })
-  } catch {
-    return '—'
-  }
+  return formatLocalDateTime(iso, 'es-AR')
 }
 
 export default function DashboardOverview() {
