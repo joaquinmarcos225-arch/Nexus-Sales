@@ -79,6 +79,13 @@ class ProspeoEnrichmentProvider(ContactEnrichmentProvider):
             data["email"] = lead.email
 
         needs_mobile = not (lead.phone or "").strip()
+        # No gastar enrich_mobile si el teléfono que ya tenemos clasifica como fijo.
+        if needs_mobile and (lead.phone or lead.whatsapp):
+            from app.services.whatsapp_phone_validation import classify_phone_kind
+
+            kind = classify_phone_kind(lead.phone or lead.whatsapp)
+            if kind == "landline":
+                needs_mobile = False
         body = {
             "only_verified_email": True,
             "enrich_mobile": needs_mobile,
@@ -123,17 +130,31 @@ class ProspeoEnrichmentProvider(ContactEnrichmentProvider):
 
         mobile_obj = person.get("mobile") or {}
         phone = lead.phone
+        whatsapp = lead.whatsapp
         if isinstance(mobile_obj, dict):
             mob = mobile_obj.get("mobile") or mobile_obj.get("mobile_international")
             if mob:
-                phone = str(mob).strip() or phone
+                from app.services.whatsapp_phone_validation import (
+                    sanitize_landline_phone,
+                    sanitize_whatsapp_mobile,
+                )
+
+                wa = sanitize_whatsapp_mobile(str(mob))
+                if wa:
+                    phone = wa
+                    whatsapp = wa
+                else:
+                    ll = sanitize_landline_phone(str(mob))
+                    if ll:
+                        phone = phone or ll
+                    # No guardar fijo en whatsapp
 
         conf = 85 if email else (60 if phone else 45)
         return lead.model_copy(
             update={
                 "email": email,
                 "phone": phone,
-                "whatsapp": phone if phone else lead.whatsapp,
+                "whatsapp": whatsapp if whatsapp else None,
                 "has_email": bool(email),
                 "has_phone": bool(phone or lead.whatsapp),
                 "enriched_by_prospeo": True,

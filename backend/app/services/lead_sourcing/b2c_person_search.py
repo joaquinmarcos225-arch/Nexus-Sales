@@ -26,10 +26,13 @@ from app.services.lead_sourcing.providers.prospeo_mvp import (
 )
 from app.services.lead_sourcing.prospeo_contact_validation import is_forbidden_email
 from app.services.lead_sourcing.prospeo_phone import (
+    apply_enrich_mobile_result,
     contact_details_filter,
+    decide_enrich_mobile,
     merge_contact_channels,
     person_has_usable_mobile,
     person_mobile_verified,
+    person_phone_preview_is_landline,
 )
 
 _logger = logging.getLogger(__name__)
@@ -512,10 +515,19 @@ def _maybe_enrich_person(
     """Enrich-person si falta email usable o móvil completo (WhatsApp).
 
     Si search ya trajo móvil usable, no pedimos enrich_mobile otra vez (solo email).
+    Si el preview clasifica como fijo → no pagar enrich_mobile.
+    Tras enrich sin móvil WA → marcar para no reintentar.
     """
     email, _ = extract_email_phone(person)
     need_email = not _email_usable(email)
-    need_mobile = bool(require_mobile) and not person_has_usable_mobile(person)
+    want_mobile = bool(require_mobile) and not person_has_usable_mobile(person)
+    need_mobile = decide_enrich_mobile(person, want_mobile=want_mobile)
+    if want_mobile and not need_mobile and person_phone_preview_is_landline(person):
+        marked = dict(person)
+        marked["_nexus_skip_mobile_enrich"] = True
+        if not need_email:
+            return marked
+        person = marked
     if not need_email and not need_mobile:
         return person
     pid = str(person.get("person_id") or person.get("id") or "").strip()
@@ -523,12 +535,15 @@ def _maybe_enrich_person(
         return person
     try:
         enriched = enrich_person_by_id(pid, require_mobile=need_mobile)
-        if isinstance(enriched, dict) and enriched:
-            merged = dict(person)
-            merged.update({k: v for k, v in enriched.items() if v not in (None, "", [], {})})
-            return merged
+        return apply_enrich_mobile_result(
+            person,
+            enriched if isinstance(enriched, dict) else None,
+            requested_mobile=need_mobile,
+        )
     except Exception as e:
         _logger.debug("B2C enrich-person skipped for %s: %s", pid, e)
+        if need_mobile:
+            return apply_enrich_mobile_result(person, None, requested_mobile=True)
     return person
 
 
