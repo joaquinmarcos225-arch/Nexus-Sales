@@ -206,6 +206,71 @@ def test_valor_molded_for_automatiza_vp():
     assert ". automatiza entre" not in low
 
 
+def test_valor_rewrites_marketing_vp_no_paste_no_bad_conjugation():
+    """VP tipo brochure no se pega; conjugación 1ª plural; sin buzzwords."""
+    product = {
+        "name": "Nexus Sales",
+        "value_proposition": (
+            "Incrementa reuniones comerciales reduciendo la fricción operativa, "
+            "centralizando la prospección y contacto multicanal con mensajes "
+            "personalizados generados por IA entrenada en el producto del cliente."
+        ),
+        "description": (
+            "Plataforma multicanal de outreach comercial que combina IA y control humano."
+        ),
+    }
+    r = render_cold_bank_touch(
+        channel="linkedin",
+        prospect={"id": 6, "name": "Ana", "company_name": "Inmo SA", "role": "CEO"},
+        campaign={
+            "id": 6,
+            "sender_name": "Joaquin",
+            "brand_name": "CostGuard",
+            "outreach_mode": "b2b",
+        },
+        product=product,
+        first_touch=True,
+    )
+    low = r.body.lower()
+    assert "fricción operativa" not in low
+    assert "en concreto," not in low
+    assert "incrementa reuniones" not in low  # 3ª persona cruda
+    assert "con nexus sales incrementa" not in low
+    assert "mensajes personalizados generados por ia" not in low
+    # Debe sonar a reescritura (nosotros / ayudamos / centralizamos…).
+    assert any(
+        w in low
+        for w in ("incrementamos", "ayudamos", "centralizamos", "automatizamos", "orquestamos")
+    )
+
+
+def test_valor_varies_by_prospect_seed():
+    product = {
+        "name": "Nexus Sales",
+        "value_proposition": (
+            "Automatiza entre 60% y 90% de tareas manuales de prospección outbound "
+            "integrando email, LinkedIn y WhatsApp en un flujo único con IA"
+        ),
+    }
+    bodies = []
+    for pid in (1, 2, 3, 4, 5, 6, 7, 8):
+        r = render_cold_bank_touch(
+            channel="email",
+            prospect={"id": pid, "name": "Mia", "company_name": "Acme"},
+            campaign={
+                "id": 3,
+                "sender_name": "Joaquin",
+                "brand_name": "CostGuard",
+                "outreach_mode": "b2b",
+            },
+            product=product,
+            first_touch=True,
+        )
+        bodies.append(r.body)
+    # No todos idénticos en el bloque de valor (seed por prospect id).
+    assert len(set(bodies)) >= 2
+
+
 def test_first_message_hooks_before_product_and_asks_how_are_you():
     """Nunca pitch inmediato; siempre engancha y pregunta cómo está al menos 1 vez."""
     r = render_cold_bank_touch(

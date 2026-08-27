@@ -100,36 +100,20 @@ def _product_name(product: dict[str, Any] | None, *, brand: str = "") -> str:
 
 
 def _value_proposition_benefit(product: dict[str, Any] | None) -> str:
-    """Convierte la propuesta de valor del producto a frase usable en copy de outreach."""
-    vp = re.sub(r"\s+", " ", ((product or {}).get("value_proposition") or "").strip()).rstrip(".")
-    if not vp or len(vp) < 12:
+    """Valor usable en copy: reescrito, no pegado de la ficha."""
+    from app.services.message_structure_variants import _rewrite_product_value
+
+    name = ((product or {}).get("name") or "nuestra solución").strip() or "nuestra solución"
+    blurb = _rewrite_product_value(product, product_name=name, channel="email")
+    t = (blurb or "").strip().rstrip(".")
+    if not t:
         return "automatizar la búsqueda y el contacto por email, LinkedIn y WhatsApp"
-    if vp.lower().startswith("ayudamos"):
-        return vp[0].lower() + vp[1:] if len(vp) > 1 else vp
-    words = vp.split(None, 1)
-    first = words[0].lower()
-    rest = words[1] if len(words) > 1 else ""
-    if first.endswith("iza") and len(first) > 4:
-        infinitive = f"{first[:-3]}izar"
-    elif first.endswith("a") and len(first) > 4:
-        infinitive = f"{first[:-1]}ar"
-    else:
-        infinitive = first
-    phrase = f"{infinitive} {rest}".strip() if rest else infinitive
-    return phrase.lower()
+    # Tras «porque» va minúscula.
+    return t[0].lower() + t[1:] if t else t
 
 
 def _build_problem_line(product: dict[str, Any] | None) -> str:
-    """Bloque amplio desde VP del producto — sin audiencia fija («equipos comerciales»)."""
-    vp = re.sub(r"\s+", " ", ((product or {}).get("value_proposition") or "").strip()).rstrip(".")
-    if vp and vp.lower().startswith("ayudamos"):
-        clause = vp if vp.endswith(".") else f"{vp}."
-        if clause and clause[0].isupper():
-            clause = clause[0].lower() + clause[1:]
-        return f"Te escribo porque {clause}"
-    if vp and len(vp) >= 12:
-        clause = vp[0].lower() + vp[1:] if vp else vp
-        return f"Te escribo porque {clause}."
+    """Ángulo de por qué escribís — sin pegar VP ni audiencia fija."""
     benefit = _value_proposition_benefit(product)
     return f"Te escribo porque {benefit}."
 

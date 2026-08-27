@@ -130,7 +130,12 @@ REGLA CRÍTICA — BLOQUES GRANDES:
 - NO uses plantillas rígidas con un hueco chico (PROHIBIDO: «Te escribo porque ayudamos a equipos comerciales a …»).
 - Cada renglón de valor es un BLOQUE editable amplio: audiencia real, problema, producto y beneficio salen del PRODUCTO / ICP / research / rol-empresa del prospecto.
 - No asumas «equipos comerciales» ni ninguna audiencia fija: usá la del producto/campaña/prospecto.
-- VALOR = ficha del producto: priorizá la propuesta de valor y beneficios concretos (qué automatiza, %, canales, resultado medible). PROHIBIDO sustituirlos por frases genéricas («menos fricción operativa», «mejorar la eficiencia», «optimizar procesos»).
+- VALOR = reescribí la ficha del producto en tus palabras (voz «nosotros…»), NUNCA copies
+  value_proposition ni description literal ni casi literal. Sacá hechos concretos
+  (%, canales, resultado medible) y redactalos conversacionalmente.
+  PROHIBIDO conjugación rota («Con {producto} incrementa/automatiza…» → usá «incrementamos/automatizamos»).
+  PROHIBIDO buzzwords vacíos («menos fricción operativa», «mejorar la eficiencia», «optimizar procesos»).
+  PROHIBIDO que todos los mensajes repitan la misma explicación pegada de la ficha.
 - Objetivo: agendar reunión breve. NUNCA cerrar la venta.
 - sections.greeting: "Hola {first}," (o equivalente natural del canal).
 - Firma email (si aplica): Saludos, {sender}
@@ -288,13 +293,8 @@ Máxima brevedad (2 micro-párrafos).
 
 
 def _vp_clause(product: dict[str, Any] | None) -> str:
-    vp = re.sub(r"\s+", " ", ((product or {}).get("value_proposition") or "").strip()).rstrip(".")
-    if vp and len(vp) >= 12:
-        return vp[0].upper() + vp[1:] if vp else vp
-    desc = re.sub(r"\s+", " ", ((product or {}).get("description") or "").strip()).rstrip(".")
-    if desc and len(desc) >= 20:
-        return _clip_sentence(desc[0].upper() + desc[1:], max_chars=140)
-    return "Automatizamos la búsqueda y el contacto por email, LinkedIn y WhatsApp"
+    name = ((product or {}).get("name") or "nuestra solución").strip() or "nuestra solución"
+    return _rewrite_product_value(product, product_name=name, channel="email")
 
 
 def _clip_sentence(text: str, *, max_chars: int) -> str:
@@ -320,25 +320,222 @@ def _strip_leading_product_name(text: str, product_name: str) -> str:
     return t
 
 
+# Frases de ficha que no deben llegar al mensaje (buzzwords / marketing interno).
+_GENERIC_FLUFF_RE = re.compile(
+    r"\b(?:"
+    r"reduc(?:iendo|e|ir)?\s+la\s+fricci[oó]n\s+operativa|"
+    r"menos\s+fricci[oó]n\s+operativa|"
+    r"mejorar(?:\s+la)?\s+eficiencia|"
+    r"optimizar\s+(?:los\s+)?procesos|"
+    r"mensajes\s+personalizados\s+generados\s+por\s+IA|"
+    r"IA\s+entrenada\s+en\s+el\s+producto\s+del\s+cliente|"
+    r"automatizaci[oó]n\s+asistida|"
+    r"control\s+humano|"
+    r"combin(?:a|ando)\s+IA|"
+    r"plataforma\s+multicanal\s+de\s+outreach\s+comercial"
+    r")\b[,.]?",
+    re.I,
+)
+
+_THIRD_PERSON_START = re.compile(
+    r"^(automatiza|orquesta|centraliza|integra|consolida|permite|reduce|"
+    r"incrementa|aumenta|acelera|simplifica|facilita|genera|conecta|"
+    r"organiza|gestiona|ofrece|ayuda|mejora|optimiza|elimina|ahorra|"
+    r"multiplica|potencia|impulsa)\b",
+    re.I,
+)
+
+_NOSOTROS_VERB = {
+    "automatiza": "automatizamos",
+    "orquesta": "orquestamos",
+    "centraliza": "centralizamos",
+    "integra": "integramos",
+    "consolida": "consolidamos",
+    "permite": "permitimos",
+    "reduce": "reducimos",
+    "incrementa": "incrementamos",
+    "aumenta": "aumentamos",
+    "acelera": "aceleramos",
+    "simplifica": "simplificamos",
+    "facilita": "facilitamos",
+    "genera": "generamos",
+    "conecta": "conectamos",
+    "organiza": "organizamos",
+    "gestiona": "gestionamos",
+    "ofrece": "ofrecemos",
+    "ayuda": "ayudamos",
+    "mejora": "mejoramos",
+    "optimiza": "optimizamos",
+    "elimina": "eliminamos",
+    "ahorra": "ahorramos",
+    "multiplica": "multiplicamos",
+    "potencia": "potenciamos",
+    "impulsa": "impulsamos",
+}
+
+
+def _scrub_marketing_fluff(text: str) -> str:
+    t = _GENERIC_FLUFF_RE.sub(" ", text or "")
+    t = re.sub(r"\s*,\s*,+", ", ", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    t = re.sub(r"\s+,", ",", t)
+    t = re.sub(r",\s*\.", ".", t)
+    return t.strip(" ,.;")
+
+
+def _to_nosotros_verb(verb: str) -> str:
+    key = (verb or "").lower()
+    if key in _NOSOTROS_VERB:
+        return _NOSOTROS_VERB[key]
+    if key.endswith("a") and not key.endswith("amos"):
+        return key[:-1] + "amos"
+    if key.endswith("e") and not key.endswith(("emos", "imos")):
+        return key[:-1] + "imos"
+    return key
+
+
+def _concrete_hooks(text: str) -> list[str]:
+    """Saca ganchos concretos (%, canales, reuniones) sin pegar la ficha."""
+    t = text or ""
+    hooks: list[str] = []
+    for m in re.finditer(r"\d{1,3}\s*%(?:\s*(?:a|y|-|–)\s*\d{1,3}\s*%)?", t, re.I):
+        hooks.append(m.group(0).replace("–", "-"))
+    low = t.lower()
+    channels = [ch for ch in ("email", "linkedin", "whatsapp") if ch in low]
+    if len(channels) >= 2:
+        pretty = {"email": "email", "linkedin": "LinkedIn", "whatsapp": "WhatsApp"}
+        hooks.append(", ".join(pretty[c] for c in channels))
+    if re.search(r"\breuni(ones|ón|on)\b", t, re.I):
+        hooks.append("más reuniones")
+    if re.search(r"\bprospecci[oó]n\b", t, re.I):
+        hooks.append("prospección")
+    # dedupe preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for h in hooks:
+        k = h.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(h)
+    return out
+
+
+def _rewrite_product_value(
+    product: dict[str, Any] | None,
+    *,
+    product_name: str,
+    channel: str = "email",
+    seed: str = "",
+) -> str:
+    """
+    Reescribe el valor del producto en voz de SDR (nosotros…), sin copiar la ficha.
+    Evita conjugaciones rotas («Con X incrementa…») y buzzwords vacíos.
+    """
+    ch = _norm_channel(channel)
+    max_chars = 200 if ch == "email" else (170 if ch == "linkedin" else 110)
+    raw_vp = re.sub(r"\s+", " ", ((product or {}).get("value_proposition") or "").strip()).rstrip(".")
+    raw_vp = _strip_leading_product_name(raw_vp, product_name)
+    cleaned = _scrub_marketing_fluff(raw_vp)
+
+    hooks = _concrete_hooks(cleaned) or _concrete_hooks(raw_vp)
+    pct = next((h for h in hooks if "%" in h), "")
+    channels = next(
+        (h for h in hooks if "linkedin" in h.lower() or "whatsapp" in h.lower()),
+        "",
+    )
+
+    # Variantes cortas ancladas a hechos concretos (no a la prosa de la ficha).
+    variants: list[str] = []
+    if pct and channels:
+        variants.append(
+            f"Con {product_name} automatizamos entre {pct} del trabajo manual de "
+            f"prospección y contacto por {channels}"
+        )
+        variants.append(
+            f"Con {product_name} bajamos el trabajo manual de outbound "
+            f"(cerca de {pct}) unificando {channels}"
+        )
+    elif pct:
+        variants.append(
+            f"Con {product_name} automatizamos alrededor de {pct} de las tareas "
+            "manuales de prospección outbound"
+        )
+    elif channels:
+        variants.append(
+            f"Con {product_name} centralizamos la prospección y el contacto por {channels} "
+            "para agendar más reuniones"
+        )
+        variants.append(
+            f"Con {product_name} orquestamos el outreach por {channels} "
+            "sin perseguir cada lead a mano"
+        )
+
+    if re.search(r"\breuni", cleaned, re.I) or re.search(r"\breuni", raw_vp, re.I):
+        variants.append(
+            f"Con {product_name} ayudamos a conseguir más reuniones comerciales "
+            "con menos seguimiento manual"
+        )
+
+    # Si quedó texto usable tras scrub: conjugar a «nosotros» (nunca pegar 3ª persona cruda).
+    if cleaned and len(cleaned) >= 18:
+        m = _THIRD_PERSON_START.match(cleaned)
+        if m:
+            verb = _to_nosotros_verb(m.group(1))
+            rest = cleaned[m.end() :].strip(" ,")
+            if rest:
+                variants.append(f"Con {product_name} {verb} {rest}")
+        elif re.match(
+            r"^(ayudamos|automatizamos|centralizamos|orquestamos|incrementamos|"
+            r"ofrecemos|aportamos)\b",
+            cleaned,
+            re.I,
+        ):
+            rest = cleaned[0].lower() + cleaned[1:] if cleaned else cleaned
+            variants.append(f"Con {product_name} {rest}")
+        else:
+            # Ficha descriptiva (ej. producto físico): no inventar pitch SaaS.
+            low_c = cleaned[0].lower() + cleaned[1:] if cleaned else cleaned
+            variants.append(f"Con {product_name} ofrecemos {low_c}")
+            variants.append(f"{product_name}: {cleaned[0].upper() + cleaned[1:]}")
+
+    if not variants:
+        variants.append(
+            f"Con {product_name} aportamos valor concreto según lo que necesitás"
+        )
+
+    idx = 0
+    if seed and len(variants) > 1:
+        digest = 0
+        for ch_i in seed.encode("utf-8"):
+            digest = (digest * 31 + ch_i) & 0xFFFFFFFF
+        idx = digest % len(variants)
+    blurb = variants[idx]
+    # Seguridad: nunca dejar 3ª persona pegada tras «Con {producto}».
+    bad = re.search(
+        rf"^Con\s+{re.escape(product_name)}\s+"
+        r"(automatiza|incrementa|aumenta|centraliza|reduce|permite|integra)\b",
+        blurb,
+        re.I,
+    )
+    if bad:
+        blurb = re.sub(
+            rf"(Con\s+{re.escape(product_name)}\s+){bad.group(1)}\b",
+            rf"\1{_to_nosotros_verb(bad.group(1))}",
+            blurb,
+            count=1,
+            flags=re.I,
+        )
+    return _clip_sentence(blurb, max_chars=max_chars)
+
+
 def _how_clause(product: dict[str, Any] | None, *, product_name: str) -> str:
     """Una frase corta del mecanismo — nunca la ficha completa del producto."""
-    how = re.sub(r"\s+", " ", ((product or {}).get("description") or "").strip()).rstrip(".")
-    how = _strip_leading_product_name(how, product_name)
-    if not how or len(how) < 20:
-        return f"{product_name} automatiza el contacto por email, LinkedIn y WhatsApp"
-    how = _clip_sentence(how, max_chars=110)
-    how_l = how[0].lower() + how[1:] if how else how
-    if how_l.startswith(("que ", "el cual ", "la cual ")):
-        return f"{product_name}, {how_l}"
-    if how_l.startswith(("automatiza", "orquesta", "centraliza", "integra", "permite")):
-        return f"{product_name} {how_l}"
-    return f"{product_name}: {how_l}"
+    return _rewrite_product_value(product, product_name=product_name, channel="linkedin")
 
 
 def _outcome_clause(product: dict[str, Any] | None) -> str:
-    vp = _clip_sentence(_vp_clause(product), max_chars=100)
-    clause = vp[0].lower() + vp[1:] if vp else vp
-    return f"Así el equipo gana tiempo en conversaciones reales ({clause})."
+    name = ((product or {}).get("name") or "nuestra solución").strip() or "nuestra solución"
+    return _rewrite_product_value(product, product_name=name, channel="email")
 
 
 def _conversational_value_blurb(
@@ -346,42 +543,18 @@ def _conversational_value_blurb(
     *,
     product_name: str,
     channel: str,
+    seed: str = "",
 ) -> str:
     """
-    Valor corto para CRM/fallback: reescribe, no pega VP+descripción enteras.
-    LinkedIn/WhatsApp quedan mucho más cortos que email.
+    Valor corto para CRM/fallback: reescribe la ficha, no la pega.
+    LinkedIn/WhatsApp quedan más cortos que email.
     """
-    ch = _norm_channel(channel)
-    # LinkedIn puede desarrollar un poco más; WhatsApp queda más corto/chill.
-    max_chars = 220 if ch == "email" else (200 if ch == "linkedin" else 120)
-    vp = re.sub(r"\s+", " ", ((product or {}).get("value_proposition") or "").strip()).rstrip(".")
-    vp = _strip_leading_product_name(vp, product_name)
-    if not vp or len(vp) < 12:
-        return _clip_sentence(
-            f"Con {product_name} automatizamos la prospección outbound "
-            "para enfocarnos en prospectos con interés real",
-            max_chars=max_chars,
-        )
-
-    vp_l = vp[0].lower() + vp[1:] if vp else vp
-    if vp_l.startswith("ayudamos"):
-        blurb = vp if vp.endswith(".") else vp
-    elif re.match(
-        r"^(automatiza|orquesta|centraliza|integra|consolida|permite|reduce)\b",
-        vp_l,
-        re.I,
-    ):
-        # «Automatiza X…» (ficha) → «Con {producto} automatizamos X…»
-        verb = vp_l.split(None, 1)[0]
-        rest = vp_l.split(None, 1)[1] if " " in vp_l else ""
-        # automatiza → automatizamos (simple)
-        if verb.endswith("a") and not verb.endswith("amos"):
-            verb = verb[:-1] + "amos"
-        blurb = f"Con {product_name} {verb} {rest}".strip()
-    else:
-        blurb = f"Con {product_name} {vp_l}"
-
-    return _clip_sentence(blurb, max_chars=max_chars)
+    return _rewrite_product_value(
+        product,
+        product_name=product_name,
+        channel=channel,
+        seed=seed,
+    )
 
 
 def _product_label(product: dict[str, Any] | None, *, brand: str) -> str:

@@ -1305,11 +1305,11 @@ def _valor_one_liner(
     market: Market,
     channel: str = "email",
     explain_more: bool = False,
+    seed: str = "",
 ) -> str:
     """
-    Valor desde ficha, moldeado para leer bien en el mensaje.
-    Si explain_more (1.er toque de secuencia): qué es + qué hace, un poco más largo
-    (excepto WhatsApp: siempre corto/chill).
+    Valor reescrito desde la ficha (voz SDR), nunca copy-paste de VP/descripción.
+    explain_more solo alarga un poco el tope de canal (excepto WhatsApp: siempre corto).
     """
     from app.services.message_structure_variants import _conversational_value_blurb
 
@@ -1318,28 +1318,13 @@ def _valor_one_liner(
     blurb_channel = "email" if (explain_more and ch != "whatsapp") else ch
     blurb = (
         _conversational_value_blurb(
-            product, product_name=product_name, channel=blurb_channel
+            product,
+            product_name=product_name,
+            channel=blurb_channel,
+            seed=seed,
         )
         or ""
     ).strip()
-    desc = re.sub(
-        r"\s+", " ", ((product or {}).get("description") or "").strip()
-    ).rstrip(".")
-    if explain_more and ch != "whatsapp":
-        parts: list[str] = []
-        if blurb and len(blurb) >= 12:
-            parts.append(blurb if blurb.endswith((".", "!", "?")) else f"{blurb}.")
-        if desc and len(desc) >= 20:
-            # Evitar repetir casi lo mismo que el blurb.
-            if blurb.lower()[:40] not in desc.lower() and desc.lower()[:40] not in blurb.lower():
-                clause = desc[0].lower() + desc[1:] if desc else desc
-                parts.append(
-                    f"En concreto, {clause}."
-                    if not clause.endswith((".", "!", "?"))
-                    else f"En concreto, {clause}"
-                )
-        if parts:
-            return " ".join(parts)
     if blurb and len(blurb) >= 12:
         return blurb if blurb.endswith((".", "!", "?")) else f"{blurb}."
     if market == "b2c":
@@ -1464,6 +1449,7 @@ def _slots(
         market=market,
         channel=channel,
         explain_more=explain_more,
+        seed=seed or str(prospect.get("id") or nombre or ""),
     )
 
     if rol:
