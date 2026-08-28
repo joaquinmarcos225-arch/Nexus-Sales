@@ -226,12 +226,26 @@ _BRAVE_QUOTA_EXHAUSTED_UNTIL: float = 0.0
 
 
 def brave_quota_exhausted() -> bool:
-    return time.monotonic() < _BRAVE_QUOTA_EXHAUSTED_UNTIL
+    if time.monotonic() < _BRAVE_QUOTA_EXHAUSTED_UNTIL:
+        return True
+    try:
+        from app.services.provider_guard import brave_quota_paused
+
+        return brave_quota_paused()
+    except Exception:
+        return False
 
 
 def mark_brave_quota_exhausted(*, cooldown_sec: int = 1800) -> None:
     global _BRAVE_QUOTA_EXHAUSTED_UNTIL
     _BRAVE_QUOTA_EXHAUSTED_UNTIL = time.monotonic() + max(300, int(cooldown_sec))
+    try:
+        from app.services.provider_guard import mark_brave_quota_paused
+
+        # Persistir pausa larga (plan mensual); el cooldown corto queda en memoria.
+        mark_brave_quota_paused(reason="402_or_limit", cooldown_sec=None)
+    except Exception:
+        pass
 
 
 def search_web(

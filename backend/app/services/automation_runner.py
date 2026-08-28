@@ -537,6 +537,12 @@ def run_sourcing_refill_tick() -> dict[str, Any]:
 
     db = SessionLocal()
     try:
+        from app.services.provider_guard import sourcing_providers_blocked
+
+        blocked, block_reason = sourcing_providers_blocked(db)
+        if blocked:
+            return {"skipped": True, "reason": "provider_quota_guard", "detail": block_reason}
+
         if try_acquire_job(db, JOB_SOURCING_REFILL, lock_ttl_seconds=_DEFAULT_LOCK_SOURCING_REFILL) is None:
             return {"skipped": True, "reason": "locked"}
         campaigns = _active_campaigns(db)

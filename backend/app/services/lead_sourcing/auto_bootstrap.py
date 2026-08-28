@@ -423,6 +423,22 @@ def auto_source_and_import_until_quota(
             "message": "Sin Brave/Prospeo configurados — no se importaron prospectos nuevos.",
         }
 
+    from app.services.provider_guard import sourcing_providers_blocked
+
+    blocked, block_reason = sourcing_providers_blocked(db)
+    if blocked:
+        return {
+            "ran": False,
+            "skipped": True,
+            "ok": True,
+            "reason": "provider_quota_guard",
+            "prospect_count_before": count_before,
+            "prospect_count_target": target,
+            "prospect_count_after": count_before,
+            "imported": 0,
+            "message": block_reason or "Sourcing pausado por cuota de proveedor.",
+        }
+
     # Rate limit de search-person: NO cortar el bootstrap.
     # El enrich usa fallback Brave+enrich-person y puede importar igual.
     try:
@@ -524,7 +540,7 @@ def auto_source_and_import_until_quota(
         if imported_now <= 0 and not grew and not enrich_moved and not people_grew:
             empty_streak += 1
             # Bajo cupo: seguir más rondas antes de ceder (el tick/background reintenta).
-            streak_cap = 8 if _remaining_slots() > 0 else 4
+            streak_cap = 3 if _remaining_slots() > 0 else 2
             if empty_streak >= streak_cap:
                 break
         else:
