@@ -99,6 +99,16 @@ def clear_brave_quota_pause(db: Session) -> None:
         row.last_result_meta = {"cleared_at": datetime.now(UTC).isoformat()}
 
 
+def resume_sourcing_after_topup(db: Session) -> dict[str, Any]:
+    """Tras recargar créditos: limpia pausa Brave y stalls de campañas."""
+    clear_brave_quota_pause(db)
+    from app.services.lead_sourcing.sourcing_efficiency import clear_all_sourcing_stalls
+
+    cleared = clear_all_sourcing_stalls(db)
+    db.commit()
+    return {"brave_pause_cleared": True, "campaign_stalls_cleared": cleared}
+
+
 def prospeo_min_credits_to_source() -> int:
     raw = (os.getenv("PROSPEO_MIN_CREDITS_TO_SOURCE") or "150").strip()
     try:

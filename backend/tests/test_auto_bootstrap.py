@@ -47,6 +47,15 @@ def test_until_quota_not_configured(_count, _refresh, _ready):
     assert result["imported"] == 0
 
 
+@patch("app.services.provider_guard.sourcing_providers_blocked", return_value=(False, None))
+@patch(
+    "app.services.lead_sourcing.sourcing_efficiency.is_sourcing_stalled",
+    return_value=(False, None),
+)
+@patch(
+    "app.services.lead_sourcing.sourcing_efficiency.record_sourcing_tick",
+    return_value=False,
+)
 @patch("app.services.lead_sourcing.auto_bootstrap._pipeline_company_count", return_value=0)
 @patch("app.services.lead_sourcing.auto_bootstrap._run_mvp_pipeline", return_value={"ok": True, "message": "ok"})
 @patch("app.services.lead_sourcing.auto_bootstrap._import_batch")
@@ -54,7 +63,7 @@ def test_until_quota_not_configured(_count, _refresh, _ready):
 @patch("app.services.lead_sourcing.auto_bootstrap.refresh_lead_sourcing_env")
 @patch("app.services.lead_sourcing.auto_bootstrap.count_campaign_prospects")
 def test_until_quota_imports_from_store_then_pipeline(
-    count_mock, _refresh, _ready, import_mock, _pipe, _co_count
+    count_mock, _refresh, _ready, import_mock, _pipe, _co_count, _stall_rec, _stall, _guard
 ):
     # count_before, remaining×N, count_after — secuencia estable para cupo 6.
     count_mock.side_effect = [1, 1, 4, 6, 6, 6, 6, 6]

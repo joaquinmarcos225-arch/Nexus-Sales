@@ -472,7 +472,7 @@ def resolve_corporate_domain_for_company(
     region_label = (campaign.target_country if campaign else None) or company.country
     region_ctx = resolve_region_search_context(region_label)
     region_phrase = region_ctx.query_phrase if region_ctx else region_label
-    max_queries = 3 if fast_mode else 5
+    max_queries = 2 if fast_mode else 3
     max_guesses = 3 if fast_mode else 4
 
     if try_web_search and not _expired():

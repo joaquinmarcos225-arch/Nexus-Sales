@@ -688,6 +688,10 @@ def run_mvp_company_enrichment(
     prospeo = get_contact_enrichment_provider()
     people_clean = _strip_placeholders(people)
 
+    from app.services.campaign_sequence_channels import campaign_requires_whatsapp
+
+    require_mobile = campaign_requires_whatsapp(campaign)
+
     if not prospeo.is_configured():
         return companies, people_clean, {"skipped": True, "reason": "prospeo_not_configured"}
 
@@ -1269,7 +1273,10 @@ def run_mvp_company_enrichment(
                                 person_id = hit.get("person_id") or hit.get("id")
                                 try:
                                     if person_id:
-                                        detail = enrich_person_by_id(str(person_id))
+                                        detail = enrich_person_by_id(
+                                            str(person_id),
+                                            require_mobile=require_mobile,
+                                        )
                                     else:
                                         detail = enrich_person_record(
                                             first_name=hit.get("first_name"),
@@ -1278,6 +1285,7 @@ def run_mvp_company_enrichment(
                                             company_name=company.name,
                                             company_website=updated.website_url,
                                             linkedin_url=hit.get("linkedin_url"),
+                                            require_mobile=require_mobile,
                                         )
                                     if detail:
                                         hit = {**hit, **detail}

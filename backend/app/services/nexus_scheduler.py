@@ -35,7 +35,7 @@ def start_automation_scheduler() -> None:
     f_sec = int(os.getenv("NEXUS_FOLLOWUPS_POLL_INTERVAL_SEC", "180"))
     i_sec = int(os.getenv("NEXUS_INITIAL_OUTREACH_INTERVAL_SEC", "90"))
     s_sec = int(os.getenv("NEXUS_SEQUENCE_TOUCH_INTERVAL_SEC", "120"))
-    sr_sec = int(os.getenv("NEXUS_SOURCING_REFILL_INTERVAL_SEC", "120"))
+    sr_sec = int(os.getenv("NEXUS_SOURCING_REFILL_INTERVAL_SEC", "300"))
     ir_sec = int(os.getenv("NEXUS_INBOUND_REPLY_POLL_INTERVAL_SEC", "45"))
     crm_ex_sec = int(os.getenv("NEXUS_CRM_EXCLUSIONS_INTERVAL_SEC", "3600"))
     crm_out_sec = int(os.getenv("NEXUS_CRM_OUTBOUND_INTERVAL_SEC", "900"))

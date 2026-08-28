@@ -67,9 +67,10 @@ class WebSearchCompanyProvider(CompanySearchProvider):
 
         profile = parse_company_icp(campaign)
         # Más queries cuando la región tiene varios países (LATAM, EMEA, etc.).
-        # Cap más bajo: early-stop corta antes si ya hay cupo.
         n_locs = max(1, len(getattr(profile, "region_country_names", None) or []) // 2)
-        max_q = min(10, max(5, 3 + n_locs))
+        from app.services.lead_sourcing.sourcing_efficiency import brave_search_limits
+
+        max_q, per_query = brave_search_limits(n_region_locs=n_locs)
         queries = build_company_search_queries(
             campaign,
             profile=profile,
@@ -80,7 +81,6 @@ class WebSearchCompanyProvider(CompanySearchProvider):
             raise ValueError("No hay ICP suficiente para armar la búsqueda web.")
 
         region_ctx = resolve_region_search_context(campaign.target_country)
-        per_query = 10
 
         raw_candidates: list[CompanyCandidateRead] = []
         raw_total = 0

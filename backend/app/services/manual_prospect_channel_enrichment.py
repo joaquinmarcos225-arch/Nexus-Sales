@@ -882,7 +882,10 @@ def enrich_missing_channels(
         sleep_sec = 1.2
     else:
         effective_deadline = deadline_at
-        max_rounds = 4
+        from app.services.provider_guard import sourcing_providers_blocked
+
+        blocked, _ = sourcing_providers_blocked()
+        max_rounds = 2 if blocked else 4
         sleep_sec = 1.2
 
     def _merge(chunk: dict[str, Any]) -> None:

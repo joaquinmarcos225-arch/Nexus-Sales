@@ -551,7 +551,7 @@ def run_sourcing_refill_tick() -> dict[str, Any]:
         imported_total = 0
         errors: list[str] = []
         per_campaign: list[dict[str, Any]] = []
-        max_campaigns = int(os.getenv("NEXUS_SOURCING_REFILL_MAX_CAMPAIGNS_PER_TICK", "2"))
+        max_campaigns = int(os.getenv("NEXUS_SOURCING_REFILL_MAX_CAMPAIGNS_PER_TICK", "1"))
         for c in campaigns:
             if refilled >= max_campaigns:
                 break

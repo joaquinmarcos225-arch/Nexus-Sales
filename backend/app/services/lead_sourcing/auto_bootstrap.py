@@ -168,10 +168,9 @@ def _maybe_kickoff_new_prospects(
 
 
 def _max_pipeline_passes_default() -> int:
-    raw = (getenv("LEAD_SOURCING_AUTO_MAX_PASSES") or os.getenv("LEAD_SOURCING_AUTO_MAX_PASSES") or "12").strip()
-    if raw.isdigit():
-        return max(1, min(20, int(raw)))
-    return 12
+    from app.services.lead_sourcing.sourcing_efficiency import max_auto_passes_default
+
+    return max_auto_passes_default()
 
 
 def _effective_passes_limit(
@@ -179,18 +178,12 @@ def _effective_passes_limit(
     *,
     max_pipeline_passes: int | None = None,
 ) -> int:
-    """Más cupo pendiente → más pasadas hasta un tope razonable."""
-    need = max(0, int(remaining_slots))
-    if need <= 0:
-        return 0
-    base = (
-        max_pipeline_passes
-        if max_pipeline_passes is not None
-        else _max_pipeline_passes_default()
+    from app.services.lead_sourcing.sourcing_efficiency import effective_passes_limit
+
+    return effective_passes_limit(
+        remaining_slots,
+        max_pipeline_passes=max_pipeline_passes,
     )
-    # ~2 pasadas por prospecto faltante (search + enrich + import).
-    scaled = max(base, min(20, need * 2))
-    return max(1, scaled)
 
 
 def _pipeline_company_count(db: Session, campaign_id: int) -> int:
@@ -225,13 +218,9 @@ def _enrich_progress_snapshot(db: Session, campaign_id: int) -> dict[str, Any]:
 
 
 def _passes_for_remaining(remaining_slots: int, *, hard_cap: int | None = None) -> int:
-    """Más cupo pendiente → más pasadas (ritmo continuo por tick / background)."""
-    need = max(0, int(remaining_slots))
-    if need <= 0:
-        return 0
-    suggested = max(3, min(15, need))
-    cap = hard_cap if hard_cap is not None else _max_pipeline_passes_default()
-    return max(1, min(max(cap, 15), suggested))
+    from app.services.lead_sourcing.sourcing_efficiency import passes_for_remaining
+
+    return passes_for_remaining(remaining_slots, hard_cap=hard_cap)
 
 
 def _run_mvp_pipeline(db: Session, campaign: Campaign, *, remaining_slots: int = 40) -> dict[str, Any]:
@@ -241,11 +230,15 @@ def _run_mvp_pipeline(db: Session, campaign: Campaign, *, remaining_slots: int =
     )
     from app.services.lead_sourcing.prospeo_contact_validation import is_prospeo_searchable_domain
 
-    # Escalar búsqueda al cupo pendiente (over-fetch search barato; import corta al cupo).
+    from app.services.lead_sourcing.sourcing_efficiency import (
+        auto_company_limit,
+        auto_people_limit,
+        should_block_quota_force_full,
+    )
+
     need = max(1, int(remaining_slots))
-    company_limit = min(60, max(20, need))
-    # Pedir ~2.5× cupo pendiente en search; el import gate deja solo los buenos.
-    people_limit = min(100, max(40, need * 3))
+    company_limit = auto_company_limit(need)
+    people_limit = auto_people_limit(need)
     raw_limit = (getenv("LEAD_SOURCING_AUTO_COMPANY_LIMIT") or "").strip()
     if raw_limit.isdigit():
         company_limit = max(1, min(80, int(raw_limit)))
@@ -294,6 +287,8 @@ def _run_mvp_pipeline(db: Session, campaign: Campaign, *, remaining_slots: int =
                 if pool_dead:
                     if brave_quota_exhausted() and campaign_has_role:
                         step = "people_direct"
+                    elif should_block_quota_force_full(db, int(campaign.id)):
+                        step = "people_direct" if campaign_has_role else "enrich"
                     else:
                         step = "full"
                         meta["quota_force_full"] = True
@@ -423,6 +418,10 @@ def auto_source_and_import_until_quota(
             "message": "Sin Brave/Prospeo configurados — no se importaron prospectos nuevos.",
         }
 
+    from app.services.lead_sourcing.sourcing_efficiency import (
+        is_sourcing_stalled,
+        record_sourcing_tick,
+    )
     from app.services.provider_guard import sourcing_providers_blocked
 
     blocked, block_reason = sourcing_providers_blocked(db)
@@ -437,6 +436,20 @@ def auto_source_and_import_until_quota(
             "prospect_count_after": count_before,
             "imported": 0,
             "message": block_reason or "Sourcing pausado por cuota de proveedor.",
+        }
+
+    stalled, stall_reason = is_sourcing_stalled(db, campaign.id)
+    if stalled:
+        return {
+            "ran": False,
+            "skipped": True,
+            "ok": True,
+            "reason": "sourcing_stalled",
+            "prospect_count_before": count_before,
+            "prospect_count_target": target,
+            "prospect_count_after": count_before,
+            "imported": 0,
+            "message": stall_reason or "Sourcing pausado (sin importaciones recientes).",
         }
 
     # Rate limit de search-person: NO cortar el bootstrap.
@@ -547,6 +560,16 @@ def auto_source_and_import_until_quota(
             empty_streak = 0
 
     count_after = count_campaign_prospects(db, campaign.id)
+    now_stalled = record_sourcing_tick(
+        db,
+        campaign.id,
+        imported=total_imported,
+        pipeline_runs=pipeline_runs,
+    )
+    try:
+        db.commit()
+    except Exception:  # noqa: BLE001
+        pass
     msg: str | None = None
     if total_imported > 0:
         msg = (
@@ -610,6 +633,12 @@ def auto_source_and_import_until_quota(
         if last_pipeline_message:
             msg += f" ({last_pipeline_message})"
 
+    if now_stalled and count_after < target:
+        msg = (
+            (msg or f"{count_after} de {target} prospecciones.")
+            + " Sourcing pausado para no gastar créditos; se reanuda al importar o recargar saldo."
+        )
+
     _logger.info(
         "[auto-bootstrap] campaign=%s before=%s after=%s target=%s imported=%s passes=%s",
         campaign.id,
@@ -635,6 +664,8 @@ def auto_source_and_import_until_quota(
         "message": msg,
         "sequence_started": kickoff_started,
         "sequence_held": kickoff_held,
+        "pipeline_runs": pipeline_runs,
+        "sourcing_stalled": now_stalled,
     }
 
 
@@ -733,11 +764,11 @@ def schedule_campaign_sourcing_background(campaign_id: int) -> bool:
 
             # Seguir buscando mientras no se cumpla el cupo (varias rondas en un solo arranque).
             if target > 0 and count_now < target:
-                max_rounds = max(1, min(5, int(os.getenv("NEXUS_SOURCING_BG_MAX_ROUNDS", "4"))))
+                max_rounds = max(1, min(3, int(os.getenv("NEXUS_SOURCING_BG_MAX_ROUNDS", "2"))))
                 round_num = 0
                 while count_now < target and round_num < max_rounds:
                     remaining = target - count_now
-                    passes = _passes_for_remaining(remaining, hard_cap=15)
+                    passes = _passes_for_remaining(remaining, hard_cap=5)
                     sourcing = auto_source_and_import_until_quota(
                         db, campaign, max_pipeline_passes=passes
                     )

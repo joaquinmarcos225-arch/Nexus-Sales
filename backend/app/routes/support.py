@@ -151,6 +151,32 @@ def ops_patch_provider_balance(
     return build_capacity_report(db, refresh=False)
 
 
+@router.post("/support/ops/sourcing/resume")
+def ops_resume_sourcing(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Tras recargar Prospeo/Brave: limpia pausas y reanuda sourcing de campañas."""
+    _require_ops(user)
+    from app.services.provider_guard import resume_sourcing_after_topup
+
+    return resume_sourcing_after_topup(db)
+
+
+@router.post("/support/ops/sourcing/campaigns/{campaign_id}/clear-stall")
+def ops_clear_campaign_sourcing_stall(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    _require_ops(user)
+    from app.services.lead_sourcing.sourcing_efficiency import clear_sourcing_stall
+
+    clear_sourcing_stall(db, campaign_id)
+    db.commit()
+    return {"ok": True, "campaign_id": campaign_id, "stall_cleared": True}
+
+
 @router.get("/support/ops/threads/{thread_id}")
 def ops_get_thread(
     thread_id: int,
