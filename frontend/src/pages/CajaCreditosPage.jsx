@@ -18,6 +18,7 @@ import { MyCreditsSummary } from '../components/credits/MyCreditsSummary.jsx'
 import { CreditsUsageBar } from '../components/credits/CreditsUsageBar.jsx'
 import { CreditsStatCard } from '../components/credits/CreditsStatCard.jsx'
 import { CreditsTransferChat } from '../components/credits/CreditsTransferChat.jsx'
+import { CreditTopUpPanel } from '../components/credits/CreditTopUpPanel.jsx'
 import { notifyCreditsChanged, useMyCredits } from '../hooks/useMyCredits.js'
 
 const TABS = [
@@ -199,6 +200,12 @@ export default function CajaCreditosPage() {
 
       {tab === 'gestion' ? (
         <div className="space-y-8">
+          <CreditTopUpPanel
+            availableBalance={
+              isGerente ? directorAvailable : myCreditsAvailable ?? myAvailable
+            }
+          />
+
           {showMyCredits && !myCreditsLoading && !ctxLoading ? (
             <section className="rounded-2xl border border-nx-border bg-white p-5 shadow-sm shadow-nx-ink/5">
               <MyCreditsSummary
@@ -251,7 +258,7 @@ export default function CajaCreditosPage() {
                 </p>
                 {total < 1 ? (
                   <p className="mt-3 text-sm text-nx-ink">
-                    El pool está en 0. Pedile a Nexus Support que acredite créditos del plan o un top-up.
+                    El pool está en 0. Usá <strong>Recargar créditos</strong> arriba o pedile a Nexus Support.
                   </p>
                 ) : null}
               </div>

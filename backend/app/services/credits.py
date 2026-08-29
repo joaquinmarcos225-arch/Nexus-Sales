@@ -28,6 +28,14 @@ def assert_gerente_actor(user: User) -> None:
         raise CreditError("Solo el owner/directora puede gestionar el pool de créditos de la empresa")
 
 
+def assert_purchase_request_actor(user: User) -> None:
+    """Director, owner o manager pueden solicitar compra de créditos."""
+    role = _user_role(user)
+    if role in (UserRole.gerente, UserRole.owner, UserRole.manager):
+        return
+    raise CreditError("Solo director o manager pueden solicitar compra de créditos")
+
+
 def assert_manager_or_gerente_actor(user: User) -> None:
     if _user_role(user) not in (UserRole.manager, UserRole.gerente, UserRole.owner):
         raise CreditError("Solo owner, gerente o manager pueden gestionar transferencias de créditos")

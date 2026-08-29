@@ -435,6 +435,21 @@ export async function fetchMyCredits() {
   return request('/users/me/credits')
 }
 
+export async function fetchCreditPacks() {
+  return request('/credit-packs')
+}
+
+export async function fetchCreditPacksInfo() {
+  return request('/credit-packs/info')
+}
+
+export async function requestCreditPurchase(companyId, packKey) {
+  return request(`/companies/${companyId}/credit-purchase-requests`, {
+    method: 'POST',
+    body: JSON.stringify({ pack_key: packKey }),
+  })
+}
+
 export async function applyPlanWalletCredits(companyId) {
   return request(`/companies/${companyId}/wallet/apply-plan`, { method: 'POST' })
 }

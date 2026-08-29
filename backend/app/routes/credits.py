@@ -17,6 +17,9 @@ from app.schemas.credit import (
     CreditLedgerRead,
     CreditPeerTransferRead,
     CreditTransferCreate,
+    CreditPackRead,
+    CreditPurchaseRequestCreate,
+    CreditPurchaseRequestRead,
     SellerAllocationCreate,
     WalletRead,
     WalletTopUp,
@@ -32,6 +35,7 @@ from app.services.credits import (
     allocate_to_seller,
     apply_plan_credits_to_company,
     assert_gerente_actor,
+    assert_purchase_request_actor,
     assert_transfer_actor,
     get_user_available_credits,
     get_wallet_totals,
@@ -387,3 +391,91 @@ def _ensure_aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+@router.get("/credit-packs", response_model=list[CreditPackRead])
+def list_credit_packs_route(
+    user: User = Depends(get_current_user),
+) -> list[CreditPackRead]:
+    from app.services.credit_packs import list_credit_packs
+
+    _ = user  # auth required
+    packs = list_credit_packs()
+    return [CreditPackRead.model_validate(p) for p in packs]
+
+
+@router.get("/credit-packs/info")
+def credit_packs_info(user: User = Depends(get_current_user)) -> dict:
+    from app.services.credit_packs import LOW_CREDIT_THRESHOLD, payment_instructions_text
+
+    _ = user
+    return {
+        "low_credit_threshold": LOW_CREDIT_THRESHOLD,
+        "payment_instructions": payment_instructions_text(),
+        "price_per_credit_usd": 0.50,
+    }
+
+
+@router.post(
+    "/companies/{company_id}/credit-purchase-requests",
+    response_model=CreditPurchaseRequestRead,
+)
+def create_credit_purchase_request(
+    company_id: int,
+    payload: CreditPurchaseRequestCreate,
+    db: Session = Depends(get_db),
+    _company=Depends(get_company),
+    user: User = Depends(get_current_user),
+) -> CreditPurchaseRequestRead:
+    from app.services.credit_packs import get_credit_pack, payment_instructions_text
+    from app.services.support import add_message, get_or_create_user_thread
+
+    try:
+        assert_purchase_request_actor(user)
+    except CreditError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+    pack = get_credit_pack(payload.pack_key)
+    if pack is None:
+        raise HTTPException(status_code=400, detail="Paquete de créditos inválido")
+
+    company = db.get(Company, company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail="Empresa no encontrada")
+
+    try:
+        _, total, assigned, unassigned = get_wallet_totals(db, company_id)
+    except CreditError:
+        total, assigned, unassigned = 0, 0, 0
+
+    my_available = get_user_available_credits(db, company_id, user.id)
+    body = (
+        "[Solicitud de compra de créditos]\n"
+        f"Paquete: {pack.label} ({pack.credits} créditos)\n"
+        f"Precio: USD {pack.price_usd:.2f}\n"
+        f"Solicitante: {user.name} ({normalize_role(user.role)})\n"
+        f"Empresa: {company.name} (id {company_id})\n"
+        f"Pool actual: {total} total · {unassigned} disponible para asignar\n"
+        f"Saldo personal solicitante: {my_available}\n\n"
+        "Confirmo que quiero proceder con la compra. Aguardo instrucciones de pago."
+    )
+
+    thread = get_or_create_user_thread(db, company_id=company_id, user=user)
+    try:
+        add_message(db, thread=thread, author=user, role="user", body=body)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    db.commit()
+
+    instructions = payment_instructions_text()
+    return CreditPurchaseRequestRead(
+        pack_key=pack.key,
+        credits=pack.credits,
+        price_usd=pack.price_usd,
+        support_thread_id=int(thread.id),
+        payment_instructions=instructions,
+        message=(
+            f"Solicitud enviada: {pack.label} ({pack.credits} créditos · USD {pack.price_usd:.2f}). "
+            "Te respondemos por Soporte con el pago."
+        ),
+    )

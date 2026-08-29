@@ -80,3 +80,26 @@ class CreditAllocationRead(BaseModel):
 class CreditAllocationReadWithSeller(CreditAllocationRead):
     seller_name: str
     seller_email: str
+
+
+class CreditPackRead(BaseModel):
+    key: str
+    label: str
+    credits: int
+    price_usd: float
+    price_per_credit_usd: float
+    description: str
+
+
+class CreditPurchaseRequestCreate(BaseModel):
+    pack_key: str = Field(min_length=1, max_length=8)
+
+
+class CreditPurchaseRequestRead(BaseModel):
+    ok: bool = True
+    pack_key: str
+    credits: int
+    price_usd: float
+    support_thread_id: int
+    payment_instructions: str
+    message: str

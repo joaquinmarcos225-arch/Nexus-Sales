@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom'
 import { useMyCredits } from '../hooks/useMyCredits.js'
 
+const LOW_THRESHOLD = 10
+
 export function HeaderCreditBadge() {
   const { available, showCredits, loading } = useMyCredits()
 
@@ -10,12 +12,20 @@ export function HeaderCreditBadge() {
 
   const n = Number(available) || 0
   const label = n === 1 ? 'crédito' : 'créditos'
+  const low = n <= LOW_THRESHOLD
 
   return (
     <Link
       to="/creditos"
-      className="nx-topbar-credits-badge inline-flex"
-      title={`${n.toLocaleString('es-AR')} ${label} disponibles — ver Créditos de contacto`}
+      className={[
+        'nx-topbar-credits-badge inline-flex',
+        low ? 'ring-2 ring-amber-400/80 bg-amber-50/90' : '',
+      ].join(' ')}
+      title={
+        low
+          ? `Saldo bajo: ${n} ${label}. Tocá para recargar.`
+          : `${n.toLocaleString('es-AR')} ${label} disponibles — ver Créditos de contacto`
+      }
       aria-label={`${n.toLocaleString('es-AR')} ${label} disponibles`}
     >
       <svg className="size-4 shrink-0 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
@@ -29,6 +39,9 @@ export function HeaderCreditBadge() {
         {loading ? '…' : n.toLocaleString('es-AR')}
       </span>
       <span className="hidden lg:inline text-zinc-400 font-normal">{label}</span>
+      {low && !loading ? (
+        <span className="hidden sm:inline text-[10px] font-bold uppercase text-amber-800">Recargar</span>
+      ) : null}
     </Link>
   )
 }

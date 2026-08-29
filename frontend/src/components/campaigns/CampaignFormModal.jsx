@@ -776,7 +776,11 @@ export function CampaignFormModal({
               {prospectExceedsCredits ? (
                 <p id="camp-prospects-error" className="mt-1 text-xs font-medium text-red-600">
                   Superás tu saldo: tenés {formatContactCredits(creditCap)} disponibles. Bajá las
-                  prospecciones o pedí más créditos a tu manager.
+                  prospecciones o{' '}
+                  <a href="/creditos" className="font-semibold underline">
+                    recargá créditos
+                  </a>
+                  .
                 </p>
               ) : (
                 <p className="mt-1 text-[11px] text-nx-subtle">
