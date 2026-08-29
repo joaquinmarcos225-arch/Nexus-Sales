@@ -86,7 +86,7 @@ const BASE_NAV = [
     label: 'Consola',
     icon: 'resumen',
     activePrefix: '/dashboard',
-    activeExclude: ['/dashboard/responder'],
+    activeExclude: ['/dashboard/responder', '/dashboard/pipeline'],
   },
   {
     type: 'link',
@@ -115,7 +115,17 @@ const SUPPORT_NAV = { type: 'link', to: '/soporte', label: 'Soporte', icon: 'sop
 export function sidebarNavForRole(userOrRole) {
   const user = typeof userOrRole === 'object' && userOrRole !== null ? userOrRole : null
   const role = normalizeRole(user?.role)
-  const items = [...BASE_NAV, TEAM_NAV]
+  const items = [...BASE_NAV]
+  if (isManagerOrGerente(user ?? { role: user?.role, permissions: [] })) {
+    items.push({
+      type: 'link',
+      to: '/dashboard/pipeline',
+      label: 'Pipeline',
+      icon: 'pipeline',
+      activePrefix: '/dashboard/pipeline',
+    })
+  }
+  items.push(TEAM_NAV)
   if (role === ROLES.gerente || role === ROLES.owner || role === ROLES.manager || role === ROLES.sdr) {
     items.push(CREDITS_NAV)
   }

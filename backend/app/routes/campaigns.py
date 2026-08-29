@@ -111,7 +111,12 @@ def _outreach_mode_row(row: Campaign) -> OutreachMode:
         return OutreachMode.b2b
 
 
-def _serialize_campaign(row: Campaign, db: Session | None = None) -> CampaignRead:
+def _serialize_campaign(
+    row: Campaign,
+    db: Session | None = None,
+    *,
+    sourcing_light: bool = False,
+) -> CampaignRead:
     product_name = row.product.name if row.product else "Producto desconocido"
     seller_name = row.seller.name if row.seller else "Vendedor desconocido"
     status = CampaignStatus(row.status)
@@ -120,7 +125,9 @@ def _serialize_campaign(row: Campaign, db: Session | None = None) -> CampaignRea
     if db is not None and int(row.prospect_count or 0) > 0:
         from app.services.lead_sourcing.sourcing_efficiency import build_campaign_sourcing_status
 
-        sourcing_status = build_campaign_sourcing_status(db, int(row.id))
+        sourcing_status = build_campaign_sourcing_status(
+            db, int(row.id), light=sourcing_light
+        )
 
     return CampaignRead(
         id=row.id,
@@ -285,7 +292,7 @@ def list_company_campaigns(
     from app.services.campaign_visibility import campaign_is_visible_to_user
 
     out = [
-        _serialize_campaign(r)
+        _serialize_campaign(r, db, sourcing_light=True)
         for r in rows
         if _include_campaign(r) and campaign_is_visible_to_user(user, r)
     ]

@@ -6,6 +6,7 @@ import { AlertBanner } from '../components/AlertBanner.jsx'
 import { CampaignFormModal } from '../components/campaigns/CampaignFormModal.jsx'
 import { PiePercentLabel, BarTopLabel } from '../components/charts/ChartLabels.jsx'
 import { CampaignStatusBadge } from '../components/campaigns/CampaignStatusBadge.jsx'
+import { SourcingStatusChip } from '../components/campaigns/SourcingStatusChip.jsx'
 import { PageHeader } from '../layout/PageHeader'
 import { SortFilterTable } from '../components/dashboard/SortFilterTable.jsx'
 import { StatCard } from '../components/ui/Card.jsx'
@@ -354,6 +355,15 @@ export default function CampanasPage() {
             {cur}/{target}
           </span>
         )
+      },
+    },
+    {
+      key: 'sourcing',
+      label: 'Búsqueda',
+      thClassName: 'w-[9%]',
+      render: (r) => {
+        const c = campaigns.find((x) => x.id === r.campaign_id)
+        return <SourcingStatusChip status={c?.sourcing_status} />
       },
     },
     {

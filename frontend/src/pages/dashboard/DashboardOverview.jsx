@@ -12,6 +12,8 @@ import {
   sequenceCalendarDayIndex,
 } from '../../utils/sequenceUi.js'
 import { useAuth } from '../../context/AuthContext.jsx'
+import { isManagerOrGerente } from '../../data/navigation.js'
+import { countByPipelineStage } from '../../utils/pipelineStages.js'
 import { WorkspaceGoLiveChecklist } from '../../components/dashboard/WorkspaceGoLiveChecklist.jsx'
 import { SdrConsolePillars } from '../../components/dashboard/SdrConsolePillars.jsx'
 import { ConsoleActionPanel } from '../../components/dashboard/ConsoleActionPanel.jsx'
@@ -48,6 +50,8 @@ export default function DashboardOverview() {
   const intel = data?.intelligence
   const commercial = data?.commercial
   const firstName = userDisplayFirstName(user)
+  const showManagerPipeline = isManagerOrGerente(user)
+  const pipelineCounts = useMemo(() => countByPipelineStage(pulseRows), [pulseRows])
 
   const nexusPulse = useMemo(() => {
     const rows = pulseRows || []
@@ -182,6 +186,35 @@ export default function DashboardOverview() {
               />
             </div>
           </PageSection>
+
+          {showManagerPipeline ? (
+            <PageSection
+              title="Pipeline del equipo"
+              description="Interesados y reuniones — vista manager."
+              collapsible={false}
+            >
+              <div className="flex flex-wrap items-center gap-3">
+                <Link
+                  to="/dashboard/pipeline"
+                  className="rounded-lg bg-nx-ink px-4 py-2 text-xs font-semibold text-white hover:opacity-90"
+                >
+                  Ver pipeline completo
+                </Link>
+                <span className="text-xs text-nx-muted">
+                  Interesados:{' '}
+                  <strong className="text-nx-ink">{pipelineCounts.interesado || 0}</strong>
+                  {' · '}
+                  Reuniones:{' '}
+                  <strong className="text-nx-ink">
+                    {(pipelineCounts.reunion_agendada || 0) + (pipelineCounts.reunion_pendiente || 0)}
+                  </strong>
+                  {' · '}
+                  Respondieron:{' '}
+                  <strong className="text-nx-ink">{pipelineCounts.respondio || 0}</strong>
+                </span>
+              </div>
+            </PageSection>
+          ) : null}
         </div>
       ) : null}
 

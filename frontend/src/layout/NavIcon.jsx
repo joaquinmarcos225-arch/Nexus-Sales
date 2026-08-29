@@ -103,6 +103,16 @@ export function NavIcon({ name, className = 'size-5' }) {
           />
         </svg>
       )
+    case 'pipeline':
+      return (
+        <svg {...common}>
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12"
+          />
+        </svg>
+      )
     case 'campanas':
       return (
         <svg {...common}>

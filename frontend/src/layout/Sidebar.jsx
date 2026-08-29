@@ -10,7 +10,7 @@ import { ChromeWaveOverlay } from '../components/brand/ChromeWaveOverlay.jsx'
 import { UserAvatar } from '../components/user/UserAvatar.jsx'
 
 const SECTION_ORDER = [
-  { title: 'Principal', labels: ['Consola', 'Responder', 'Campañas'] },
+  { title: 'Principal', labels: ['Consola', 'Responder', 'Pipeline', 'Campañas'] },
   { title: 'Gestión', labels: ['Equipo', 'Créditos', 'Productos/Servicios'] },
   { title: 'Sistema', labels: ['Configuración', 'Soporte'] },
   { title: null, labels: ['Mi Perfil'] },

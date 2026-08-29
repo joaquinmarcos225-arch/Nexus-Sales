@@ -203,6 +203,7 @@ def build_campaign_sourcing_status(
     campaign_id: int,
     *,
     imported_count: int | None = None,
+    light: bool = False,
 ) -> dict[str, Any]:
     """Estado legible para UI: cupo, pausa por créditos o stall ICP."""
     from app.models.campaign import Campaign
@@ -234,7 +235,24 @@ def build_campaign_sourcing_status(
 
     stall = get_stall_state(db, campaign_id)
     stalled, stall_reason = is_sourcing_stalled(db, campaign_id)
-    blocked, block_reason = sourcing_providers_blocked(db)
+    if light:
+        import os
+
+        from app.services.provider_guard import brave_quota_paused
+
+        blocked = (os.getenv("BRAVE_SOURCING_PAUSED") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ) or brave_quota_paused(db)
+        block_reason = (
+            "Brave pausado manualmente (BRAVE_SOURCING_PAUSED)"
+            if blocked
+            else None
+        )
+    else:
+        blocked, block_reason = sourcing_providers_blocked(db)
 
     if quota_met:
         state = "complete"
