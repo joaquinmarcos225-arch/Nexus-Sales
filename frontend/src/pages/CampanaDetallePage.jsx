@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useCompany } from '../context/CompanyContext.jsx'
 import { AlertBanner } from '../components/AlertBanner.jsx'
 import { ProspectQuotaBar } from '../components/campaigns/ProspectQuotaBar.jsx'
+import { CampaignSourcingStatus } from '../components/campaigns/CampaignSourcingStatus.jsx'
 import { ManualProspectInsertCard } from '../components/campaigns/ManualProspectInsertCard.jsx'
 import { ChannelEnrichCountdown } from '../components/campaigns/ChannelEnrichCountdown.jsx'
 import { CampaignStatusBadge } from '../components/campaigns/CampaignStatusBadge.jsx'
@@ -503,13 +504,14 @@ export default function CampanaDetallePage() {
       !companyMismatch &&
       !isIndividualContainer &&
       Number(campaign.prospect_count) > 0 ? (
-        <div className="rounded-xl border border-nx-border bg-nx-card px-4 py-3 shadow-sm">
+        <div className="space-y-3 rounded-xl border border-nx-border bg-nx-card px-4 py-3 shadow-sm">
           <ProspectQuotaBar
             data-tour="campaign-quota"
             current={prospectsLoading ? campaign.prospects_imported ?? prospectsInCampaign : prospectsInCampaign}
             target={campaign.prospect_count}
             hint="Meta de búsqueda ICP (cuántos contactos querés encontrar). No es lo mismo que ‘ya contactados’."
           />
+          <CampaignSourcingStatus status={campaign.sourcing_status} compact />
         </div>
       ) : null}
 

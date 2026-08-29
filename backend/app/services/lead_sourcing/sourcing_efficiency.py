@@ -181,7 +181,6 @@ def clear_sourcing_stall(db: Session, campaign_id: int) -> None:
 
 
 def clear_all_sourcing_stalls(db: Session) -> int:
-    """Limpia stalls de todas las campañas (p. ej. tras recargar créditos)."""
     from sqlalchemy import select
 
     from app.models.lead_sourcing_pipeline import LeadSourcingPipeline
@@ -197,3 +196,69 @@ def clear_all_sourcing_stalls(db: Session) -> int:
     if cleared:
         db.flush()
     return cleared
+
+
+def build_campaign_sourcing_status(
+    db: Session,
+    campaign_id: int,
+    *,
+    imported_count: int | None = None,
+) -> dict[str, Any]:
+    """Estado legible para UI: cupo, pausa por créditos o stall ICP."""
+    from app.models.campaign import Campaign
+    from app.services.campaign_prospects import count_campaign_prospects
+    from app.services.provider_guard import sourcing_providers_blocked
+
+    campaign = db.get(Campaign, int(campaign_id))
+    if campaign is None:
+        return {}
+
+    target = max(0, int(campaign.prospect_count or 0))
+    if target <= 0:
+        return {
+            "state": "no_quota",
+            "message": "Sin meta ICP configurada.",
+            "imported": 0,
+            "target": 0,
+            "remaining": 0,
+            "quota_met": True,
+        }
+
+    current = (
+        max(0, int(imported_count))
+        if imported_count is not None
+        else count_campaign_prospects(db, int(campaign_id))
+    )
+    remaining = max(0, target - current)
+    quota_met = current >= target
+
+    stall = get_stall_state(db, campaign_id)
+    stalled, stall_reason = is_sourcing_stalled(db, campaign_id)
+    blocked, block_reason = sourcing_providers_blocked(db)
+
+    if quota_met:
+        state = "complete"
+        message = "Cupo ICP completo. Nexus sigue con outreach sobre los importados."
+    elif blocked:
+        state = "paused_provider"
+        message = block_reason or "Sourcing pausado por créditos de proveedor."
+    elif stalled:
+        state = "paused_stall"
+        message = stall_reason or "Sourcing pausado tras varios intentos sin importar."
+    else:
+        state = "searching"
+        message = f"Buscando {remaining} prospecto(s) que coincidan con el ICP."
+
+    return {
+        "state": state,
+        "message": message,
+        "imported": current,
+        "target": target,
+        "remaining": remaining,
+        "quota_met": quota_met,
+        "stalled": bool(stalled or stall.get("stalled")),
+        "provider_blocked": bool(blocked),
+        "provider_block_reason": block_reason,
+        "zero_import_ticks": int(stall.get("zero_import_ticks") or 0),
+        "retry_after": stall.get("retry_after"),
+    }

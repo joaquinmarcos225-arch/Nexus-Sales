@@ -78,7 +78,7 @@ export function canAccessOperations(user) {
   return normalizeRole(user.role) === ROLES.manager
 }
 
-/** Flujo diario: Consola + Campañas (los contactos viven en el CRM del cliente). */
+/** Flujo diario: Consola + Responder + Campañas. */
 const BASE_NAV = [
   {
     type: 'link',
@@ -86,6 +86,15 @@ const BASE_NAV = [
     label: 'Consola',
     icon: 'resumen',
     activePrefix: '/dashboard',
+    activeExclude: ['/dashboard/responder'],
+  },
+  {
+    type: 'link',
+    to: '/dashboard/responder',
+    label: 'Responder',
+    icon: 'responder',
+    activePrefix: '/dashboard/responder',
+    badge: 'responder',
   },
   { type: 'link', to: '/campanas', label: 'Campañas', icon: 'campanas' },
 ]
@@ -137,7 +146,20 @@ export function isDashboardChildActive(pathname, sub) {
 
 export function isNavItemActive(pathname, item) {
   if (item.activePrefix) {
-    return pathname === item.activePrefix || pathname.startsWith(`${item.activePrefix}/`)
+    const prefixMatch =
+      pathname === item.activePrefix || pathname.startsWith(`${item.activePrefix}/`)
+    if (!prefixMatch) {
+      return false
+    }
+    const excludes = item.activeExclude
+    if (Array.isArray(excludes)) {
+      for (const ex of excludes) {
+        if (pathname === ex || pathname.startsWith(`${ex}/`)) {
+          return false
+        }
+      }
+    }
+    return true
   }
   if (item.end === true) {
     return pathname === item.to

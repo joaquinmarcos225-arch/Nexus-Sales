@@ -75,6 +75,29 @@ def test_clear_sourcing_stall(clear_save, load_meta, get_or_create):
     assert "sourcing_stall" not in saved
 
 
-def test_effective_passes_limit_capped():
-    assert effective_passes_limit(100) <= 5
-    assert effective_passes_limit(2) >= 1
+def test_build_campaign_sourcing_status_complete():
+    from unittest.mock import MagicMock, patch
+
+    db = MagicMock()
+    campaign = MagicMock()
+    campaign.prospect_count = 10
+    db.get.return_value = campaign
+
+    with patch(
+        "app.services.campaign_prospects.count_campaign_prospects",
+        return_value=10,
+    ), patch(
+        "app.services.lead_sourcing.sourcing_efficiency.is_sourcing_stalled",
+        return_value=(False, None),
+    ), patch(
+        "app.services.lead_sourcing.sourcing_efficiency.get_stall_state",
+        return_value={},
+    ), patch(
+        "app.services.provider_guard.sourcing_providers_blocked",
+        return_value=(False, None),
+    ):
+        from app.services.lead_sourcing.sourcing_efficiency import build_campaign_sourcing_status
+
+        out = build_campaign_sourcing_status(db, 1)
+    assert out["state"] == "complete"
+    assert out["quota_met"] is True

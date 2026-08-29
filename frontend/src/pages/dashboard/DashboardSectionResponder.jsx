@@ -54,6 +54,8 @@ export default function DashboardSectionResponder() {
 
   useEffect(() => {
     void load()
+    const timer = window.setInterval(() => void load(), 30_000)
+    return () => window.clearInterval(timer)
   }, [load])
 
   const items = Array.isArray(data?.items) ? data.items : []
@@ -63,7 +65,7 @@ export default function DashboardSectionResponder() {
     <>
       <PageHeader
         title="Responder"
-        description="Conversaciones con borrador listo: email, LinkedIn y WhatsApp Web."
+        description="Conversaciones con borrador listo. Prioridad máxima del día — email, LinkedIn y WhatsApp."
         actions={
           <button
             type="button"

@@ -4,19 +4,17 @@ import { fetchResponderInbox } from '../utils/api.js'
 const POLL_MS = 45_000
 
 export function useResponderPending(companyId) {
-  const [state, setState] = useState({ count: 0, href: '/campanas', loading: true })
+  const [state, setState] = useState({ count: 0, href: '/dashboard/responder', loading: true })
 
   const refresh = useCallback(async () => {
     if (!companyId) {
-      setState({ count: 0, href: '/campanas', loading: false })
+      setState({ count: 0, href: '/dashboard/responder', loading: false })
       return
     }
     try {
       const data = await fetchResponderInbox(companyId)
       const total = Number(data?.total) || 0
-      const first = Array.isArray(data?.items) ? data.items[0] : null
-      const href = first?.focus_url ? first.focus_url.replace(/^\/campanas/, '/campanas') : '/campanas'
-      setState({ count: total, href: first ? href : '/campanas', loading: false })
+      setState({ count: total, href: '/dashboard/responder', loading: false })
     } catch {
       setState((prev) => ({ ...prev, loading: false }))
     }

@@ -264,6 +264,7 @@ class CampaignRead(BaseModel):
     icp_ai_last_analysis: dict | None = None
     outreach_activity_log: list[dict[str, Any]] | None = None
     sequence_plan: dict | None = None
+    sourcing_status: dict[str, Any] | None = None
 
     @field_serializer("created_at", "updated_at", "autopilot_last_cycle_at")
     def _serialize_utc_datetimes(self, value: datetime | None) -> datetime | None:

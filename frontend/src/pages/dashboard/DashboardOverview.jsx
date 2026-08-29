@@ -43,7 +43,7 @@ export default function DashboardOverview() {
   const { count: linkedInPending, href: linkedInHref } = useLinkedInPending(companyId)
   const { count: whatsAppPending, href: whatsAppHref } = useWhatsAppPending(companyId)
   const { count: meetingsPending, href: meetingsHref } = useMeetingsPending(companyId)
-  const { count: responderPending, href: responderHref } = useResponderPending(companyId)
+  const { count: responderPending } = useResponderPending(companyId)
   const t = data?.totals
   const intel = data?.intelligence
   const commercial = data?.commercial
@@ -148,10 +148,11 @@ export default function DashboardOverview() {
                 todos={[
                   {
                     id: 'responder',
-                    label: 'Responder',
+                    label: 'Responder conversaciones',
                     count: responderPending,
-                    to: responderPending > 0 ? responderHref : '/campanas',
+                    to: '/dashboard/responder',
                     tone: 'alert',
+                    priority: 1,
                   },
                   {
                     id: 'linkedin',
@@ -159,13 +160,7 @@ export default function DashboardOverview() {
                     count: linkedInPending,
                     to: linkedInHref,
                     tone: 'linkedin',
-                  },
-                  {
-                    id: 'whatsapp',
-                    label: 'WhatsApp por enviar',
-                    count: whatsAppPending,
-                    to: whatsAppHref,
-                    tone: 'whatsapp',
+                    priority: 2,
                   },
                   {
                     id: 'meetings',
@@ -173,6 +168,15 @@ export default function DashboardOverview() {
                     count: meetingsPending,
                     to: meetingsHref,
                     tone: 'meeting',
+                    priority: 3,
+                  },
+                  {
+                    id: 'whatsapp',
+                    label: 'WhatsApp por enviar',
+                    count: whatsAppPending,
+                    to: whatsAppHref,
+                    tone: 'whatsapp',
+                    priority: 4,
                   },
                 ]}
               />

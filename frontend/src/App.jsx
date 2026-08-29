@@ -24,6 +24,7 @@ import ProductosPage from './pages/ProductosPage.jsx'
 import DashboardLayout from './pages/dashboard/DashboardLayout.jsx'
 import DashboardOverview from './pages/dashboard/DashboardOverview.jsx'
 import DashboardSectionGoLive from './pages/dashboard/DashboardSectionGoLive.jsx'
+import DashboardSectionResponder from './pages/dashboard/DashboardSectionResponder.jsx'
 import { TutorialProvider } from './context/TutorialContext.jsx'
 export default function App() {
   return (
@@ -79,7 +80,7 @@ export default function App() {
               <Route path="go-live" element={<DashboardSectionGoLive />} />
               <Route path="sourcing" element={<Navigate to="/dashboard" replace />} />
               <Route path="prospectos" element={<Navigate to="/campanas" replace />} />
-              <Route path="responder" element={<Navigate to="/dashboard" replace />} />
+              <Route path="responder" element={<DashboardSectionResponder />} />
               <Route path="outreach" element={<Navigate to="/dashboard" replace />} />
               <Route path="reuniones" element={<Navigate to="/dashboard" replace />} />
             </Route>

@@ -111,10 +111,16 @@ def _outreach_mode_row(row: Campaign) -> OutreachMode:
         return OutreachMode.b2b
 
 
-def _serialize_campaign(row: Campaign) -> CampaignRead:
+def _serialize_campaign(row: Campaign, db: Session | None = None) -> CampaignRead:
     product_name = row.product.name if row.product else "Producto desconocido"
     seller_name = row.seller.name if row.seller else "Vendedor desconocido"
     status = CampaignStatus(row.status)
+
+    sourcing_status = None
+    if db is not None and int(row.prospect_count or 0) > 0:
+        from app.services.lead_sourcing.sourcing_efficiency import build_campaign_sourcing_status
+
+        sourcing_status = build_campaign_sourcing_status(db, int(row.id))
 
     return CampaignRead(
         id=row.id,
@@ -169,6 +175,7 @@ def _serialize_campaign(row: Campaign) -> CampaignRead:
         sequence_plan=getattr(row, "sequence_plan", None)
         if isinstance(getattr(row, "sequence_plan", None), dict)
         else None,
+        sourcing_status=sourcing_status,
     )
 
 
@@ -423,7 +430,7 @@ def get_campaign_detail(
     ).first()
     if campaign_loaded is None:
         raise HTTPException(status_code=404, detail="Campaña no encontrada")
-    return _serialize_campaign(campaign_loaded)
+    return _serialize_campaign(campaign_loaded, db)
 
 
 @router.post("/campaigns/{campaign_id}/analyze-icp", response_model=CampaignIcpAnalysisRead)

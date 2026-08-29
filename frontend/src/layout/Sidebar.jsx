@@ -1,4 +1,5 @@
-import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { useResponderPending } from '../hooks/useResponderPending.js'
+import { useCompany } from '../context/CompanyContext.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
 import { tourIdFromNavIcon } from '../data/tutorialSteps.js'
 import { isNavItemActive, sidebarNavForRole, ROLE_LABELS, normalizeRole } from '../data/navigation'
@@ -9,7 +10,7 @@ import { ChromeWaveOverlay } from '../components/brand/ChromeWaveOverlay.jsx'
 import { UserAvatar } from '../components/user/UserAvatar.jsx'
 
 const SECTION_ORDER = [
-  { title: 'Principal', labels: ['Consola', 'Campañas'] },
+  { title: 'Principal', labels: ['Consola', 'Responder', 'Campañas'] },
   { title: 'Gestión', labels: ['Equipo', 'Créditos', 'Productos/Servicios'] },
   { title: 'Sistema', labels: ['Configuración', 'Soporte'] },
   { title: null, labels: ['Mi Perfil'] },
@@ -52,6 +53,8 @@ function navClass({ isActive, collapsed }) {
  */
 export function Sidebar({ collapsed, onNavigate }) {
   const { user, logout } = useAuth()
+  const { companyId } = useCompany()
+  const { count: responderCount } = useResponderPending(companyId)
   const navigate = useNavigate()
   const location = useLocation()
   const navItems = sidebarNavForRole(user)
@@ -99,7 +102,9 @@ export function Sidebar({ collapsed, onNavigate }) {
                 {section.title}
               </p>
             ) : null}
-            {section.items.map((item) => (
+            {section.items.map((item) => {
+              const badgeCount = item.badge === 'responder' ? responderCount : 0
+              return (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -114,13 +119,20 @@ export function Sidebar({ collapsed, onNavigate }) {
                 }
                 onClick={() => onNavigate?.()}
               >
-                <NavIcon
-                  name={item.icon}
-                  className="size-5 shrink-0 text-zinc-100 opacity-100 transition-colors duration-200 group-hover:text-red-300"
-                />
+                <span className="relative shrink-0">
+                  <NavIcon
+                    name={item.icon}
+                    className="size-5 text-zinc-100 opacity-100 transition-colors duration-200 group-hover:text-red-300"
+                  />
+                  {badgeCount > 0 ? (
+                    <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">
+                      {badgeCount > 99 ? '99+' : badgeCount}
+                    </span>
+                  ) : null}
+                </span>
                 {!collapsed ? <span className="truncate">{item.label}</span> : null}
               </NavLink>
-            ))}
+            )})}
           </div>
         ))}
       </nav>
