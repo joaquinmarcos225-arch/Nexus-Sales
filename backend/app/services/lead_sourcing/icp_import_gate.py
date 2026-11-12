@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from app.services import campaign_icp as icp
-from app.services.lead_sourcing.role_alignment import best_icp_role_match
+from app.services.lead_sourcing.role_alignment import campaign_role_matches
 
 # Umbral mínimo de match de rol (0–100) cuando la campaña tiene target_role.
 MIN_ROLE_MATCH_FOR_IMPORT = 55
@@ -61,17 +61,14 @@ _COMPANY_NOISE = re.compile(
 
 _LINKEDIN_NOISE = re.compile(r"/company/|/school/|/showcase/", re.I)
 
-# Map ICP tamaño → (min_employees, max_employees) inclusive.
-_SIZE_BOUNDS: list[tuple[re.Pattern[str], tuple[int, int]]] = [
-    (re.compile(r"\b1[\s\-–]*10\b|micro|startup|seed", re.I), (1, 10)),
-    (re.compile(r"\b11[\s\-–]*20\b", re.I), (11, 20)),
-    (re.compile(r"\b21[\s\-–]*50\b|pequeñ", re.I), (21, 50)),
-    (re.compile(r"\b51[\s\-–]*100\b|mediana|mid[\s\-]?market|smb", re.I), (51, 100)),
-    (re.compile(r"\b101[\s\-–]*200\b", re.I), (101, 200)),
-    (re.compile(r"\b201[\s\-–]*500\b", re.I), (201, 500)),
-    (re.compile(r"\b501[\s\-–]*1000\b|501[\s\-–]*1\s*000", re.I), (501, 1000)),
-    (re.compile(r"\b1001|1k\+|enterprise|grande|scale[\s\-]?up", re.I), (1001, 100_000)),
-]
+_FIRMO_STATUS_SCORE = {
+    "exact": 100,
+    "equivalent": 90,
+    "similar": 70,
+    "review": 50,
+    "incomplete": 40,
+    "contradictory": 0,
+}
 
 
 def is_noisy_role(role: str | None) -> bool:
@@ -110,36 +107,40 @@ def is_noisy_prospect(
 def role_match_passes(campaign_role: str | None, prospect_role: str | None) -> bool:
     if campaign_role is None or icp.is_icp_token_empty(campaign_role):
         return True
-    score, _ = best_icp_role_match(campaign_role, prospect_role)
-    return score >= MIN_ROLE_MATCH_FOR_IMPORT
+    return campaign_role_matches(campaign_role, prospect_role)
+
+
+def role_tier_passes(campaign_role: str | None, prospect_role: str | None) -> bool:
+    """True si el cargo es exacto, equivalente o similar (no Pre-Sales / subdirector / asistente)."""
+    if campaign_role is None or icp.is_icp_token_empty(campaign_role):
+        return True
+    from app.services.lead_sourcing.role_alignment import classify_role_tier
+
+    return classify_role_tier(campaign_role, prospect_role) is not None
 
 
 def _norm(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
-def industry_hard_score(prospect_industry: str | None, campaign_industry: str | None) -> tuple[int, str]:
-    """Score duro de industria. Desconocido = 0."""
-    if campaign_industry is None or icp.is_icp_token_empty(campaign_industry):
-        return 100, "ICP industria no configurado"
-    pi = _norm(prospect_industry)
-    ci = _norm(campaign_industry)
-    if not pi:
-        return 0, "industria desconocida"
-    if pi == ci:
-        return 100, "industria coincide"
-    if ci in pi or pi in ci:
-        return 85, "industria alineada (substring)"
-    ci_tokens = {t for t in re.split(r"[\s,/\-]+", ci) if len(t) > 2}
-    if not ci_tokens:
-        return 0, "industria no alineada"
-    hits = sum(1 for t in ci_tokens if t in pi)
-    ratio = hits / len(ci_tokens)
-    if ratio >= 0.8:
-        return 80, f"industria: {hits}/{len(ci_tokens)} términos ICP"
-    if ratio >= 0.5:
-        return 55, f"industria parcial: {hits}/{len(ci_tokens)} términos"
-    return 0, "industria fuera del ICP"
+def industry_hard_score(
+    prospect_industry: str | None,
+    campaign_industry: str | None,
+    *,
+    origin: str | None = None,
+) -> tuple[int, str]:
+    """Score de industria vía el clasificador central. Desconocido = 0."""
+    from app.services.lead_sourcing.firmographics import assess_company_firmographics
+
+    firm = assess_company_firmographics(
+        campaign_industry=campaign_industry,
+        industry=prospect_industry,
+        industry_origin=origin,
+    )
+    st = firm.industry.status
+    if st is None:
+        return 100, firm.industry.reason
+    return _FIRMO_STATUS_SCORE.get(st, 0), firm.industry.reason
 
 
 def geo_hard_score(prospect_country: str | None, campaign_country: str | None) -> tuple[int, str]:
@@ -162,36 +163,15 @@ def parse_employee_bounds(
     company_size: str | None = None,
     employee_count: int | None = None,
 ) -> tuple[int, int] | None:
-    """Extrae (min, max) de headcount a partir de texto y/o número."""
-    if employee_count is not None:
-        try:
-            n = int(employee_count)
-            if n > 0:
-                return (n, n)
-        except (TypeError, ValueError):
-            pass
-    blob = (company_size or "").strip()
-    if not blob:
-        return None
-    for pattern, bounds in _SIZE_BOUNDS:
-        if pattern.search(blob):
-            return bounds
-    nums = [int(x) for x in re.findall(r"\d+", blob.replace(",", "").replace(".", ""))]
-    if len(nums) >= 2:
-        lo, hi = min(nums[0], nums[1]), max(nums[0], nums[1])
-        if lo > 0:
-            return (lo, hi)
-    if len(nums) == 1 and nums[0] > 0:
-        return (nums[0], nums[0])
-    return None
+    """Misma interpretación de rangos que ``parse_size_bounds`` (``1000+`` es intervalo)."""
+    from app.services.lead_sourcing.firmographics import parse_size_bounds
+
+    return parse_size_bounds(company_size=company_size, employee_count=employee_count)
 
 
 def icp_size_bounds(campaign_size: str | None) -> tuple[int, int] | None:
     if campaign_size is None or icp.is_icp_token_empty(campaign_size):
         return None
-    for pattern, bounds in _SIZE_BOUNDS:
-        if pattern.search(campaign_size):
-            return bounds
     return parse_employee_bounds(company_size=campaign_size)
 
 
@@ -204,28 +184,21 @@ def size_hard_score(
     campaign_size: str | None,
     company_size: str | None = None,
     employee_count: int | None = None,
+    origin: str | None = None,
 ) -> tuple[int, str]:
-    """Score de tamaño. Desconocido = 40 (casi); fuera de rango = 0; adyacente = 60."""
-    target = icp_size_bounds(campaign_size)
-    if target is None:
-        return 100, "ICP tamaño no configurado"
-    actual = parse_employee_bounds(company_size=company_size, employee_count=employee_count)
-    if actual is None:
-        return 40, "tamaño desconocido"
-    if size_ranges_overlap(target, actual):
-        return 100, "tamaño alineado con ICP"
-    # Banda adyacente = casi perfecto.
-    t_lo, t_hi = target
-    a_lo, a_hi = actual
-    if a_hi < t_lo:
-        gap = t_lo - a_hi
-    elif a_lo > t_hi:
-        gap = a_lo - t_hi
-    else:
-        gap = 0
-    if gap <= max(25, int((t_hi - t_lo + 1) * 0.5)):
-        return 60, "tamaño cercano al ICP (banda adyacente)"
-    return 0, "tamaño fuera del ICP"
+    """Score de tamaño vía el clasificador central (mismos rangos que ``parse_size_bounds``)."""
+    from app.services.lead_sourcing.firmographics import assess_company_firmographics
+
+    firm = assess_company_firmographics(
+        campaign_company_size=campaign_size,
+        company_size=company_size,
+        employee_count=employee_count,
+        size_origin=origin,
+    )
+    st = firm.size.status
+    if st is None:
+        return 100, firm.size.reason
+    return _FIRMO_STATUS_SCORE.get(st, 0), firm.size.reason
 
 
 def company_passes_icp_size(
@@ -233,13 +206,17 @@ def company_passes_icp_size(
     campaign_size: str | None,
     company_size: str | None = None,
     employee_count: int | None = None,
+    origin: str | None = None,
 ) -> bool:
-    score, _ = size_hard_score(
-        campaign_size=campaign_size,
+    from app.services.lead_sourcing.firmographics import assess_company_firmographics
+
+    firm = assess_company_firmographics(
+        campaign_company_size=campaign_size,
         company_size=company_size,
         employee_count=employee_count,
+        size_origin=origin,
     )
-    return score >= MIN_SIZE_HARD
+    return firm.size.status != "contradictory"
 
 
 # Tiers para llenar cupo: primero perfectos, después casi perfectos.
@@ -257,26 +234,36 @@ def assess_icp_identity(
     prospect_country: str | None,
     company_size: str | None = None,
     employee_count: int | None = None,
+    industry_origin: str | None = None,
+    size_origin: str | None = None,
 ) -> tuple[int, int, str | None]:
     """
     Evalúa identidad ICP.
+
+    Industria y tamaño vienen del clasificador central. Geo y cargo no se mezclan
+    con esas dimensiones: una no compensa a la otra.
 
     Returns:
       (tier, identity_score_0_100, reject_reason|None)
       tier: ICP_TIER_PERFECT | ICP_TIER_NEAR | ICP_TIER_REJECT
 
-    - Perfecto: todas las dims configuradas están y pasan umbral duro.
-    - Casi perfecto: dims configuradas presentes; alguna parcial (p.ej. industria).
-    - Reject: mismatch conocido; o única dim firmográfica pedida sin dato verificable.
+    - Perfecto: dims firmográficas solicitadas confirmed (exact/equivalent) y geo OK.
+    - Casi: similar / incomplete / review (cupo, no confirmar).
+    - Reject: contradictory; o única dim firmográfica pedida sin dato verificable.
       Tamaño/país ausentes NO rechazan si hay otra dim alineada (Prospeo suele omitirlos).
     """
-    ind_score, ind_note = industry_hard_score(prospect_industry, campaign_industry)
-    geo_score, geo_note = geo_hard_score(prospect_country, campaign_country)
-    size_score, size_note = size_hard_score(
-        campaign_size=campaign_company_size,
+    from app.services.lead_sourcing.firmographics import assess_company_firmographics
+
+    firm = assess_company_firmographics(
+        campaign_industry=campaign_industry,
+        campaign_company_size=campaign_company_size,
+        industry=prospect_industry,
+        industry_origin=industry_origin,
         company_size=company_size,
         employee_count=employee_count,
+        size_origin=size_origin,
     )
+    geo_score, geo_note = geo_hard_score(prospect_country, campaign_country)
 
     industry_active = campaign_industry is not None and not icp.is_icp_token_empty(campaign_industry)
     geo_active = campaign_country is not None and not icp.is_icp_token_empty(campaign_country)
@@ -284,30 +271,29 @@ def assess_icp_identity(
         campaign_company_size
     )
 
-    industry_unknown = industry_active and not (prospect_industry or "").strip()
+    industry_unknown = firm.industry.status == "incomplete"
     geo_unknown = geo_active and not (prospect_country or "").strip()
-    size_unknown = size_active and parse_employee_bounds(
-        company_size=company_size, employee_count=employee_count
-    ) is None
+    size_unknown = firm.size.status == "incomplete"
 
-    # Mismatch conocido (dato presente pero fuera del ICP).
-    if industry_active and ind_score == 0 and (prospect_industry or "").strip():
-        return ICP_TIER_REJECT, 0, f"industria no coincide con ICP ({ind_note})"
+    if firm.industry.status == "contradictory":
+        return ICP_TIER_REJECT, 0, f"industria no coincide con ICP ({firm.industry.reason})"
     if geo_active and not geo_unknown and geo_score < MIN_GEO_HARD:
         return ICP_TIER_REJECT, 0, f"ubicación no coincide con ICP ({geo_note})"
-    if size_active and not size_unknown and size_score < MIN_SIZE_HARD:
-        return ICP_TIER_REJECT, 0, f"tamaño no coincide con ICP ({size_note})"
+    if firm.size.status == "contradictory":
+        return ICP_TIER_REJECT, 0, f"tamaño no coincide con ICP ({firm.size.reason})"
 
-    # Industria pedida y ausente: solo si tampoco hay otra dim que aporte evidencia.
-    if industry_unknown and not geo_active and not size_active:
+    # Industria pedida y ausente: rechazar. Sin industria verificable se cuela
+    # avícola/legal/eventos con solo rol+país y arruina la calidad del cupo.
+    if industry_active and industry_unknown:
         return (
             ICP_TIER_REJECT,
             0,
             "industria desconocida (ICP industria configurada)",
         )
 
-    # Región + industria configuradas: exigir país verificable (calidad > cupo).
-    if geo_unknown and industry_active and geo_active:
+    # Región + industria configuradas: exigir país verificable solo si la industria ya está confirmada.
+    # Si ambas faltan (role-first sin país/industria en el hit), → NEAR vía cupo, no rechazo duro.
+    if geo_unknown and industry_active and geo_active and not industry_unknown:
         return (
             ICP_TIER_REJECT,
             0,
@@ -334,12 +320,12 @@ def assess_icp_identity(
         )
 
     active_scores: list[int] = []
-    if industry_active and not industry_unknown:
-        active_scores.append(ind_score)
+    if firm.industry.status and firm.industry.status != "incomplete":
+        active_scores.append(_FIRMO_STATUS_SCORE.get(firm.industry.status, 0))
     if geo_active and not geo_unknown:
         active_scores.append(geo_score)
-    if size_active and not size_unknown:
-        active_scores.append(size_score)
+    if firm.size.status and firm.size.status != "incomplete":
+        active_scores.append(_FIRMO_STATUS_SCORE.get(firm.size.status, 0))
 
     if not active_scores:
         # Dims configuradas pero sin dato usable en ninguna → casi / cupo vía rol.
@@ -348,13 +334,24 @@ def assess_icp_identity(
 
     identity = int(round(sum(active_scores) / len(active_scores)))
 
-    perfect = not industry_unknown and not geo_unknown and not size_unknown
-    if industry_active and not industry_unknown and ind_score < MIN_INDUSTRY_HARD:
-        perfect = False
-    if geo_active and not geo_unknown and geo_score < MIN_GEO_HARD:
-        perfect = False
-    if size_active and not size_unknown and size_score < MIN_SIZE_HARD:
-        perfect = False
+    geo_ok = (not geo_active) or (not geo_unknown and geo_score >= MIN_GEO_HARD)
+
+    def _dim_confirmed(status: str | None) -> bool:
+        return status in {"exact", "equivalent"}
+
+    industry_confirmed = (not industry_active) or _dim_confirmed(firm.industry.status)
+    size_confirmed = (not size_active) or _dim_confirmed(firm.size.status)
+    firm_ok = firm.combined is None or firm.combined == "confirmed"
+
+    perfect = bool(
+        firm_ok
+        and geo_ok
+        and not industry_unknown
+        and not geo_unknown
+        and not size_unknown
+        and industry_confirmed
+        and size_confirmed
+    )
 
     if perfect:
         return ICP_TIER_PERFECT, identity, None
@@ -370,6 +367,8 @@ def icp_identity_hard_reason(
     prospect_country: str | None,
     company_size: str | None = None,
     employee_count: int | None = None,
+    industry_origin: str | None = None,
+    size_origin: str | None = None,
     perfect_only: bool = False,
 ) -> str | None:
     """
@@ -384,6 +383,8 @@ def icp_identity_hard_reason(
         prospect_country=prospect_country,
         company_size=company_size,
         employee_count=employee_count,
+        industry_origin=industry_origin,
+        size_origin=size_origin,
     )
     if tier == ICP_TIER_REJECT:
         return reason or "identidad ICP rechazada"
@@ -392,12 +393,19 @@ def icp_identity_hard_reason(
     return None
 
 
-def icp_lead_rank_key(lead: Any, campaign: Any) -> tuple[int, int, int]:
+def contact_quality_rank(lead: Any) -> int:
+    """0 = mail y celular verificados · 1 = uno de los dos · 2 = ninguno."""
+    verified = int(bool(getattr(lead, "email_verified", False))) + int(
+        bool(getattr(lead, "mobile_verified", False))
+    )
+    return 2 - verified
+
+
+def icp_lead_rank_key(lead: Any, campaign: Any) -> tuple[int, int, int, int]:
     """
-    Clave de ordenamiento para llenar cupo:
-    1) tier más bajo primero (perfecto → casi)
-    2) identity score más alto
-    3) compatibility_score más alto
+    Clave de ordenamiento para llenar cupo (solo ordena, no descarta a nadie):
+    1) grupo de contacto: mail+celular verificados → uno solo → ninguno (último recurso)
+    2) dentro del grupo, mejor ICP: tier (perfecto → casi), identity y compatibility_score
     """
     emp = getattr(lead, "employee_count", None)
     try:
@@ -412,9 +420,11 @@ def icp_lead_rank_key(lead: Any, campaign: Any) -> tuple[int, int, int]:
         prospect_country=getattr(lead, "country", None),
         company_size=getattr(lead, "company_size", None),
         employee_count=emp_i,
+        industry_origin=getattr(lead, "industry_origin", None),
+        size_origin=getattr(lead, "size_origin", None),
     )
     compat = int(getattr(lead, "compatibility_score", None) or 0)
-    return (tier, -identity, -compat)
+    return (contact_quality_rank(lead), tier, -identity, -compat)
 
 
 def icp_import_gate_reason(
@@ -432,6 +442,8 @@ def icp_import_gate_reason(
     email: str | None = None,
     company_size: str | None = None,
     employee_count: int | None = None,
+    industry_origin: str | None = None,
+    size_origin: str | None = None,
     compatibility_score: int | None = None,
     fit_threshold: int = DEFAULT_ICP_FIT_THRESHOLD,
     perfect_only: bool = False,
@@ -449,8 +461,21 @@ def icp_import_gate_reason(
     ):
         return "fuente/rol ruidoso (recruiter, careers, staffing, buscando trabajo, etc.)"
 
-    if not role_match_passes(campaign_role, prospect_role):
-        return f"rol no alinea con ICP (mín. {MIN_ROLE_MATCH_FOR_IMPORT})"
+    # Pedís industria X → nada que grite sector Y (aunque Prospeo etiquete mal).
+    if campaign_industry is not None and not icp.is_icp_token_empty(campaign_industry):
+        from app.services.lead_sourcing.firmographics import sector_mismatch_reason
+
+        off = sector_mismatch_reason(
+            campaign_industry,
+            company_name=company_name,
+            role=prospect_role,
+            industry=prospect_industry,
+        )
+        if off:
+            return off
+
+    if not role_tier_passes(campaign_role, prospect_role):
+        return "el cargo no coincide con los cargos de la campaña"
 
     hard = icp_identity_hard_reason(
         campaign_industry=campaign_industry,
@@ -460,6 +485,8 @@ def icp_import_gate_reason(
         prospect_country=prospect_country,
         company_size=company_size,
         employee_count=employee_count,
+        industry_origin=industry_origin,
+        size_origin=size_origin,
         perfect_only=perfect_only,
     )
     if hard:
@@ -473,6 +500,10 @@ def icp_import_gate_reason(
             {
                 "role": prospect_role,
                 "industry": prospect_industry,
+                "industry_origin": industry_origin,
+                "size_origin": size_origin,
+                "company_size": company_size,
+                "employee_count": employee_count,
                 "country": prospect_country,
                 "email": email,
                 "linkedin_url": linkedin_url,
@@ -480,6 +511,7 @@ def icp_import_gate_reason(
             campaign_country=campaign_country,
             campaign_industry=campaign_industry,
             campaign_role=campaign_role,
+            campaign_company_size=campaign_company_size,
         )
 
     has_icp = any(
@@ -488,6 +520,8 @@ def icp_import_gate_reason(
         if v is not None
     )
     # Casi-perfectos: umbral un poco más bajo para poder completar cupo.
+    from app.services.lead_sourcing.firmographics import assess_company_firmographics
+
     tier, _, _ = assess_icp_identity(
         campaign_industry=campaign_industry,
         campaign_country=campaign_country,
@@ -496,11 +530,18 @@ def icp_import_gate_reason(
         prospect_country=prospect_country,
         company_size=company_size,
         employee_count=employee_count,
+        industry_origin=industry_origin,
+        size_origin=size_origin,
     )
     industry_active = campaign_industry is not None and not icp.is_icp_token_empty(
         campaign_industry
     )
-    industry_unknown = industry_active and not (prospect_industry or "").strip()
+    firm = assess_company_firmographics(
+        campaign_industry=campaign_industry,
+        industry=prospect_industry,
+        industry_origin=industry_origin,
+    )
+    industry_unknown = firm.industry.status == "incomplete"
     # Sin industria (rol-first): no exigir score "perfecto" 70 — el cupo no se llena.
     # Con industria + match perfecto: fit_threshold.
     # Con industria + casi (o industria desconocida pero otra dim OK): umbral más alto que antes
@@ -527,6 +568,8 @@ def lead_passes_icp_import_gate(
     fit_threshold: int = 70,
     perfect_only: bool = False,
 ) -> bool:
+    if getattr(lead, "geo_status", None) == "contradictory":
+        return False
     emp = getattr(lead, "employee_count", None)
     try:
         emp_i = int(emp) if emp is not None else None
@@ -546,6 +589,8 @@ def lead_passes_icp_import_gate(
         email=getattr(lead, "email", None),
         company_size=getattr(lead, "company_size", None),
         employee_count=emp_i,
+        industry_origin=getattr(lead, "industry_origin", None),
+        size_origin=getattr(lead, "size_origin", None),
         compatibility_score=getattr(lead, "compatibility_score", None),
         fit_threshold=fit_threshold,
         perfect_only=perfect_only,

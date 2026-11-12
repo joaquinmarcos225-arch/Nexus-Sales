@@ -27,6 +27,13 @@ from app.models.password_reset import PasswordResetCode
 from app.models.product import Product
 from app.models.push_subscription import PushSubscription
 from app.models.meeting import Meeting
+from app.models.explorar import (
+    CompanyMobileUsage,
+    ExplorarFavorite,
+    ExplorarReveal,
+    ExplorarSearchCache,
+    ExplorarUsage,
+)
 from app.models.lead_sourcing_pipeline import LeadSourcingPipeline
 from app.models.nexus_research_cache import NexusResearchCache
 from app.models.nexus_contact_cache import (
@@ -62,6 +69,11 @@ __all__ = [
     "MeetingStatus",
     "CreditLedgerEntry",
     "CreditWallet",
+    "CompanyMobileUsage",
+    "ExplorarFavorite",
+    "ExplorarReveal",
+    "ExplorarSearchCache",
+    "ExplorarUsage",
     "OutreachMessage",
     "OutreachTask",
     "OutreachSequence",

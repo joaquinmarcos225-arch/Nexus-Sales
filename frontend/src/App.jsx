@@ -12,6 +12,9 @@ import IntegracionesPage from './pages/IntegracionesPage.jsx'
 import { ConfiguracionLayout } from './layout/ConfiguracionLayout.jsx'
 import CajaCreditosPage from './pages/CajaCreditosPage.jsx'
 import EquipoPage from './pages/EquipoPage.jsx'
+import ExplorarPage from './pages/ExplorarPage.jsx'
+import ExplorarLayout from './pages/explorar/ExplorarLayout.jsx'
+import ExplorarGuardadosPage from './pages/explorar/ExplorarGuardadosPage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import ForgotPasswordPage from './pages/ForgotPasswordPage.jsx'
 import RegisterWorkspacePage from './pages/RegisterWorkspacePage.jsx'
@@ -82,12 +85,17 @@ export default function App() {
               <Route path="sourcing" element={<Navigate to="/dashboard" replace />} />
               <Route path="prospectos" element={<Navigate to="/campanas" replace />} />
               <Route path="responder" element={<DashboardSectionResponder />} />
-              <Route path="pipeline" element={<DashboardPipelinePage />} />
               <Route path="outreach" element={<Navigate to="/dashboard" replace />} />
               <Route path="reuniones" element={<Navigate to="/dashboard" replace />} />
             </Route>
+            <Route path="dashboard/pipeline" element={<Navigate to="/explorar/pipeline" replace />} />
             <Route path="campanas" element={<CampanasPage />} />
             <Route path="campanas/:campaignId" element={<CampanaDetallePage />} />
+            <Route path="explorar" element={<ExplorarLayout />}>
+              <Route index element={<ExplorarPage />} />
+              <Route path="guardados" element={<ExplorarGuardadosPage />} />
+              <Route path="pipeline" element={<DashboardPipelinePage />} />
+            </Route>
             <Route path="prospectos" element={<Navigate to="/campanas" replace />} />
             <Route path="equipo" element={<EquipoPage />} />
             <Route path="creditos" element={<CajaCreditosPage />} />

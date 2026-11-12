@@ -23,6 +23,7 @@ from app.routes.credits import router as credits_router
 from app.routes.billing_ops import router as billing_ops_router
 from app.routes.operations import router as operations_router
 from app.routes.campaigns import router as campaigns_router
+from app.routes.explorar import router as explorar_router
 from app.routes.sequence_templates import router as sequence_templates_router
 from app.routes.go_live import router as go_live_router
 from app.routes.health import router as health_router
@@ -204,6 +205,7 @@ app.include_router(billing_ops_router)
 app.include_router(campaigns_router)
 app.include_router(sequence_templates_router)
 app.include_router(prospects_router)
+app.include_router(explorar_router)
 app.include_router(lead_sourcing_router)
 app.include_router(outreach_router)
 app.include_router(outreach_tasks_router)

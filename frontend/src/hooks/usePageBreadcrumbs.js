@@ -7,6 +7,9 @@ const DASHBOARD_CHILD = {
 
 const TOP_LEVEL = {
   '/dashboard': { section: 'Consola', sectionTo: '/dashboard', page: 'Resumen' },
+  '/dashboard/pipeline': { section: 'Base' },
+  '/explorar': { section: 'Explorar' },
+  '/explorar/pipeline': { section: 'Explorar', sectionTo: '/explorar', page: 'Base' },
   '/campanas': { section: 'Campañas' },
   '/equipo': { section: 'Equipo' },
   '/operaciones': { section: 'Operaciones' },

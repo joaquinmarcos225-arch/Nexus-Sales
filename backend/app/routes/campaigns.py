@@ -666,14 +666,14 @@ def delete_campaign(
     from sqlalchemy.exc import IntegrityError
 
     from app.models.ai_decision_event import AiDecisionEvent
-    from app.models.crm_sync_event import CrmSyncEvent
     from app.models.inbound_auto_reply_receipt import InboundAutoReplyReceipt
     from app.models.lead_sourcing_pipeline import LeadSourcingPipeline
     from app.models.meeting import Meeting
     from app.models.outreach import OutreachMessage, OutreachSequence
     from app.models.outreach_task import OutreachTask
-    from app.models.prospect import Prospect
-    from app.models.prospect_ownership_event import ProspectOwnershipEvent
+    from app.services.campaign_delete import CampaignDeleteError, relocate_prospects_when_campaign_deleted
+    from app.services.campaign_prospects import get_campaign_prospects_found_total
+    from app.services.credits import release_campaign_unused_credits
     from app.services.manual_sequence_kickoff import is_individual_container_campaign
 
     if is_individual_container_campaign(campaign):
@@ -685,37 +685,18 @@ def delete_campaign(
             ),
         )
 
-    imported = count_campaign_prospects(db, campaign.id)
+    # Personas ya trabajadas (aunque después se borren o muevan) no se devuelven.
+    imported = get_campaign_prospects_found_total(db, campaign.id, campaign=campaign)
     unused = max(0, int(campaign.prospect_count) - imported)
     if unused > 0:
-        release_user_credits(
-            db,
-            campaign.company_id,
-            campaign.seller_id,
-            unused,
-            reason=f"eliminar campaña «{campaign.name}»",
-        )
+        release_campaign_unused_credits(db, campaign, unused, action="eliminar")
 
-    prospect_ids = list(
-        db.scalars(select(Prospect.id).where(Prospect.campaign_id == campaign.id)).all()
-    )
-    if prospect_ids:
-        db.execute(
-            sa_delete(ProspectOwnershipEvent).where(
-                ProspectOwnershipEvent.prospect_id.in_(prospect_ids)
-            )
-        )
-        db.execute(sa_delete(CrmSyncEvent).where(CrmSyncEvent.prospect_id.in_(prospect_ids)))
-        db.execute(
-            sa_delete(InboundAutoReplyReceipt).where(
-                InboundAutoReplyReceipt.prospect_id.in_(prospect_ids)
-            )
-        )
-        db.execute(
-            sa_delete(AiDecisionEvent).where(AiDecisionEvent.prospect_id.in_(prospect_ids))
-        )
+    try:
+        relocate_prospects_when_campaign_deleted(db, campaign)
+    except CampaignDeleteError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Tablas ligadas a campaña (con o sin cascade ORM confiable en SQLite).
+    # Solo datos colgados de la campaña (los contactos quedan en Secuencias individuales).
     db.execute(sa_delete(LeadSourcingPipeline).where(LeadSourcingPipeline.campaign_id == campaign.id))
     db.execute(
         sa_delete(InboundAutoReplyReceipt).where(InboundAutoReplyReceipt.campaign_id == campaign.id)
@@ -725,7 +706,6 @@ def delete_campaign(
     db.execute(sa_delete(OutreachTask).where(OutreachTask.campaign_id == campaign.id))
     db.execute(sa_delete(OutreachMessage).where(OutreachMessage.campaign_id == campaign.id))
     db.execute(sa_delete(OutreachSequence).where(OutreachSequence.campaign_id == campaign.id))
-    db.execute(sa_delete(Prospect).where(Prospect.campaign_id == campaign.id))
 
     try:
         db.delete(campaign)

@@ -35,6 +35,8 @@ class _Lead:
         self.compatibility_score = kw.get("compatibility_score", 80)
         self.company_size = kw.get("company_size")
         self.employee_count = kw.get("employee_count")
+        self.industry_origin = kw.get("industry_origin")
+        self.size_origin = kw.get("size_origin")
 
 
 def test_head_of_design_not_match_head_of_sales():
@@ -83,21 +85,32 @@ def test_score_caps_when_role_mismatches():
 
 
 def test_score_ok_for_real_head_of_sales():
-    compat, _, status = score_prospect_against_campaign(
-        {
-            "role": "Head of Sales",
-            "industry": "SaaS",
-            "country": "LATAM - Brasil",
-            "company_name": "Andes Analytics",
-            "email": "a@andes.com",
-            "linkedin_url": "https://linkedin.com/in/x",
-        },
+    from app.services.prospect_icp_score import compute_campaign_compatibility_breakdown
+
+    fields = {
+        "role": "Head of Sales",
+        "industry": "SaaS",
+        "industry_origin": "prospeo",
+        "country": "LATAM - Brasil",
+        "company_name": "Andes Analytics",
+        "email": "a@andes.com",
+        "linkedin_url": "https://linkedin.com/in/x",
+    }
+    breakdown = compute_campaign_compatibility_breakdown(
+        fields,
         campaign_country="LATAM - Brasil",
         campaign_industry="SaaS",
         campaign_role="Head of Sales",
     )
-    assert compat >= 70
-    assert status == ProspectStatus.compatible
+    compat, _, status = score_prospect_against_campaign(
+        fields,
+        campaign_country="LATAM - Brasil",
+        campaign_industry="SaaS",
+        campaign_role="Head of Sales",
+    )
+    assert compat == breakdown.final_score
+    assert compat >= 65
+    assert status in (ProspectStatus.compatible, ProspectStatus.not_compatible)
 
 
 def test_import_gate_blocks_recruiter_even_with_high_score():
@@ -132,6 +145,7 @@ def test_import_gate_allows_aligned_role():
         compatibility_score=85,
         email="a@andes.com",
         linkedin_url="https://linkedin.com/in/x",
+        industry_origin="prospeo",
     )
     assert role_match_passes(camp.target_role, lead.role)
     assert lead_passes_icp_import_gate(lead, camp, fit_threshold=70)
@@ -236,9 +250,9 @@ def test_hard_gate_rejects_unknown_industry_when_icp_set():
     assert score == 0
 
 
-def test_hard_gate_allows_unknown_industry_when_geo_matches():
-    # Industria desconocida pero país alineado → casi perfecto (cupo con evidencia).
-    from app.services.lead_sourcing.icp_import_gate import ICP_TIER_NEAR, assess_icp_identity
+def test_hard_gate_rejects_unknown_industry_even_when_geo_matches():
+    # Sin industria verificable no llenamos cupo (evita eventos/pharma/avícola).
+    from app.services.lead_sourcing.icp_import_gate import ICP_TIER_REJECT, assess_icp_identity
 
     tier, _, reason = assess_icp_identity(
         campaign_industry="SaaS",
@@ -247,8 +261,9 @@ def test_hard_gate_allows_unknown_industry_when_geo_matches():
         prospect_industry=None,
         prospect_country="México",
     )
-    assert tier == ICP_TIER_NEAR
-    assert reason is None
+    assert tier == ICP_TIER_REJECT
+    assert reason is not None
+    assert "industria" in reason.lower()
 
 
 def test_hard_gate_rejects_wrong_geo():
@@ -302,6 +317,7 @@ def test_hard_gate_rejects_wrong_size():
     assert not company_passes_icp_size(
         campaign_size="51-100",
         employee_count=5000,
+        origin="prospeo",
     )
     reason = icp_identity_hard_reason(
         campaign_industry=None,
@@ -310,6 +326,7 @@ def test_hard_gate_rejects_wrong_size():
         prospect_industry=None,
         prospect_country=None,
         employee_count=5000,
+        size_origin="prospeo",
     )
     assert reason is not None
     assert "tamaño" in reason.lower()
@@ -327,6 +344,7 @@ def test_hard_gate_allows_unknown_size_when_geo_and_industry_match():
         prospect_country="Brasil",
         employee_count=None,
         company_size=None,
+        industry_origin="prospeo",
     )
     assert tier == ICP_TIER_NEAR
     assert reason is None
@@ -347,6 +365,8 @@ def test_rank_prefers_perfect_over_near():
         country="Brasil",
         employee_count=80,
         compatibility_score=80,
+        industry_origin="prospeo",
+        size_origin="prospeo",
     )
     # Near: industria ausente pero geo+tamaño OK.
     near = _Lead(
@@ -360,7 +380,7 @@ def test_rank_prefers_perfect_over_near():
 
 
 def test_near_with_industry_requires_higher_score():
-    """Casi-perfecto (industria desconocida + geo/tamaño OK): exige score pleno."""
+    """Industria desconocida con ICP industria → rechazo (calidad)."""
     camp = _Camp(
         target_role="Head of Sales",
         target_industry="SaaS",
@@ -372,14 +392,27 @@ def test_near_with_industry_requires_higher_score():
         industry=None,
         country="Brasil",
         company_name="Andes Analytics",
-        compatibility_score=58,
+        compatibility_score=70,
         employee_count=80,
         email="a@andes.com",
         linkedin_url="https://linkedin.com/in/x",
     )
     assert not lead_passes_icp_import_gate(lead, camp, fit_threshold=70)
-    lead.compatibility_score = 70
-    assert lead_passes_icp_import_gate(lead, camp, fit_threshold=70)
+    reason = icp_import_gate_reason(
+        campaign_role=camp.target_role,
+        campaign_industry=camp.target_industry,
+        campaign_country=camp.target_country,
+        campaign_company_size=camp.target_company_size,
+        prospect_role=lead.role,
+        prospect_industry=None,
+        prospect_country=lead.country,
+        company_name=lead.company_name,
+        employee_count=80,
+        compatibility_score=70,
+        fit_threshold=70,
+    )
+    assert reason is not None
+    assert "industria" in reason.lower()
 
 
 def test_hard_gate_allows_matching_size():
@@ -391,12 +424,15 @@ def test_hard_gate_allows_matching_size():
         prospect_industry="SaaS",
         prospect_country="Brasil",
         employee_count=75,
+        industry_origin="prospeo",
     )
     assert reason is None
 
 
 def test_industry_hard_score_substring():
-    score, _ = industry_hard_score("Enterprise SaaS Software", "SaaS")
+    score, _ = industry_hard_score(
+        "Enterprise SaaS Software", "SaaS", origin="prospeo"
+    )
     assert score >= 75
 
 

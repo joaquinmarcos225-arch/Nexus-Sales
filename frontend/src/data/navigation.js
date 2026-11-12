@@ -78,7 +78,7 @@ export function canAccessOperations(user) {
   return normalizeRole(user.role) === ROLES.manager
 }
 
-/** Flujo diario: Consola + Responder + Campañas. */
+/** Flujo diario: Consola + Responder + Explorar + Campañas. */
 const BASE_NAV = [
   {
     type: 'link',
@@ -96,6 +96,7 @@ const BASE_NAV = [
     activePrefix: '/dashboard/responder',
     badge: 'responder',
   },
+  { type: 'link', to: '/explorar', label: 'Explorar', icon: 'explorar', activePrefix: '/explorar' },
   { type: 'link', to: '/campanas', label: 'Campañas', icon: 'campanas' },
 ]
 
@@ -116,15 +117,7 @@ export function sidebarNavForRole(userOrRole) {
   const user = typeof userOrRole === 'object' && userOrRole !== null ? userOrRole : null
   const role = normalizeRole(user?.role)
   const items = [...BASE_NAV]
-  if (isManagerOrGerente(user ?? { role: user?.role, permissions: [] })) {
-    items.push({
-      type: 'link',
-      to: '/dashboard/pipeline',
-      label: 'Pipeline',
-      icon: 'pipeline',
-      activePrefix: '/dashboard/pipeline',
-    })
-  }
+  // Pipeline / Base de prospectos vive dentro de Explorar.
   items.push(TEAM_NAV)
   if (role === ROLES.gerente || role === ROLES.owner || role === ROLES.manager || role === ROLES.sdr) {
     items.push(CREDITS_NAV)

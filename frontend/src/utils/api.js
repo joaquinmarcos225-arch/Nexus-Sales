@@ -335,6 +335,104 @@ export async function updateUser(userId, payload) {
   })
 }
 
+export async function fetchExplorarUsage(companyId) {
+  return request(`/companies/${companyId}/explorar/usage`)
+}
+
+/** Catálogo de chips Explorar = valores aceptados por Prospeo. */
+export async function fetchExplorarFilterCatalog(companyId) {
+  return request(`/companies/${companyId}/explorar/filter-catalog`)
+}
+
+export async function explorarSearch(companyId, payload, options = {}) {
+  // Sin reintento HTTP automático: el search es largo; reintentar encima empeora 504.
+  // ExplorarPage reintenta con more_pending / 504 de forma controlada.
+  // Techo duro en el cliente: si el socket queda zombie, el spinner no puede quedar eterno.
+  const { timeoutMs = 90000, signal: outerSignal, ...rest } = options
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const onOuterAbort = () => controller.abort()
+  if (outerSignal) {
+    if (outerSignal.aborted) controller.abort()
+    else outerSignal.addEventListener('abort', onOuterAbort, { once: true })
+  }
+  try {
+    return await request(`/companies/${companyId}/explorar/search`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+      ...rest,
+    })
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new ApiRequestError(
+        'La búsqueda sigue en curso / no responde un momento. Reintentá Buscar.',
+        { status: 504 },
+      )
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+    if (outerSignal) outerSignal.removeEventListener('abort', onOuterAbort)
+  }
+}
+
+export async function explorarPotentialCustomers(companyId, productId, options = {}) {
+  const { timeoutMs = 55000, ...rest } = options
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await request(`/companies/${companyId}/explorar/potential-customers`, {
+      method: 'POST',
+      body: JSON.stringify({ product_id: productId }),
+      signal: controller.signal,
+      ...rest,
+    })
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new ApiRequestError(
+        'La búsqueda sigue en curso / no responde un momento. Reintentá.',
+        { status: 504 },
+      )
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export async function explorarReveal(companyId, person) {
+  return request(`/companies/${companyId}/explorar/reveal`, {
+    method: 'POST',
+    body: JSON.stringify(person),
+  })
+}
+
+export async function fetchExplorarFavorites(companyId) {
+  return request(`/companies/${companyId}/explorar/favorites`)
+}
+
+export async function explorarAddFavorite(companyId, person) {
+  return request(`/companies/${companyId}/explorar/favorites`, {
+    method: 'POST',
+    body: JSON.stringify(person),
+  })
+}
+
+export async function explorarRemoveFavorite(companyId, personId, ownerUserId = null) {
+  const qs = ownerUserId ? `?owner_user_id=${encodeURIComponent(ownerUserId)}` : ''
+  return request(`/companies/${companyId}/explorar/favorites/${encodeURIComponent(personId)}${qs}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function explorarAddToCampaign(companyId, campaignId, people) {
+  return request(`/companies/${companyId}/explorar/add-to-campaign`, {
+    method: 'POST',
+    body: JSON.stringify({ campaign_id: campaignId, people }),
+  })
+}
+
 export async function fetchProducts(companyId) {
   return request(`/companies/${companyId}/products?include_inactive=false`)
 }

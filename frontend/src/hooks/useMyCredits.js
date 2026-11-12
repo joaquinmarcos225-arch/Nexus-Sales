@@ -11,7 +11,11 @@ async function loadCreditsFallback(companyId, userId, role) {
   if (!companyId || !userId) {
     return null
   }
-  if (isCompanyAdmin({ role })) {
+  const rows = await fetchCreditAllocations(companyId)
+  const list = Array.isArray(rows) ? rows : []
+  const row = list.find((a) => Number(a.seller_id) === userId)
+  const hasPersonalCupo = Number(row?.allocated_balance) > 0
+  if (isCompanyAdmin({ role }) && !hasPersonalCupo) {
     const wallet = await fetchWallet(companyId)
     const assigned = Number(wallet?.assigned_to_sellers) || 0
     const total = Number(wallet?.total_balance) || 0
@@ -23,9 +27,6 @@ async function loadCreditsFallback(companyId, userId, role) {
       role_scope: 'director_pool',
     }
   }
-  const rows = await fetchCreditAllocations(companyId)
-  const list = Array.isArray(rows) ? rows : []
-  const row = list.find((a) => Number(a.seller_id) === userId)
   const allocated = Number(row?.allocated_balance) || 0
   const used = Number(row?.used_balance) || 0
   return {
