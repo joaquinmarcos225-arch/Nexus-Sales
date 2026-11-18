@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from app.models.prospect import Prospect
     from app.models.seller_allocation import SellerCreditAllocation
     from app.models.team import Team
+    from app.models.user_outreach_style import UserOutreachStyle
 
 
 class User(Base):
@@ -61,6 +62,11 @@ class User(Base):
         "Prospect",
         back_populates="owner",
         foreign_keys="Prospect.owner_user_id",
+    )
+    outreach_style: Mapped[UserOutreachStyle | None] = relationship(
+        "UserOutreachStyle",
+        back_populates="user",
+        uselist=False,
     )
 
     @property
