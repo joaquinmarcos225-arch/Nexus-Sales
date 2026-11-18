@@ -318,7 +318,7 @@ Soy {sdr} ({marca}). {como_estas}{hook}
 ¿Te queda bien una videollamada breve para verlo juntos?""",
     """Hola {nombre},
 
-{sdr} de {marca} por acá. {como_estas}{hook}
+Soy {sdr} de {marca}. {como_estas}{hook}
 
 {valor}
 
@@ -441,7 +441,7 @@ Quedo atento.""",
 {retomo}
 Quería dejarlo arriba por si el mensaje anterior no llegó en buen momento.
 
-¿Seguís con ganas de explorarlo?
+¿Agendamos 10 minutos para ver si encaja?
 
 Quedo atento.""",
     """Hola {nombre},
@@ -483,7 +483,7 @@ Soy {sdr} ({marca}). {como_estas}{te_escribo_por_corto}
 ¿Agendamos una charla breve?""",
     """Hola {nombre},
 
-{sdr} de {marca} por acá. {como_estas}{te_escribo_por_corto}
+Soy {sdr} de {marca}. {como_estas}{te_escribo_por_corto}
 
 {valor}
 
@@ -602,7 +602,7 @@ Quedo atento.""",
     """Hola {nombre},
 
 {retomo}
-¿Tiene sentido para {empresa} seguir explorando {producto}?
+¿Hacemos una charla corta esta semana?
 
 Quedo atento.""",
     """Hola {nombre},
@@ -622,7 +622,7 @@ Quedo atento.""",
     """Hola {nombre},
 
 {retomo}
-{como_estas}¿Seguís con ganas de ver {producto} o preferís dejarlo para más adelante?
+{como_estas}¿Te viene bien una llamada breve esta semana?
 
 Quedo atento.""",
 )
@@ -902,7 +902,7 @@ Soy {sdr} ({marca}). {como_estas}{hook}
 ¿Te queda bien una videollamada breve?""",
     """Hola {nombre},
 
-{sdr} de {marca} por acá. {como_estas}{hook}
+Soy {sdr} de {marca}. {como_estas}{hook}
 
 {valor}
 
@@ -1025,7 +1025,7 @@ Quedo atento.""",
 {retomo}
 Quería dejarlo arriba por si el mensaje anterior no llegó en buen momento.
 
-¿Seguís con ganas de explorarlo?
+¿Agendamos 10 minutos para ver si encaja?
 
 Quedo atento.""",
     """Hola {nombre},
@@ -1067,7 +1067,7 @@ Soy {sdr} ({marca}). {como_estas}{te_escribo_por_corto}
 ¿Agendamos una charla breve?""",
     """Hola {nombre},
 
-{sdr} de {marca} por acá. {como_estas}{te_escribo_por_corto}
+Soy {sdr} de {marca}. {como_estas}{te_escribo_por_corto}
 
 {valor}
 
@@ -1186,7 +1186,7 @@ Quedo atento.""",
     """Hola {nombre},
 
 {retomo}
-¿Tiene sentido seguir explorando {producto}?
+¿Hacemos una charla corta esta semana?
 
 Quedo atento.""",
     """Hola {nombre},
@@ -1206,7 +1206,7 @@ Quedo atento.""",
     """Hola {nombre},
 
 {retomo}
-{como_estas}¿Seguís con ganas de ver {producto} o preferís dejarlo para más adelante?
+{como_estas}¿Te viene bien una llamada breve esta semana?
 
 Quedo atento.""",
 )
@@ -1576,6 +1576,26 @@ def first_touch_on_channel(
         if _norm_channel(str(t.get("channel") or "")) == ch:
             return False
     return True
+
+
+
+
+def is_sequence_first_touch(prior_touches: list[dict[str, Any]] | None) -> bool:
+    """True si no hubo ningún toque previo en la secuencia (cualquier canal)."""
+    return not bool(prior_touches)
+
+
+def resolve_bank_kind(
+    *,
+    prior_touches: list[dict[str, Any]] | None,
+    first_touch: bool | None = None,
+) -> str:
+    """cold solo si es 1º toque de la secuencia; con historial siempre fu."""
+    if prior_touches:
+        return "fu"
+    if first_touch is False:
+        return "fu"
+    return "cold"
 
 
 def pick_bank_index(

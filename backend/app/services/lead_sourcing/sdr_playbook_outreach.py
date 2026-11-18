@@ -2086,24 +2086,108 @@ def generate_sdr_playbook_touch(
 ) -> tuple[str | None, str, SdrReasoningRead]:
     """
     Cold / follow-up outbound: banco determinístico por canal (B2B/B2C).
-    Sin inventar industria; valor desde ficha de producto.
+    Post: guards de copy (apalancamiento, CTA, orden, etc.) — no salteables.
     """
     del education, step_objective, tone  # contexto LLM legacy; el banco no lo usa
-    from app.services.cold_message_bank import first_touch_on_channel, render_cold_bank_touch
+    from app.services.cold_message_bank import render_cold_bank_touch
     from app.services.outbound_text_normalize import normalize_outbound_email_body
+    from app.services.sequence_cold_bank_guard import cold_bank_forbidden
 
-    first_on_ch = first_touch_on_channel(prior_touches, channel)
+    # 1º toque = sin priors en la SECUENCIA (no “primer LI después de un mail”).
+    sequence_first = not bool(prior_touches)
     rendered = render_cold_bank_touch(
         channel=channel,
         prospect=prospect,
         campaign=campaign,
         product=product,
         prior_touches=prior_touches,
-        first_touch=first_on_ch,
+        first_touch=sequence_first,
         step_day=step_day,
     )
-    body = rendered.body
+    if cold_bank_forbidden(
+        prior_touches=prior_touches,
+        template_id=getattr(rendered, "template_id", None),
+    ):
+        rendered = render_cold_bank_touch(
+            channel=channel,
+            prospect=prospect,
+            campaign=campaign,
+            product=product,
+            prior_touches=prior_touches,
+            first_touch=False,
+            step_day=step_day,
+        )
+    body = rendered.body or ""
     subject = rendered.subject
     if channel == "email":
         body = normalize_outbound_email_body(body)
+
+    # --- Guards outbound (determinísticos) ---
+    from app.services.followup_anchor_guard import enforce_no_role_anchor_on_followup
+    from app.services.sequence_anchor_bridge_guard import enforce_anchor_value_bridge
+    from app.services.sequence_cta_guard import (
+        enforce_cta_repeat_limit,
+        enforce_one_meeting_cta_per_message,
+    )
+    from app.services.sequence_close_guard import enforce_close_and_cta
+    from app.services.sequence_interest_check_guard import enforce_no_interest_check
+    from app.services.sequence_value_once_guard import enforce_value_said_once
+    from app.services.sequence_product_name_guard import enforce_product_name_limit
+    from app.services.sequence_followup_value_guard import enforce_followup_value_angle
+    from app.services.sequence_followup_leverage_guard import (
+        enforce_followup_prior_leverage,
+    )
+    from app.services.sequence_structure_order_guard import (
+        enforce_outbound_structure_order,
+    )
+
+    if sequence_first:
+        body = enforce_anchor_value_bridge(
+            body=body,
+            sequence_first_touch=True,
+            seed=f"{prospect.get('id') or ''}|{step_day}",
+        )
+    body = enforce_no_role_anchor_on_followup(
+        body=body, sequence_first_touch=sequence_first
+    )
+    body = enforce_followup_prior_leverage(
+        body=body,
+        prior_touches=prior_touches,
+        sequence_first_touch=sequence_first,
+    )
+    body = enforce_cta_repeat_limit(body=body, prior_touches=prior_touches)
+    body = enforce_close_and_cta(body=body, prior_touches=prior_touches)
+    body = enforce_no_interest_check(body=body, prior_touches=prior_touches)
+    body = enforce_value_said_once(
+        body=body,
+        prior_touches=prior_touches,
+        sequence_first_touch=sequence_first,
+    )
+    if channel == "email":
+        from app.services.sequence_email_subject_guard import enforce_value_email_subject
+
+        subject = enforce_value_email_subject(
+            subject=subject,
+            product=product,
+            company=str(prospect.get("company_name") or ""),
+            seed=f"{prospect.get('id') or ''}|{step_day}|{subject or ''}",
+            sequence_first_touch=sequence_first,
+            channel="email",
+        )
+    body = enforce_product_name_limit(
+        body=body or "",
+        product_name=str((product or {}).get("name") or ""),
+        prior_touches=prior_touches,
+        sequence_first_touch=sequence_first,
+        brand=str((campaign or {}).get("brand_name") or (product or {}).get("name") or ""),
+    )
+    body = enforce_followup_value_angle(
+        body=body or "",
+        product=product,
+        prior_touches=prior_touches,
+        sequence_first_touch=sequence_first,
+        step_day=step_day,
+    )
+    body = enforce_one_meeting_cta_per_message(body or "")
+    body = enforce_outbound_structure_order(body or "")
     return subject, body, rendered.reasoning

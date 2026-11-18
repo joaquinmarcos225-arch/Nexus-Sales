@@ -685,3 +685,62 @@ def build_follow_up_body(
     )
     return rendered.body
 
+
+def connect_prospect_anchor_to_value(
+    anchor: str,
+    value: str,
+    *,
+    seed: str = "",
+    separate_paragraphs: bool = True,
+) -> str:
+    """Une ancla CRM («Vi que sos…») con el valor del producto (regla 3b)."""
+    a = re.sub(r"\s+", " ", (anchor or "").strip())
+    v = re.sub(r"\s+", " ", (value or "").strip())
+    if not a:
+        return v
+    if not v:
+        return a
+
+    def _separate() -> str:
+        if separate_paragraphs:
+            return f"{a}\n\n{v}"
+        return f"{a} {v}"
+
+    if not re.match(
+        r"(?i)^(con|desde|te\s+resumo|en\s+la\s+pr[aá]ctica|hoy|la\s+idea|"
+        r"lo\s+que\s+buscamos|la\s+propuesta)\b",
+        v,
+    ):
+        return _separate()
+
+    mode = 0
+    if seed:
+        head = (seed.split("|", 1)[0] or "").strip()
+        if head.isdigit():
+            mode = int(head) % 2
+        else:
+            digest = 0
+            for ch_i in seed.encode("utf-8"):
+                digest = (digest * 31 + ch_i) & 0xFFFFFFFF
+            mode = digest % 2
+
+    a_core = a.rstrip(".!? ").strip()
+    v_core = re.sub(
+        r"^(?:te\s+resumo|en\s+la\s+pr[aá]ctica|hoy|la\s+idea\s+es\s+simple)\s*[:,]?\s*",
+        "",
+        v,
+        flags=re.I,
+    ).strip()
+    if not v_core:
+        return _separate()
+    if not re.match(r"(?i)^(con|desde)\b", v_core):
+        return _separate()
+    if v_core[0].isupper():
+        v_core = v_core[0].lower() + v_core[1:]
+    if not v_core.endswith((".", "?", "!")):
+        v_core += "."
+
+    if mode == 0:
+        return f"{a_core}, y {v_core}"
+    return f"{a_core}. Para un rol como el tuyo, {v_core}"
+

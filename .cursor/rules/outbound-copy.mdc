@@ -1,0 +1,121 @@
+---
+description: Copy outbound (LI/WA/email) — presentación simple, valor completo, variedad sin ratonear
+alwaysApply: true
+---
+
+# Outbound copy — todos los canales
+
+Aplica a LinkedIn, WhatsApp, email y cualquier primer toque / follow-up outbound.
+
+## Presentación
+
+- Solo: `Soy {nombre} de {empresa}.` (o `Soy {nombre}.` si no hay marca).
+- **Prohibido:** «Me presento…», «Te escribo yo…», «…por acá», «Soy X y trabajo en Y».
+- Ya se entiende que se está presentando; no subrayarlo.
+
+## Valor del producto (dosificación por toque)
+
+- El valor sale de la ficha del Producto de esa campaña (`name` / `description` / `value_proposition`).
+- Nunca pitch de otro cliente / Nexus genérico sobre un producto ajeno (ver tenant-isolation).
+- Día 1 / primer toque: no abrir con precio/pago («se paga…», tarifas); ir al valor.
+
+### Intensidad según posición en la secuencia
+
+| Toque | Qué hacer con el valor |
+|---|---|
+| **1º (primer mensaje de la secuencia)** | Explicar bien. **No escasear:** oración completa con oferta clara; es el único mensaje que debe dejar entendido qué hacen. |
+| **Follow-ups (casi todos)** | **Una** idea corta / ángulo **nuevo** (no dicho antes). Generan interés. **Prohibido** FU vacío tipo solo «te escribí por X · ¿agendamos?». **Prohibido** re-pegar el pitch del 1º. |
+| **Último toque / breakup** (p. ej. día ≥16) | Puede ir casi sin info: retomo + CTA. |
+
+- **No ratonear en el 1º:** variedad ≠ mensaje flaco. Si hay que elegir, preferir oración completa con oferta clara antes que un scrap corto.
+- En FU, “chill” ≠ vacío: el ángulo nuevo es obligatorio salvo el último toque.
+
+### Dato de valor único (por persona)
+
+- Dentro de lo posible, en un follow-up sumá **un** dato/ángulo de valor que **no** se haya dicho en toques previos con esa persona.
+- Ese dato se dice **una sola vez** con esa persona (no re-pegarlo en toques siguientes).
+- **Prohibido** inventar hechos que no estén en la ficha del producto / brief.
+- Enforcement: si el body reusa un claim de valor ya usado, se saca. La IA no puede saltearlo.
+
+## Ancla del prospecto («Vi que sos…»)
+
+### Solo en el 1º toque de la secuencia
+
+- «Vi que sos {rol} de/en {empresa}» (o equivalente) es de **primer toque**.
+- **Follow-ups (cualquier toque con prior):** **PROHIBIDO** repetir «Vi que sos…», «Vi tu lugar como…», «Me cruzé con tu perfil…», etc.
+- En follow-up: **OBLIGATORIO apalancarse del hilo anterior** («te había escrito por LinkedIn/mail/WhatsApp», «retomo…»). **Prohibido** mensaje suelto sin apalancamiento.
+- Enforcement: si el FU no retoma el hilo, se inserta el retomo. La IA no puede saltearlo.
+
+### Puente ancla → valor (casi siempre D1)
+
+- Cuando sí hay «Vi que sos…», lo que sigue **no** puede ir desconectado tipo:  
+  `Vi que sos X de Yempresa.` + salto + `Con Producto…`  
+- Tiene que **conectarse** (puente natural en la misma idea). Ej.: «Vi que sos {rol} en {empresa}, y con {producto}…».
+- Si el valor no abre de forma continuable, dos frases limpias; **prohibido** el corte seco ancla / producto en párrafos separados.
+- No inventar dolores del rol.
+- Enforcement: si el body deja ancla y valor cortados, se unen. La IA no puede saltearlo.
+
+## Banco cold vs follow-up (secuencia)
+
+- Plantilla **cold** solo en el **1º toque de toda la secuencia** (cualquier canal).
+- Si ya hubo email/WhatsApp/LinkedIn, el siguiente LinkedIn (u otro canal) es **follow-up**: retomo + CTA — **nunca** otra plantilla `*-cold-*`.
+- Enforcement: el banco ignora “primer toque del canal”; si hay historial, fuerza FU. La IA no puede saltearlo.
+
+## Nombre del producto (no martillar)
+
+- El nombre del producto (ej. «Uber Direct», «Nexus Sales») **como máximo 1 vez por mensaje**.
+- En follow-ups: si ya se nombró en toques previos, **preferí no nombrarlo** («esto», «lo que hacemos», retomo del hilo).
+- Martillar el nombre en cada línea / cada toque suena a IA.
+- Enforcement: se recortan menciones de más. La IA no puede saltearlo.
+
+## Asunto de email (valor del producto)
+
+- El subject debe llevar un **ángulo corto de valor** del producto de la campaña (ej. Nexus: «Automatizá tu outbound»).
+- Variantes OK: el gancho solo; «Propuesta breve: {gancho}»; «{gancho} para {empresa}».
+- **Prohibido** como asunto único: «Propuesta breve para {empresa}», «Una idea para…», «Seguimiento» sin valor.
+- En follow-ups con hilo `Re:` se respeta el asunto del thread.
+- Enforcement: si el asunto es genérico, se reescribe con valor de la ficha. La IA no puede saltearlo.
+
+## Estructura (email / WhatsApp / LinkedIn)
+
+Orden general (todos los canales; la redacción puede variar, el orden no):
+
+1. **Inicio + apalancamiento** (saludo; en FU, retomo del hilo)
+2. **Información / valor** (se puede omitir en los últimos toques / breakup)
+3. **CTA** (un solo pedido de reunión)
+4. **Cierre** (si hay; p. ej. «Quedo atento» dentro del tope de secuencia)
+
+- Párrafos separados (línea en blanco).
+- **Prohibido NUNCA:** dos CTAs de reunión en el mismo mensaje. Enforcement: se deja uno solo.
+- **Prohibido:** todo el mensaje en un solo párrafo muro.
+- Si hay horarios de Calendar, reemplazan el CTA genérico (no se suman).
+- Enforcement: Python reordena a este esquema. La IA no puede saltearlo.
+
+## CTA de reunión (repetición + presencia)
+
+- Pedir reunión/llamada/charla es el objetivo del outbound: **ofrecemos**.
+- **Casi siempre** el CTA trae **2 opciones** de reunión:
+  - Con **Calendar conectado**: 2 huecos reales (día+hora) vía `with_calendar_slots` — reemplazan el CTA genérico.
+  - Sin Calendar: 2 opciones blandas (ej. «esta semana o la próxima», «10 o 15 minutos»), no inventar día/hora concretos.
+- **Repetir el mismo CTA está bien**, pero la **misma formulación** como máximo **2 veces** en toda la secuencia.
+- A la 3ª vez (u otra con el mismo texto normalizado): **obligatorio** cambiar la redacción del CTA (mismo pedido: agendar).
+- **Casi todos** los mensajes llevan CTA de reunión (uno solo). Eso es lo que produce reuniones. Puede faltar en alguno excepcional; en código, si falta, se agrega.
+- Enforcement: la IA no puede saltearlo.
+
+## Interés residual (prohibido)
+
+- **Prohibido** preguntar si «seguís interesad@», «seguís con ganas de verlo/explorarlo», «todavía te interesa», «te sigue interesando», «tiene sentido seguir explorando…» u equivalentes.
+- No es inbound: no medimos interés residual; **ofrecemos** reunión/llamada/charla.
+- Enforcement en código: se saca el chequeo y, si hace falta, se deja CTA. La IA no puede saltearlo.
+
+## Cierre («Quedo atento» y familia)
+
+- «Quedo atento» / «Quedo atento a lo que te quede mejor» (y coletillas equivalentes) como máximo **2 veces** en toda la secuencia.
+- Si ya se usó 2 veces: **prohibido** volver a cerrar así; CTA claro y cierre distinto o sin coletilla.
+- Enforcement en código: si se pasa del tope, se saca el cierre. La IA no puede saltearlo.
+
+## Variedad (inicio / desarrollo / cierre)
+
+- Mismo valor posible, **otra formulación** entre prospectos (saludo, ancla, valor, CTA).
+- Con pocos mensajes no deben verse calcados; con muchos, algo de solapamiento es OK.
+- Variar **sin** sacrificar información ni cortar ideas a medias.

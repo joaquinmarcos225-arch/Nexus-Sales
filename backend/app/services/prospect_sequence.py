@@ -1770,7 +1770,77 @@ def _generate_real_touch_content(
             detail="La IA no devolvió un mensaje válido para este toque.",
         )
 
+    # Guards outbound también en fallback / paths que no pasaron el playbook limpio.
+    sequence_first = not bool(prior)
+    from app.services.followup_anchor_guard import enforce_no_role_anchor_on_followup
+    from app.services.sequence_anchor_bridge_guard import enforce_anchor_value_bridge
+    from app.services.sequence_cta_guard import (
+        enforce_cta_repeat_limit,
+        enforce_one_meeting_cta_per_message,
+    )
+    from app.services.sequence_close_guard import enforce_close_and_cta
+    from app.services.sequence_interest_check_guard import enforce_no_interest_check
+    from app.services.sequence_value_once_guard import enforce_value_said_once
+    from app.services.sequence_product_name_guard import enforce_product_name_limit
+    from app.services.sequence_followup_value_guard import enforce_followup_value_angle
+    from app.services.sequence_followup_leverage_guard import (
+        enforce_followup_prior_leverage,
+    )
+    from app.services.sequence_structure_order_guard import (
+        enforce_outbound_structure_order,
+    )
+
+    if sequence_first:
+        body = enforce_anchor_value_bridge(
+            body=body,
+            sequence_first_touch=True,
+            seed=f"{getattr(prospect, 'id', '')}|{day}",
+        )
+    body = enforce_no_role_anchor_on_followup(
+        body=body, sequence_first_touch=sequence_first
+    )
+    body = enforce_followup_prior_leverage(
+        body=body,
+        prior_touches=prior,
+        sequence_first_touch=sequence_first,
+    )
+    body = enforce_cta_repeat_limit(body=body, prior_touches=prior)
+    body = enforce_close_and_cta(body=body, prior_touches=prior)
+    body = enforce_no_interest_check(body=body, prior_touches=prior)
+    body = enforce_value_said_once(
+        body=body,
+        prior_touches=prior,
+        sequence_first_touch=sequence_first,
+    )
+    body = enforce_product_name_limit(
+        body=body or "",
+        product_name=str((_product_dict(product) or {}).get("name") or ""),
+        prior_touches=prior,
+        sequence_first_touch=sequence_first,
+        brand=str(company_brand_name(campaign) or ""),
+    )
+    body = enforce_followup_value_angle(
+        body=body or "",
+        product=_product_dict(product),
+        prior_touches=prior,
+        sequence_first_touch=sequence_first,
+        step_day=day,
+    )
+    body = enforce_one_meeting_cta_per_message(body or "")
+    body = enforce_outbound_structure_order(body or "")
+
     subject = (subj or "").strip() or None
+    if step.channel == "email":
+        from app.services.sequence_email_subject_guard import enforce_value_email_subject
+
+        subject = enforce_value_email_subject(
+            subject=subject,
+            product=_product_dict(product),
+            company=(getattr(prospect, "company_name", None) or "").strip(),
+            seed=f"{getattr(prospect, 'id', '')}|{day}|{subject or ''}",
+            sequence_first_touch=sequence_first,
+            channel="email",
+        )
     if step.channel == "email" and not subject:
         raise HTTPException(
             status_code=502,
