@@ -80,6 +80,7 @@ class AuthUserRead(BaseModel):
     permissions: list[str]
     is_support_ops: bool = False
     avatar_url: str | None = None
+    connection_alerts: list[dict] = []
     access_token: str | None = None
 
 

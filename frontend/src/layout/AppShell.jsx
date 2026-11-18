@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import { useMediaQuery } from '../hooks/useMediaQuery.js'
 import { useSidebarCollapsed } from '../hooks/useSidebarCollapsed.js'
+import { ConnectionAlertsBanner } from '../components/ConnectionAlertsBanner.jsx'
 import { TutorialOverlay } from '../components/tutorial/TutorialOverlay.jsx'
 import { ChromeWaveOverlay } from '../components/brand/ChromeWaveOverlay.jsx'
 import { Header } from './Header'
@@ -66,6 +67,7 @@ export function AppShell() {
           onMenuClick={() => setMobileOpen(true)}
           onToggleSidebar={toggle}
         />
+        <ConnectionAlertsBanner />
         <main className="nx-main-surface relative z-10 min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-5 lg:p-8">
           <div className="mx-auto w-full max-w-7xl">
             <Outlet />
