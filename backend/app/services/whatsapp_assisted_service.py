@@ -459,9 +459,13 @@ def confirm_whatsapp_sent(db: Session, prospect: Prospect) -> str:
     prospect.whatsapp_assist_session_id = None
     _set_assist_status(prospect, STATUS_SENT)
 
+    from app.services.linkedin_sequence_policy import reset_sequence_clock_after_post_connect_dm
     from app.services.prospect_sequence import complete_pending_whatsapp_sequence_touch
 
     complete_pending_whatsapp_sequence_touch(db, prospect=prospect)
+    sent_at = prospect.whatsapp_sdr_marked_sent_at or datetime.now(UTC)
+    # Reinicia el reloj del próximo follow-up desde el envío real.
+    reset_sequence_clock_after_post_connect_dm(prospect, sent_at)
 
     day = _day_index_one_based(prospect.sequence_started_at)
     _update_group_for_prospect(

@@ -12,7 +12,8 @@ def _prospect_day4_due() -> Prospect:
     log = {
         "1": {
             "status": "enviado",
-            "sent_at": (started + timedelta(hours=2)).isoformat(),
+            # Reloj del FU = sent_at + 3d (no start+2h, que dejaría el due en el futuro).
+            "sent_at": started.isoformat(),
             "message_body": "Hola día 1",
             "body": "Hola día 1",
             "gmail_draft_id": "draft-1",
@@ -41,7 +42,12 @@ def test_evaluate_scheduled_touch_day4_when_calendar_due():
 
 def test_evaluate_scheduled_touch_not_due_yet():
     prospect = _prospect_day4_due()
-    prospect.sequence_started_at = datetime.now(UTC) - timedelta(days=1)
+    started = datetime.now(UTC) - timedelta(days=1)
+    prospect.sequence_started_at = started
+    # Reloj anclado a sent_at: si mandó hace 1d, el gap de 3d aún no venció.
+    log = json.loads(prospect.sequence_touch_log)
+    log["1"]["sent_at"] = started.isoformat()
+    prospect.sequence_touch_log = json.dumps(log)
     day, reason = evaluate_scheduled_touch(prospect)
     assert day is None
     assert reason == "not_calendar_due"
@@ -417,6 +423,44 @@ def test_handoff_respects_exact_start_hour():
     )
     assert omitted == [1]
     assert not prospect.linkedin_assisted_draft
+
+
+def test_handoff_resets_from_actual_send_not_sequence_start():
+    """Si el LI se mandó hoy, el WA vence 3 días después del envío (no del start)."""
+    from app.services.prospect_sequence import assisted_next_touch_due_at
+
+    campaign = _li_wa_campaign()
+    started = datetime(2026, 11, 16, 17, 4, 0, tzinfo=UTC)
+    sent = datetime(2026, 11, 18, 15, 0, 0, tzinfo=UTC)
+    prospect = _prospect_unsent_li_day1(days_elapsed=0)
+    prospect.sequence_started_at = started
+    prospect.linkedin_sdr_marked_sent_at = sent
+    prospect.linkedin_assist_status = "sent"
+    prospect.linkedin_assisted_draft = None
+    log = {
+        "1": {
+            "status": "enviado",
+            "channel": "linkedin",
+            "generated_at": started.isoformat(),
+            "sent_at": sent.isoformat(),
+            "message_body": "Hola Nicolás",
+        },
+        "4": {"status": "pendiente", "channel": "whatsapp"},
+    }
+    prospect.sequence_touch_log = json.dumps(log)
+
+    due = assisted_next_touch_due_at(prospect, 4, campaign)
+    assert due == datetime(2026, 11, 21, 15, 0, 0, tzinfo=UTC)
+
+    # Sin envío: sigue anclado al start (+3d), no a un generated_at tardío.
+    prospect2 = _prospect_unsent_li_day1(days_elapsed=0)
+    prospect2.sequence_started_at = started
+    prospect2.linkedin_sdr_marked_sent_at = None
+    log2 = json.loads(prospect2.sequence_touch_log)
+    log2["1"]["generated_at"] = sent.isoformat()
+    prospect2.sequence_touch_log = json.dumps(log2)
+    due2 = assisted_next_touch_due_at(prospect2, 4, campaign)
+    assert due2 == datetime(2026, 11, 19, 17, 4, 0, tzinfo=UTC)
 
 
 def test_never_both_linkedin_and_whatsapp_live_drafts():

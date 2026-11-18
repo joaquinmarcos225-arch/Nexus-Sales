@@ -3171,6 +3171,37 @@ def _assisted_queue_started_at(
     return None
 
 
+def _prior_assisted_sent_at(
+    prospect: Prospect,
+    *,
+    entry: dict[str, Any],
+    channel: str,
+) -> datetime | None:
+    """Ancla real de envío del toque previo (mark-sent / sent_at)."""
+    for key in ("sent_at", "marked_sent_at"):
+        dt = _parse_dt(entry.get(key))
+        if dt is not None:
+            return dt
+    status = str(entry.get("status") or "").strip().lower()
+    ch = (channel or "").strip().lower()
+    if status in {TOUCH_ENVIADO, "enviado", "sent"} or _assisted_touch_was_sent(
+        prospect, ch, entry
+    ):
+        if ch == "linkedin":
+            dt = _parse_dt(getattr(prospect, "linkedin_sdr_marked_sent_at", None))
+            if dt is not None:
+                return dt
+        if ch == "whatsapp":
+            dt = _parse_dt(getattr(prospect, "whatsapp_sdr_marked_sent_at", None))
+            if dt is not None:
+                return dt
+    if ch == "linkedin":
+        return _parse_dt(getattr(prospect, "linkedin_sdr_marked_sent_at", None))
+    if ch == "whatsapp":
+        return _parse_dt(getattr(prospect, "whatsapp_sdr_marked_sent_at", None))
+    return None
+
+
 def assisted_next_touch_due_at(
     prospect: Prospect,
     day: int,
@@ -3179,9 +3210,10 @@ def assisted_next_touch_due_at(
     """
     Momento exacto en que el toque `day` puede generarse / el anterior debe salir.
 
-    - Primer toque del plan: sequence_started_at + (day-1) días (misma hora).
-      Ej. inicio vie 17:00 → día 4 el lun 17:00.
-    - Toques siguientes: generated_at del toque anterior + 3 días (misma hora).
+    Regla: el reloj del follow-up se reinicia cuando el toque previo se ENVÍA.
+    - Si el previo fue enviado (mark-sent / sent_at): due = sent_at + 3 días.
+    - Si el previo NO se envió: due = sequence_started_at + 3 días (primer tramo)
+      o skipped/generated + 3 días (tramos siguientes).
     """
     from app.services.linkedin_sequence_policy import ASSISTED_QUEUE_TTL_DAYS
 
@@ -3206,17 +3238,27 @@ def assisted_next_touch_due_at(
         or (getattr(step, "channel", None) if step else "")
         or ""
     ).strip().lower()
-    anchor = _assisted_queue_started_at(prospect, prev_entry, prev_channel)
-    if anchor is None:
-        anchor = (
-            _parse_dt(prev_entry.get("sent_at"))
-            or _parse_dt(prev_entry.get("skipped_at"))
-            or started
-        )
+
+    sent_at = _prior_assisted_sent_at(
+        prospect, entry=prev_entry, channel=prev_channel
+    )
+    if sent_at is not None:
+        if sent_at.tzinfo is None:
+            sent_at = sent_at.replace(tzinfo=UTC)
+        return sent_at + timedelta(days=ASSISTED_QUEUE_TTL_DAYS)
+
+    # Previo sin envío: no adelantar por generated_at tardío en el 1º tramo.
     first = min(planned) if planned else prev
     if prev == first:
-        # Primer tramo: ancla = inicio de secuencia (no generated_at tardío).
         return started + timedelta(days=ASSISTED_QUEUE_TTL_DAYS)
+
+    anchor = (
+        _parse_dt(prev_entry.get("skipped_at"))
+        or _assisted_queue_started_at(prospect, prev_entry, prev_channel)
+        or started
+    )
+    if anchor.tzinfo is None:
+        anchor = anchor.replace(tzinfo=UTC)
     return anchor + timedelta(days=ASSISTED_QUEUE_TTL_DAYS)
 
 
