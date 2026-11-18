@@ -1,8 +1,10 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 from datetime import UTC, datetime
 
 from app.models import Company
+from app.models.campaign import Campaign
+from app.models.credit_ledger import CreditLedgerEntry
 from app.models.credit_wallet import CreditWallet
 from app.models.enums import UserRole
 from app.models.product import Product
@@ -139,6 +141,64 @@ def get_wallet_totals(session: Session, company_id: int) -> tuple[CreditWallet, 
     return wallet, total, assigned, unassigned
 
 
+def _assert_credits_not_blocked(session: Session, company_id: int) -> None:
+    from app.services.ops_agenda import credits_block_message
+
+    msg = credits_block_message(session, company_id)
+    if msg:
+        raise CreditError(msg)
+
+
+def _atomic_use_allocation(
+    session: Session, row: SellerCreditAllocation, amount: int, *, label: str = ""
+) -> None:
+    """Suma `amount` a used_balance en una sola escritura, solo si alcanza el saldo.
+
+    Evita que dos pedidos simultáneos lean el mismo saldo y cobren/descuenten mal.
+    """
+    _assert_credits_not_blocked(session, int(row.company_id))
+    session.flush()
+    res = session.execute(
+        update(SellerCreditAllocation)
+        .where(
+            SellerCreditAllocation.id == row.id,
+            SellerCreditAllocation.allocated_balance - SellerCreditAllocation.used_balance >= amount,
+        )
+        .values(used_balance=SellerCreditAllocation.used_balance + amount)
+        .execution_options(synchronize_session=False)
+    )
+    session.expire(row, ["used_balance", "allocated_balance"])
+    if res.rowcount != 1:
+        available = max(0, int(row.allocated_balance) - int(row.used_balance))
+        raise CreditError(f"Créditos insuficientes{label}: disponible {available}, requerido {amount}")
+
+
+def _atomic_take_pool(session: Session, company_id: int, amount: int, *, label: str = "") -> None:
+    """Descuenta del pool libre de la empresa en una sola escritura, solo si alcanza."""
+    _assert_credits_not_blocked(session, company_id)
+    session.flush()
+    assigned = (
+        select(func.coalesce(func.sum(SellerCreditAllocation.allocated_balance), 0))
+        .where(SellerCreditAllocation.company_id == company_id)
+        .scalar_subquery()
+    )
+    res = session.execute(
+        update(CreditWallet)
+        .where(CreditWallet.company_id == company_id, CreditWallet.total_balance - assigned >= amount)
+        .values(total_balance=CreditWallet.total_balance - amount)
+        .execution_options(synchronize_session=False)
+    )
+    wallet = session.scalars(select(CreditWallet).where(CreditWallet.company_id == company_id)).one_or_none()
+    if wallet is not None:
+        session.expire(wallet, ["total_balance"])
+    if res.rowcount != 1:
+        _, _total, _assigned, unassigned = get_wallet_totals(session, company_id)
+        raise CreditError(
+            f"Créditos insuficientes en el pool de empresa{label}: "
+            f"disponible {unassigned}, requerido {amount}"
+        )
+
+
 def ensure_wallet(session: Session, company: Company) -> CreditWallet:
     if company.wallet is not None:
         return company.wallet
@@ -244,24 +304,39 @@ def apply_plan_credits_to_company(
     return wallet
 
 
-def renew_due_plan_credits(session: Session) -> dict[str, int]:
-    """Renovación mensual + expiración de sobrantes (sin arrastre)."""
+def _as_utc(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def one_month_after(dt: datetime) -> datetime:
+    """Mismo día del mes siguiente (31/01 → 28/02)."""
+    import calendar
+
+    dt = _as_utc(dt)
+    year = dt.year + dt.month // 12
+    month = dt.month % 12 + 1
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
+
+
+def renew_due_plan_credits(session: Session, *, now: datetime | None = None) -> dict[str, int]:
+    """Un mes después de la última carga de créditos: renueva el plan (pasarela activa) o vence lo no usado."""
     from app.services.billing.service import company_can_auto_renew
 
-    cycle = current_plan_cycle_key()
+    now = _as_utc(now or datetime.now(UTC))
     wallets = session.scalars(select(CreditWallet)).all()
     renewed = 0
     expired = 0
     skipped = 0
     for wallet in wallets:
-        prev_cycle = (wallet.plan_cycle_key or "").strip()
-        if prev_cycle == cycle:
+        anchor = wallet.plan_last_credited_at
+        if anchor is None:
+            # Saldo cargado antes de que se registrara la fecha de carga: el mes corre desde hoy.
+            if int(wallet.total_balance or 0) > 0:
+                wallet.plan_last_credited_at = now
             skipped += 1
             continue
-        # Top-up / piloto sin ciclo de plan: no es un mes vencido. Marcar el mes
-        # actual y no quemar el saldo (CostGuard video: 00:05 UTC 2026-08-20).
-        if not prev_cycle:
-            wallet.plan_cycle_key = cycle
+        if now < one_month_after(anchor):
             skipped += 1
             continue
         company = session.get(Company, int(wallet.company_id))
@@ -269,32 +344,19 @@ def renew_due_plan_credits(session: Session) -> dict[str, int]:
             skipped += 1
             continue
 
-        will_grant = False
         if company_can_auto_renew(company):
-            status = (company.billing_status or "none").strip().lower()
-            provider = (company.billing_provider or "").strip().lower()
-            if status == "active" and provider in ("stripe", "mercadopago"):
-                period_end = company.billing_period_end
-                if period_end is not None:
-                    pe = period_end if period_end.tzinfo else period_end.replace(tzinfo=UTC)
-                    if pe > datetime.now(UTC):
-                        will_grant = False
-                    else:
-                        will_grant = True
-                else:
-                    will_grant = True
-            else:
-                will_grant = True
-
-        if will_grant:
+            period_end = company.billing_period_end
+            if period_end is not None and _as_utc(period_end) > now:
+                # La pasarela todavía no cerró el período: acredita el webhook de pago.
+                skipped += 1
+                continue
             try:
-                # apply_plan_credits_to_company ya expira sobrantes antes de acreditar.
                 before = int(wallet.total_balance or 0)
                 apply_plan_credits_to_company(
                     session,
                     int(wallet.company_id),
                     manual=False,
-                    allow_repeat_cycle=False,
+                    allow_repeat_cycle=True,
                 )
                 renewed += 1
                 if before > 0:
@@ -303,12 +365,12 @@ def renew_due_plan_credits(session: Session) -> dict[str, int]:
                 skipped += 1
             continue
 
-        # Sin renovación: igual se pierden los sobrantes al cambiar el mes.
         burned = expire_unused_plan_credits(
             session,
             int(wallet.company_id),
-            note=f"Fin de ciclo {(wallet.plan_cycle_key or '?')}: créditos no usados a 0",
+            note=f"Pasó un mes desde la carga del {_as_utc(anchor):%d/%m}: créditos no usados a 0",
         )
+        wallet.plan_last_credited_at = None
         if burned > 0:
             expired += 1
         skipped += 1
@@ -317,7 +379,7 @@ def renew_due_plan_credits(session: Session) -> dict[str, int]:
         "renewed": renewed,
         "expired": expired,
         "skipped": skipped,
-        "cycle": cycle,
+        "cycle": current_plan_cycle_key(now),
     }
 
 
@@ -346,6 +408,8 @@ def top_up_company(
     wallet.total_balance = int(wallet.total_balance) + int(amount)
     if not (wallet.plan_cycle_key or "").strip():
         wallet.plan_cycle_key = current_plan_cycle_key()
+    if int(amount) > 0:
+        wallet.plan_last_credited_at = datetime.now(UTC)
     record_credit_ledger(
         session,
         company_id=company_id,
@@ -358,26 +422,43 @@ def top_up_company(
     return wallet
 
 
+def _seller_allocation(
+    session: Session, company_id: int, user_id: int
+) -> SellerCreditAllocation | None:
+    return session.scalars(
+        select(SellerCreditAllocation).where(
+            SellerCreditAllocation.company_id == company_id,
+            SellerCreditAllocation.seller_id == user_id,
+        )
+    ).first()
+
+
+def _has_personal_cupo(row: SellerCreditAllocation | None) -> bool:
+    return row is not None and int(row.allocated_balance) > 0
+
+
+def _uses_director_company_pool(user: User | None, row: SellerCreditAllocation | None) -> bool:
+    """Director/owner gasta del pool salvo que tenga cupo personal asignado."""
+    if user is None or not is_company_admin(user.role):
+        return False
+    return not _has_personal_cupo(row)
+
+
 def get_user_available_credits(session: Session, company_id: int, user_id: int) -> int:
     """
     Créditos disponibles para crear/ampliar campañas.
-    Director/Owner: pool no asignado de la empresa.
+    Director/Owner: pool no asignado de la empresa, salvo cupo personal asignado.
     SDR/Manager: allocated - used de su asignación.
     """
     user = session.get(User, user_id)
-    if user is not None and user.company_id == company_id and is_company_admin(user.role):
+    row = _seller_allocation(session, company_id, user_id)
+    if user is not None and user.company_id == company_id and _uses_director_company_pool(user, row):
         try:
             _, _total, _assigned, unassigned = get_wallet_totals(session, company_id)
         except CreditError:
             return 0
         return int(unassigned)
 
-    row = session.scalars(
-        select(SellerCreditAllocation).where(
-            SellerCreditAllocation.company_id == company_id,
-            SellerCreditAllocation.seller_id == user_id,
-        )
-    ).first()
     if row is None:
         return 0
     return max(0, int(row.allocated_balance) - int(row.used_balance))
@@ -402,14 +483,9 @@ def _consume_company_pool_credits(
     actor_user_id: int | None = None,
 ) -> None:
     """Descuenta del pool no asignado (uso directo del director/owner)."""
-    wallet, _total, _assigned, unassigned = get_wallet_totals(session, company_id)
-    if amount > unassigned:
-        label = f" ({reason})" if reason else ""
-        raise CreditError(
-            f"Créditos insuficientes en el pool de empresa{label}: "
-            f"disponible {unassigned}, requerido {amount}"
-        )
-    wallet.total_balance = int(wallet.total_balance) - int(amount)
+    label = f" ({reason})" if reason else ""
+    get_wallet_totals(session, company_id)
+    _atomic_take_pool(session, company_id, int(amount), label=label)
     record_credit_ledger(
         session,
         company_id=company_id,
@@ -459,7 +535,8 @@ def consume_user_credits(
         return None
 
     user = session.get(User, user_id)
-    if user is not None and user.company_id == company_id and is_company_admin(user.role):
+    row = _seller_allocation(session, company_id, user_id)
+    if user is not None and user.company_id == company_id and _uses_director_company_pool(user, row):
         _consume_company_pool_credits(
             session,
             company_id,
@@ -470,19 +547,14 @@ def consume_user_credits(
         )
         return None
 
-    row = session.scalars(
-        select(SellerCreditAllocation).where(
-            SellerCreditAllocation.company_id == company_id,
-            SellerCreditAllocation.seller_id == user_id,
-        )
-    ).first()
     if row is None or int(row.allocated_balance) <= 0:
-        return None
-    available = int(row.allocated_balance) - int(row.used_balance)
-    if amount > available:
         label = f" ({reason})" if reason else ""
-        raise CreditError(f"Créditos insuficientes{label}: disponible {available}, requerido {amount}")
-    row.used_balance = int(row.used_balance) + int(amount)
+        raise CreditError(
+            f"Créditos insuficientes{label}: no hay créditos asignados a este vendedor. "
+            "Pedile al director que te asigne créditos."
+        )
+    label = f" ({reason})" if reason else ""
+    _atomic_use_allocation(session, row, int(amount), label=label)
     if _campaign_ledger_reason(reason):
         record_credit_ledger(
             session,
@@ -506,7 +578,8 @@ def consume_sequence_individual_credit(
 ) -> None:
     """1 crédito obligatorio al iniciar secuencia individual (manual)."""
     user = session.get(User, user_id)
-    if user is not None and user.company_id == company_id and is_company_admin(user.role):
+    row = _seller_allocation(session, company_id, user_id)
+    if user is not None and user.company_id == company_id and _uses_director_company_pool(user, row):
         _consume_company_pool_credits(
             session,
             company_id,
@@ -517,22 +590,11 @@ def consume_sequence_individual_credit(
         )
         return
 
-    row = session.scalars(
-        select(SellerCreditAllocation).where(
-            SellerCreditAllocation.company_id == company_id,
-            SellerCreditAllocation.seller_id == user_id,
-        )
-    ).first()
     if row is None:
         raise CreditError(
             "Créditos insuficientes (secuencia individual): no hay saldo asignado a tu usuario"
         )
-    available = int(row.allocated_balance) - int(row.used_balance)
-    if available < 1:
-        raise CreditError(
-            f"Créditos insuficientes (secuencia individual): disponible {available}, requerido 1"
-        )
-    row.used_balance = int(row.used_balance) + 1
+    _atomic_use_allocation(session, row, 1, label=" (secuencia individual)")
     record_credit_ledger(
         session,
         company_id=company_id,
@@ -541,6 +603,79 @@ def consume_sequence_individual_credit(
         kind="campaign_reserve",
         amount=1,
         note="secuencia individual",
+    )
+    session.flush()
+
+
+def consume_followup_credit(
+    session: Session,
+    company_id: int,
+    user_id: int,
+    *,
+    actor_user_id: int | None = None,
+    prospect_id: int | None = None,
+) -> None:
+    """1 crédito por follow-up manual desde Pipeline."""
+    note = "follow-up pipeline"
+    if prospect_id:
+        note = f"follow-up pipeline · prospecto {prospect_id}"
+    user = session.get(User, user_id)
+    row = _seller_allocation(session, company_id, user_id)
+    if user is not None and user.company_id == company_id and _uses_director_company_pool(user, row):
+        _consume_company_pool_credits(
+            session,
+            company_id,
+            user_id,
+            1,
+            reason=note,
+            actor_user_id=actor_user_id,
+        )
+        return
+
+    if row is None:
+        raise CreditError(
+            "Créditos insuficientes (follow-up): no hay saldo asignado al SDR de la campaña"
+        )
+    _atomic_use_allocation(session, row, 1, label=" (follow-up)")
+    record_credit_ledger(
+        session,
+        company_id=company_id,
+        user_id=user_id,
+        actor_user_id=actor_user_id or user_id,
+        kind="followup_reserve",
+        amount=1,
+        note=note,
+    )
+    session.flush()
+
+
+def consume_explorar_credit(
+    session: Session,
+    company_id: int,
+    user_id: int,
+    *,
+    kind: str,
+    note: str,
+) -> None:
+    """1 crédito por uso de Explorar (revelar contacto o bloque de búsquedas)."""
+    user = session.get(User, user_id)
+    row = _seller_allocation(session, company_id, user_id)
+    if user is not None and user.company_id == company_id and _uses_director_company_pool(user, row):
+        get_wallet_totals(session, company_id)
+        _atomic_take_pool(session, company_id, 1, label=f" ({note})")
+    else:
+        available = 0 if row is None else int(row.allocated_balance) - int(row.used_balance)
+        if row is None or available < 1:
+            raise CreditError(f"Créditos insuficientes ({note}): disponible {max(0, available)}, requerido 1")
+        _atomic_use_allocation(session, row, 1, label=f" ({note})")
+    record_credit_ledger(
+        session,
+        company_id=company_id,
+        user_id=user_id,
+        actor_user_id=user_id,
+        kind=kind,
+        amount=1,
+        note=note,
     )
     session.flush()
 
@@ -559,7 +694,8 @@ def release_user_credits(
         return None
 
     user = session.get(User, user_id)
-    if user is not None and user.company_id == company_id and is_company_admin(user.role):
+    row = _seller_allocation(session, company_id, user_id)
+    if user is not None and user.company_id == company_id and _uses_director_company_pool(user, row):
         _release_company_pool_credits(
             session,
             company_id,
@@ -570,12 +706,6 @@ def release_user_credits(
         )
         return None
 
-    row = session.scalars(
-        select(SellerCreditAllocation).where(
-            SellerCreditAllocation.company_id == company_id,
-            SellerCreditAllocation.seller_id == user_id,
-        )
-    ).first()
     if row is None:
         return None
     before = int(row.used_balance)
@@ -614,6 +744,79 @@ def reserve_campaign_prospection_credits(
     )
 
 
+def net_campaign_reserved_credits(
+    session: Session,
+    company_id: int,
+    seller_id: int,
+    campaign_name: str,
+) -> int:
+    """Neto reserve−release de esta campaña en esta empresa (ledger)."""
+    name = (campaign_name or "").strip()
+    if not name or seller_id <= 0:
+        return 0
+    token = f"campaña «{name}»"
+    rows = session.scalars(
+        select(CreditLedgerEntry).where(
+            CreditLedgerEntry.company_id == int(company_id),
+            CreditLedgerEntry.user_id == int(seller_id),
+            CreditLedgerEntry.kind.in_(("campaign_reserve", "campaign_release")),
+        )
+    ).all()
+    net = 0
+    for row in rows:
+        note = (row.note or "").strip()
+        if token not in note and name not in note:
+            continue
+        amt = int(row.amount or 0)
+        if row.kind == "campaign_reserve":
+            net += amt
+        elif row.kind == "campaign_release":
+            net -= amt
+    return max(0, net)
+
+
+def ensure_campaign_search_credits_charged(session: Session, campaign: Campaign) -> int:
+    """
+    Si la búsqueda ya trajo prospectos y en esta empresa no están cobrados, descuenta el faltante.
+
+    Cubre migraciones / devoluciones erróneas: búsqueda hecha ⇒ crédito sacado.
+    """
+    from app.services.campaign_prospects import get_campaign_prospects_found_total
+    from app.services.manual_sequence_kickoff import is_individual_container_campaign
+    from app.services.postergados_campaign import is_postergados_campaign
+    from app.services.prospect_base_campaign import is_prospect_base_campaign
+
+    if campaign is None or not getattr(campaign, "id", None):
+        return 0
+    if (
+        is_individual_container_campaign(campaign)
+        or is_postergados_campaign(campaign)
+        or is_prospect_base_campaign(campaign)
+    ):
+        return 0
+    seller_id = int(campaign.seller_id or 0)
+    company_id = int(campaign.company_id or 0)
+    if seller_id <= 0 or company_id <= 0:
+        return 0
+    found = int(
+        get_campaign_prospects_found_total(session, int(campaign.id), campaign=campaign) or 0
+    )
+    if found <= 0:
+        return 0
+    net = net_campaign_reserved_credits(session, company_id, seller_id, campaign.name or "")
+    gap = found - net
+    if gap <= 0:
+        return 0
+    consume_user_credits(
+        session,
+        company_id,
+        seller_id,
+        gap,
+        reason=f"campaña «{(campaign.name or '').strip()}» (búsqueda)",
+    )
+    return gap
+
+
 def adjust_campaign_prospection_credits(
     session: Session,
     company_id: int,
@@ -622,6 +825,7 @@ def adjust_campaign_prospection_credits(
     new_count: int,
     *,
     campaign_name: str,
+    campaign: Campaign | None = None,
 ) -> None:
     delta = int(new_count) - int(old_count)
     if delta == 0:
@@ -629,13 +833,168 @@ def adjust_campaign_prospection_credits(
     label = f"campaña «{campaign_name.strip()}»"
     if delta > 0:
         consume_user_credits(session, company_id, seller_id, delta, reason=f"ampliar {label}")
+    elif campaign is not None:
+        release_campaign_unused_credits(session, campaign, -delta, action="reducir")
     else:
         release_user_credits(session, company_id, seller_id, -delta, reason=f"reducir {label}")
 
 
+def _current_period_start(session: Session, company_id: int) -> datetime | None:
+    wallet = session.scalars(select(CreditWallet).where(CreditWallet.company_id == int(company_id))).one_or_none()
+    return None if wallet is None else wallet.plan_last_credited_at
+
+
+def refundable_campaign_credits(session: Session, campaign: Campaign, unused: int) -> int:
+    """Solo vuelven créditos reservados en el mes en curso; los de un mes ya cerrado vencieron."""
+    unused = max(0, int(unused))
+    start = _current_period_start(session, campaign.company_id)
+    if unused == 0 or start is None:
+        return 0
+    start = _as_utc(start).replace(microsecond=0)
+    if campaign.created_at is not None and _as_utc(campaign.created_at) >= start:
+        return unused
+    expanded = session.scalar(
+        select(func.coalesce(func.sum(CreditLedgerEntry.amount), 0)).where(
+            CreditLedgerEntry.company_id == campaign.company_id,
+            CreditLedgerEntry.user_id == campaign.seller_id,
+            CreditLedgerEntry.kind == "campaign_reserve",
+            CreditLedgerEntry.note == f"ampliar campaña «{(campaign.name or '').strip()}»",
+            CreditLedgerEntry.created_at >= start,
+        )
+    )
+    return min(unused, max(0, int(expanded or 0)))
+
+
+def release_campaign_unused_credits(session: Session, campaign: Campaign, unused: int, *, action: str) -> int:
+    """Devuelve lo no usado de una campaña (al eliminarla o achicarla), solo si es del mes en curso."""
+    label = f"{action} campaña «{(campaign.name or '').strip()}»"
+    refund = refundable_campaign_credits(session, campaign, unused)
+    if refund > 0:
+        release_user_credits(session, campaign.company_id, campaign.seller_id, refund, reason=label)
+    expired = max(0, int(unused)) - refund
+    if expired > 0:
+        record_credit_ledger(
+            session,
+            company_id=campaign.company_id,
+            user_id=campaign.seller_id,
+            kind="campaign_release_expired",
+            amount=0,
+            note=f"{label}: {expired} créditos no vuelven porque eran de un mes ya cerrado",
+        )
+        session.flush()
+    return refund
+
+
+def _allocation_row(session: Session, company_id: int, user_id: int) -> SellerCreditAllocation | None:
+    return session.scalars(
+        select(SellerCreditAllocation).where(
+            SellerCreditAllocation.company_id == company_id,
+            SellerCreditAllocation.seller_id == user_id,
+        )
+    ).first()
+
+
+def transfer_campaign_reservation(
+    session: Session,
+    campaign,
+    from_user_id: int,
+    to_user_id: int,
+    *,
+    actor_user_id: int | None = None,
+) -> int:
+    """Al cambiar el vendedor de una campaña, los lugares aún sin llenar viajan con ella.
+
+    Sale de la asignación (o del pool) del vendedor anterior y entra a la del nuevo,
+    sin cobrar de nuevo ni crear créditos. Devuelve cuántos créditos se movieron.
+    """
+    from app.services.campaign_prospects import get_campaign_prospects_found_total
+    from app.services.manual_sequence_kickoff import is_individual_container_campaign
+    from app.services.postergados_campaign import is_postergados_campaign
+    from app.services.prospect_base_campaign import is_prospect_base_campaign
+
+    if not from_user_id or not to_user_id or int(from_user_id) == int(to_user_id):
+        return 0
+    if (
+        is_individual_container_campaign(campaign)
+        or is_postergados_campaign(campaign)
+        or is_prospect_base_campaign(campaign)
+    ):
+        return 0
+    company_id = int(campaign.company_id)
+    found = get_campaign_prospects_found_total(session, int(campaign.id), campaign=campaign)
+    pending = max(0, int(campaign.prospect_count or 0) - found)
+    if pending <= 0:
+        return 0
+
+    old_user = session.get(User, int(from_user_id))
+    new_user = session.get(User, int(to_user_id))
+    old_admin = old_user is not None and is_company_admin(old_user.role)
+    new_admin = new_user is not None and is_company_admin(new_user.role)
+
+    if old_admin:
+        moved = pending
+    else:
+        old_row = _allocation_row(session, company_id, int(from_user_id))
+        if old_row is None:
+            return 0
+        # Si la reserva ya venció en un ciclo anterior, solo se mueve lo que sigue reservado.
+        moved = min(pending, int(old_row.used_balance), int(old_row.allocated_balance))
+        if moved <= 0:
+            return 0
+        old_row.used_balance = int(old_row.used_balance) - moved
+        old_row.allocated_balance = int(old_row.allocated_balance) - moved
+
+    wallet = None
+    if old_admin or new_admin:
+        wallet, *_ = get_wallet_totals(session, company_id)
+    if old_admin and not new_admin:
+        wallet.total_balance = int(wallet.total_balance) + moved
+    if new_admin and not old_admin:
+        wallet.total_balance = int(wallet.total_balance) - moved
+
+    if not new_admin:
+        new_row = _allocation_row(session, company_id, int(to_user_id))
+        if new_row is None:
+            new_row = SellerCreditAllocation(
+                company_id=company_id, seller_id=int(to_user_id), allocated_balance=0, used_balance=0
+            )
+            session.add(new_row)
+            session.flush()
+        new_row.allocated_balance = int(new_row.allocated_balance) + moved
+        new_row.used_balance = int(new_row.used_balance) + moved
+
+    note = f"campaña «{campaign.name}»: {moved} lugares sin llenar pasan al nuevo vendedor"
+    record_credit_ledger(
+        session,
+        company_id=company_id,
+        user_id=int(from_user_id),
+        actor_user_id=actor_user_id,
+        kind="campaign_release",
+        amount=moved,
+        note=note,
+    )
+    record_credit_ledger(
+        session,
+        company_id=company_id,
+        user_id=int(to_user_id),
+        actor_user_id=actor_user_id,
+        kind="campaign_reserve",
+        amount=moved,
+        note=note,
+    )
+    session.flush()
+    return moved
+
+
 def _is_credit_eligible_role(role: str | None) -> bool:
     raw = (role or "").strip().lower()
-    return raw in (UserRole.sdr.value, UserRole.manager.value, "seller")
+    return raw in (
+        UserRole.sdr.value,
+        UserRole.manager.value,
+        UserRole.gerente.value,
+        "seller",
+        "director",
+    )
 
 
 def allocate_to_seller(
