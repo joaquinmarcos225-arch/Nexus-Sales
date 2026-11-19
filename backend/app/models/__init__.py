@@ -50,6 +50,8 @@ from app.models.support_ticket import SupportMessage, SupportThread
 from app.models.team import Team
 from app.models.user import User
 from app.models.user_outreach_style import UserOutreachStyle
+from app.models.mailbox_health import EmailBounce, MailboxHealth
+from app.models.ops_agenda import CompanyOpsProfile, OpsPayment
 from app.models.whatsapp_dispatch import WhatsAppDispatch
 from app.models.whatsapp_meow import WhatsappMeowMessage, WhatsappMeowSession
 
@@ -104,4 +106,8 @@ __all__ = [
     "WhatsAppDispatch",
     "WhatsappMeowMessage",
     "WhatsappMeowSession",
+    "MailboxHealth",
+    "EmailBounce",
+    "CompanyOpsProfile",
+    "OpsPayment",
 ]
