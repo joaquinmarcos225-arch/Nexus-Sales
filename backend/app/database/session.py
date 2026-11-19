@@ -767,6 +767,30 @@ def _apply_sqlite_light_migrations(bind) -> None:
                     conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN {col_name} {col_def}"))
                     cols.pop("campaigns", None)
 
+        contact_identity_cols = (
+            ("city", "VARCHAR(255)"),
+            ("company_size", "VARCHAR(64)"),
+            ("employee_count", "INTEGER"),
+            ("source_person_id", "VARCHAR(128)"),
+            ("role_normalized", "VARCHAR(255)"),
+            ("country_origin", "VARCHAR(32)"),
+            ("industry_origin", "VARCHAR(32)"),
+            ("size_origin", "VARCHAR(32)"),
+        )
+        if "nexus_contact_cache" in names:
+            for col_name, col_def in contact_identity_cols:
+                if col_name not in _cols("nexus_contact_cache"):
+                    conn.execute(
+                        text(f"ALTER TABLE nexus_contact_cache ADD COLUMN {col_name} {col_def}")
+                    )
+                    cols.pop("nexus_contact_cache", None)
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_nexus_contact_cache_source_person_id "
+                    "ON nexus_contact_cache (source_person_id)"
+                )
+            )
+
         if "prospects" in names:
             for col_name, col_def in (
                 ("channel_enrich_status", "VARCHAR(16) NOT NULL DEFAULT 'none'"),

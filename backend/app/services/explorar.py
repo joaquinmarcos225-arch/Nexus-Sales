@@ -2225,17 +2225,27 @@ def nexus_revealed_by_person_id(db: Session, person_ids: list[str]) -> dict[str,
     if missing:
         from app.models.nexus_contact_cache import NexusContactCache
 
+        has_source_person = hasattr(NexusContactCache, "source_person_id")
+        identity_clause = (
+            or_(
+                NexusContactCache.source_person_id.in_(missing),
+                NexusContactCache.source_external_id.in_(missing),
+            )
+            if has_source_person
+            else NexusContactCache.source_external_id.in_(missing)
+        )
         for c in db.scalars(
             select(NexusContactCache).where(
-                or_(
-                    NexusContactCache.source_person_id.in_(missing),
-                    NexusContactCache.source_external_id.in_(missing),
-                ),
+                identity_clause,
                 NexusContactCache.email.is_not(None),
                 or_(NexusContactCache.whatsapp.is_not(None), NexusContactCache.phone.is_not(None)),
             )
         ).all():
-            key = str(c.source_person_id or c.source_external_id or "")
+            key = str(
+                (getattr(c, "source_person_id", None) if has_source_person else None)
+                or c.source_external_id
+                or ""
+            )
             if key:
                 out.setdefault(key, {"email": c.email, "phone": c.whatsapp or c.phone})
     return out

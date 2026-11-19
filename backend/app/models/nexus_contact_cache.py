@@ -20,8 +20,19 @@ class NexusCompanyCache(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     website_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     industry: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    industry_origin: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        doc="prospeo | brave | icp | uncertain. Vacío = histórico sin procedencia.",
+    )
     country: Mapped[str | None] = mapped_column(String(255), nullable=True)
     employee_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    company_size: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size_origin: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        doc="prospeo | brave | icp | uncertain. Vacío = histórico sin procedencia.",
+    )
     source_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source_external_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     last_enriched_at: Mapped[datetime | None] = mapped_column(
@@ -48,8 +59,20 @@ class NexusContactCache(Base):
     )
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    role_normalized: Mapped[str | None] = mapped_column(String(255), nullable=True)
     industry: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    industry_origin: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        doc="prospeo | brave | icp | uncertain. Vacío = histórico sin procedencia.",
+    )
     country: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    country_origin: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        doc="person | company | uncertain. Vacío en filas históricas = origen no determinado.",
+    )
+    city: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     linkedin_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     linkedin_slug: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
@@ -57,8 +80,16 @@ class NexusContactCache(Base):
     whatsapp: Mapped[str | None] = mapped_column(String(64), nullable=True)
     company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     company_domain: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    company_size: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    employee_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    size_origin: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        doc="prospeo | brave | icp | uncertain. Vacío = histórico sin procedencia.",
+    )
     source_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source_external_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    source_person_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     last_enriched_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
