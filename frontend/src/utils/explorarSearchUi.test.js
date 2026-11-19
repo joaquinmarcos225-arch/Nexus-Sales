@@ -24,6 +24,7 @@ describe('filtersFingerprint', () => {
       names: '',
       titles: 'CEO',
       location: 'Chile',
+      companyHq: '',
       companies: '',
       lookalikeUrls: '',
       industries: ['Restaurants'],
@@ -35,6 +36,7 @@ describe('filtersFingerprint', () => {
       names: '',
       titles: 'CEO',
       location: 'Argentina',
+      companyHq: '',
       companies: '',
       lookalikeUrls: '',
       industries: ['Restaurants'],
@@ -45,11 +47,40 @@ describe('filtersFingerprint', () => {
     expect(a).not.toBe(b)
   })
 
+  it('cambia si cambia sede/HQ aunque la ubicación del contacto sea igual', () => {
+    const a = filtersFingerprint({
+      names: '',
+      titles: 'CEO',
+      location: 'Argentina',
+      companyHq: '',
+      companies: '',
+      lookalikeUrls: '',
+      industries: [],
+      headcounts: [],
+      seniorities: [],
+      departments: [],
+    })
+    const b = filtersFingerprint({
+      names: '',
+      titles: 'CEO',
+      location: 'Argentina',
+      companyHq: 'Argentina',
+      companies: '',
+      lookalikeUrls: '',
+      industries: [],
+      headcounts: [],
+      seniorities: [],
+      departments: [],
+    })
+    expect(a).not.toBe(b)
+  })
+
   it('ordena listas para que el orden de chips no invalide', () => {
     const a = filtersFingerprint({
       names: '',
       titles: '',
       location: 'ar',
+      companyHq: 'Chile',
       companies: '',
       lookalikeUrls: '',
       industries: ['B', 'A'],
@@ -61,6 +92,7 @@ describe('filtersFingerprint', () => {
       names: '',
       titles: '',
       location: 'AR',
+      companyHq: 'chile',
       companies: '',
       lookalikeUrls: '',
       industries: ['A', 'B'],

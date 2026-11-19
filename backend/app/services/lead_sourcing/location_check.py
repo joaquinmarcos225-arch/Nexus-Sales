@@ -97,6 +97,46 @@ def country_allowed(person_country: str | None, locations: list[str] | None) -> 
     return bool(_person_country_set(person_country) & allowed)
 
 
+def resolve_company_hq_locations(hq: str | None, *, max_locations: int = 6) -> list[str]:
+    """Valores canónicos para ``company_location_search`` (HQ), o []."""
+    from app.services.campaign_icp import is_icp_token_empty
+
+    raw = (hq or "").strip()
+    if not raw or is_icp_token_empty(raw):
+        return []
+    from app.services.lead_sourcing.b2c_person_search import (
+        _location_queries,
+        resolve_canonical_locations,
+    )
+
+    locations = resolve_canonical_locations(raw, max_locations=max_locations)
+    if not locations:
+        locations = _location_queries(raw) or [raw]
+    return list(locations[:max_locations])
+
+
+def company_hq_search_filter(hq: str | None, *, max_locations: int = 6) -> dict[str, Any]:
+    """Filtro Prospeo por sede/HQ. Vacío si no hay ICP de HQ."""
+    locations = resolve_company_hq_locations(hq, max_locations=max_locations)
+    if not locations:
+        return {}
+    return {"company_location_search": {"include": locations}}
+
+
+def company_hq_matches(*, company_country: str | None, campaign_hq: str | None) -> bool:
+    """False solo si el país de empresa es conocido y contradice el HQ pedido.
+
+    Sin país de empresa → True (incomplete; no inventar HQ con el país de la persona).
+    """
+    locations = resolve_company_hq_locations(campaign_hq)
+    if not locations:
+        return True
+    raw = (company_country or "").strip()
+    if not raw:
+        return True
+    return country_allowed(raw, locations)
+
+
 def person_country(person: dict[str, Any]) -> str | None:
     """País de la persona (no de la sede de su empresa)."""
     loc = person.get("location") if isinstance(person.get("location"), dict) else {}

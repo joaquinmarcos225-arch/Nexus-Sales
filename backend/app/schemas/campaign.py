@@ -55,6 +55,7 @@ class CampaignCreate(BaseModel):
     target_company_size: str | None = None
     target_industry: str | None = None
     target_country: str | None = None
+    target_company_hq: str | None = None
     target_language: str | None = None
     target_role: str | None = None
     target_area: str | None = None
@@ -132,6 +133,7 @@ class CampaignUpdate(BaseModel):
     target_company_size: str | None = None
     target_industry: str | None = None
     target_country: str | None = None
+    target_company_hq: str | None = None
     target_language: str | None = None
     target_role: str | None = None
     target_area: str | None = None
@@ -227,6 +229,7 @@ class CampaignRead(BaseModel):
     target_company_size: str | None
     target_industry: str | None
     target_country: str | None
+    target_company_hq: str | None = None
     target_language: str | None
     target_role: str | None
     target_area: str | None = None

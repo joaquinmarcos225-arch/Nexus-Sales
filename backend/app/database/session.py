@@ -761,6 +761,7 @@ def _apply_sqlite_light_migrations(bind) -> None:
             for col_name, col_def in (
                 ("outreach_mode", "VARCHAR(16) NOT NULL DEFAULT 'b2b'"),
                 ("target_interests", "VARCHAR(512)"),
+                ("target_company_hq", "VARCHAR(255)"),
             ):
                 if col_name not in _cols("campaigns"):
                     conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN {col_name} {col_def}"))

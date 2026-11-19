@@ -40,6 +40,7 @@ class Campaign(Base):
     target_company_size: Mapped[str | None] = mapped_column(String(255), nullable=True)
     target_industry: Mapped[str | None] = mapped_column(String(255), nullable=True)
     target_country: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    target_company_hq: Mapped[str | None] = mapped_column(String(255), nullable=True)
     target_language: Mapped[str | None] = mapped_column(String(255), nullable=True)
     target_role: Mapped[str | None] = mapped_column(String(255), nullable=True)
     target_area: Mapped[str | None] = mapped_column(String(255), nullable=True)

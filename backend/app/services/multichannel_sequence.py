@@ -94,6 +94,7 @@ def _campaign_payload(campaign: Campaign) -> dict[str, str]:
         "target_role": campaign.target_role or "",
         "target_industry": campaign.target_industry or "",
         "target_country": campaign.target_country or "",
+        "target_company_hq": getattr(campaign, "target_company_hq", None) or "",
         "target_interests": getattr(campaign, "target_interests", None) or "",
         "preferred_channel_hint": " → ".join(ch),
         "allowed_channels_csv": ",".join(ch),

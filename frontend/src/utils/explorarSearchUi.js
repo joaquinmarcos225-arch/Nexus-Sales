@@ -10,6 +10,7 @@ export function filtersFingerprint(q) {
     String(q.names || '').trim().toLowerCase(),
     String(q.titles || '').trim().toLowerCase(),
     String(q.location || '').trim().toLowerCase(),
+    String(q.companyHq || '').trim().toLowerCase(),
     String(q.companies || '').trim().toLowerCase(),
     String(q.lookalikeUrls || '').trim().toLowerCase(),
     normList(q.industries),

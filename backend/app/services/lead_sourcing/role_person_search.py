@@ -88,9 +88,18 @@ def build_role_first_filter_variants(
     contact_both = contact_details_filter(require_mobile=True, require_email=True)
 
     def _loc() -> dict[str, Any]:
+        from app.services.lead_sourcing.location_check import company_hq_search_filter
+
+        out: dict[str, Any] = {}
         if locations:
-            return {"person_location_search": {"include": locations[:5]}}
-        return {}
+            out["person_location_search"] = {"include": locations[:5]}
+        out.update(
+            company_hq_search_filter(
+                getattr(campaign, "target_company_hq", None),
+                max_locations=5,
+            )
+        )
+        return out
 
     def _industry() -> dict[str, Any]:
         if not industry_keywords:
@@ -356,6 +365,19 @@ def person_dict_to_role_lead(
             if geo_score < MIN_GEO_HARD:
                 return None
         # sin country en el hit: confiar en el filtro de ubicación de Prospeo
+
+    hq_raw = getattr(campaign, "target_company_hq", None)
+    if hq_raw and not is_icp_token_empty(hq_raw):
+        from app.services.lead_sourcing.location_check import (
+            company_country_from_org,
+            company_hq_matches,
+        )
+
+        if not company_hq_matches(
+            company_country=company_country_from_org(org if isinstance(org, dict) else None),
+            campaign_hq=hq_raw,
+        ):
+            return None
 
     if campaign.target_company_size and not is_icp_token_empty(campaign.target_company_size):
         known_size = parse_employee_bounds(

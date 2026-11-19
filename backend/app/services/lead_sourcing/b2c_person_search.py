@@ -229,9 +229,18 @@ def build_b2c_filter_variants(
     variants: list[tuple[str, dict[str, Any]]] = []
 
     def _base_loc() -> dict[str, Any]:
+        from app.services.lead_sourcing.location_check import company_hq_search_filter
+
+        out: dict[str, Any] = {}
         if locations:
-            return {"person_location_search": {"include": locations[:5]}}
-        return {}
+            out["person_location_search"] = {"include": locations[:5]}
+        out.update(
+            company_hq_search_filter(
+                getattr(campaign, "target_company_hq", None),
+                max_locations=5,
+            )
+        )
+        return out
 
     contact = contact_details_filter(require_mobile=False, require_email=True)
     contact_mobile = contact_details_filter(require_mobile=True, require_email=False)
@@ -430,6 +439,7 @@ def person_dict_to_lead(
     country_hint: str | None,
     interests: list[str],
     locations: list[str],
+    campaign: Any | None = None,
 ) -> LeadCandidateRead | None:
     name = _person_display(person)
     if not name or name == "?":
@@ -458,6 +468,19 @@ def person_dict_to_lead(
     org = person.get("company") if isinstance(person.get("company"), dict) else {}
     if not org:
         org = person.get("organization") if isinstance(person.get("organization"), dict) else {}
+    hq_raw = getattr(campaign, "target_company_hq", None) if campaign is not None else None
+    if hq_raw:
+        from app.services.campaign_icp import is_icp_token_empty
+        from app.services.lead_sourcing.location_check import (
+            company_country_from_org,
+            company_hq_matches,
+        )
+
+        if not is_icp_token_empty(hq_raw) and not company_hq_matches(
+            company_country=company_country_from_org(org if isinstance(org, dict) else None),
+            campaign_hq=hq_raw,
+        ):
+            return None
     company_name = (
         (org.get("name") if isinstance(org, dict) else None)
         or person.get("company_name")
@@ -714,6 +737,7 @@ def search_b2c_people(
             country_hint=campaign.target_country,
             interests=interests,
             locations=locations,
+            campaign=campaign,
         )
         if lead is None:
             continue

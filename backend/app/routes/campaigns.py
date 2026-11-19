@@ -147,6 +147,7 @@ def _serialize_campaign(
         target_company_size=row.target_company_size,
         target_industry=row.target_industry,
         target_country=row.target_country,
+        target_company_hq=getattr(row, "target_company_hq", None),
         target_language=row.target_language,
         target_role=row.target_role,
         target_area=getattr(row, "target_area", None),
@@ -319,6 +320,7 @@ def create_campaign(
     ts = icp.normalize_optional_icp_field(payload.target_company_size)
     ti = icp.normalize_optional_icp_field(payload.target_industry)
     tc = icp.normalize_optional_icp_field(payload.target_country)
+    thq = icp.normalize_optional_icp_field(payload.target_company_hq)
     tl = icp.normalize_optional_icp_field(payload.target_language)
     tr = icp.normalize_optional_icp_field(payload.target_role)
     ta = icp.normalize_optional_icp_field(payload.target_area)
@@ -381,6 +383,7 @@ def create_campaign(
         target_company_size=ts,
         target_industry=ti,
         target_country=tc,
+        target_company_hq=thq,
         target_language=tl,
         target_role=tr,
         target_area=ta,
@@ -511,6 +514,11 @@ def update_campaign(
         "target_country": icp.normalize_optional_icp_field(
             data["target_country"] if "target_country" in data else campaign.target_country
         ),
+        "target_company_hq": icp.normalize_optional_icp_field(
+            data["target_company_hq"]
+            if "target_company_hq" in data
+            else getattr(campaign, "target_company_hq", None)
+        ),
         "target_language": icp.normalize_optional_icp_field(
             data["target_language"] if "target_language" in data else campaign.target_language
         ),
@@ -528,7 +536,16 @@ def update_campaign(
     }
 
     try:
-        icp.assert_icp_has_signal(**merged_icp, outreach_mode=outreach_mode)
+        icp.assert_icp_has_signal(
+            target_company_size=merged_icp["target_company_size"],
+            target_industry=merged_icp["target_industry"],
+            target_country=merged_icp["target_country"],
+            target_language=merged_icp["target_language"],
+            target_role=merged_icp["target_role"],
+            target_area=merged_icp["target_area"],
+            target_interests=merged_icp["target_interests"],
+            outreach_mode=outreach_mode,
+        )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
@@ -544,6 +561,7 @@ def update_campaign(
     campaign.target_company_size = merged_icp["target_company_size"]
     campaign.target_industry = merged_icp["target_industry"]
     campaign.target_country = merged_icp["target_country"]
+    campaign.target_company_hq = merged_icp["target_company_hq"]
     campaign.target_language = merged_icp["target_language"]
     campaign.target_role = merged_icp["target_role"]
     campaign.target_area = merged_icp["target_area"]

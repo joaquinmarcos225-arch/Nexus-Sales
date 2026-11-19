@@ -66,6 +66,7 @@ const defaultForm = () => ({
   target_company_size: '',
   target_industry: '',
   target_country: '',
+  target_company_hq: '',
   target_language: '',
   target_role: '',
   target_area: '',
@@ -90,6 +91,7 @@ function formFromCampaign(c) {
     target_company_size: c.target_company_size ?? '',
     target_industry: c.target_industry ?? '',
     target_country: c.target_country ?? '',
+    target_company_hq: c.target_company_hq ?? '',
     target_language: c.target_language ?? '',
     target_role: c.target_role ?? '',
     target_area: c.target_area ?? '',
@@ -345,6 +347,7 @@ export function CampaignFormModal({
       target_company_size: isB2cCampaign ? null : toApiIcp(form.target_company_size),
       target_industry: isB2cCampaign ? null : toApiIcp(form.target_industry),
       target_country: toApiIcp(form.target_country),
+      target_company_hq: toApiIcp(form.target_company_hq),
       target_language: toApiIcp(form.target_language),
       target_role: toApiIcp(form.target_role),
       target_area: toApiIcp(form.target_area),
@@ -587,18 +590,22 @@ export function CampaignFormModal({
                       Palabras que suelen aparecer en perfil o titular. Prospeo las usa para buscar.
                     </p>
                   </div>
-                  <div>
-                    <SuggestSelect
-                      id="icp-region"
-                      label="Región / país"
-                      value={form.target_country}
-                      onChange={(v) => setForm((f) => ({ ...f, target_country: v }))}
-                      suggestions={SUGGEST_REGION}
-                    />
-                    <p className="mt-1 text-[11px] text-nx-subtle">
-                      LATAM - Brasil = Hispanoamérica sin Brasil · LATAM + Brasil = toda Latinoamérica
-                    </p>
-                  </div>
+                  <SuggestSelect
+                    id="icp-region"
+                    label="Ubicación del contacto"
+                    value={form.target_country}
+                    onChange={(v) => setForm((f) => ({ ...f, target_country: v }))}
+                    suggestions={SUGGEST_REGION}
+                    hint="País o ciudad donde está la persona (no la sede de la empresa)."
+                  />
+                  <SuggestSelect
+                    id="icp-company-hq"
+                    label="Sede / HQ de la empresa"
+                    value={form.target_company_hq}
+                    onChange={(v) => setForm((f) => ({ ...f, target_company_hq: v }))}
+                    suggestions={SUGGEST_REGION}
+                    hint="Filtra por la sede de la empresa, no por dónde vive el contacto."
+                  />
                   <div>
                     <SuggestSelect
                       id="icp-lang"
@@ -630,18 +637,22 @@ export function CampaignFormModal({
                     hint="Podés escribir el sector exacto si no está en la lista."
                     placeholder="Ej. Clínicas, Agro, Construcción…"
                   />
-                  <div>
-                    <SuggestSelect
-                      id="icp-region"
-                      label="Región"
-                      value={form.target_country}
-                      onChange={(v) => setForm((f) => ({ ...f, target_country: v }))}
-                      suggestions={SUGGEST_REGION}
-                    />
-                    <p className="mt-1 text-[11px] text-nx-subtle">
-                      LATAM - Brasil = Hispanoamérica sin Brasil · LATAM + Brasil = toda Latinoamérica incluido Brasil
-                    </p>
-                  </div>
+                  <SuggestSelect
+                    id="icp-region"
+                    label="Ubicación del contacto"
+                    value={form.target_country}
+                    onChange={(v) => setForm((f) => ({ ...f, target_country: v }))}
+                    suggestions={SUGGEST_REGION}
+                    hint="País o ciudad donde está la persona (no la sede de la empresa)."
+                  />
+                  <SuggestSelect
+                    id="icp-company-hq"
+                    label="Sede / HQ de la empresa"
+                    value={form.target_company_hq}
+                    onChange={(v) => setForm((f) => ({ ...f, target_company_hq: v }))}
+                    suggestions={SUGGEST_REGION}
+                    hint="Filtra por la sede de la empresa, no por dónde vive el contacto."
+                  />
                   <SuggestSelect
                     id="icp-lang"
                     label="Idioma"

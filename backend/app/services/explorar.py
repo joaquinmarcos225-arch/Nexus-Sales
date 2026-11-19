@@ -84,6 +84,7 @@ def max_fetches_per_request(filters: dict[str, Any] | None = None) -> int:
         filters.get("person_department")
         or filters.get("company_headcount_range")
         or filters.get("person_location_search")
+        or filters.get("company_location_search")
     )
     if not strict:
         return base
@@ -149,6 +150,7 @@ def build_filters(
     names: list[str] | None = None,
     titles: list[str] | None = None,
     location: str | None = None,
+    company_hq: str | None = None,
     industries: list[str] | None = None,
     seniorities: list[str] | None = None,
     companies: list[str] | None = None,
@@ -195,6 +197,10 @@ def build_filters(
         if not locations:
             locations = _location_queries(loc) or [loc]
         filters["person_location_search"] = {"include": locations[:6]}
+
+    from app.services.lead_sourcing.location_check import company_hq_search_filter
+
+    filters.update(company_hq_search_filter(company_hq, max_locations=6))
 
     seniority_list = [s for s in _clean_list(seniorities, limit=9) if s in SENIORITY_OPTIONS]
     if seniority_list:
@@ -623,6 +629,23 @@ def location_hard_ok(hit: dict[str, Any], filters: dict[str, Any]) -> bool:
     return True
 
 
+def company_hq_hard_ok(hit: dict[str, Any], filters: dict[str, Any]) -> bool:
+    """HQ tildado: país empresa conocido y fuera → fuera. Sin país empresa → pasa."""
+    from app.services.lead_sourcing.location_check import company_hq_matches
+
+    hq_filter = filters.get("company_location_search")
+    if not isinstance(hq_filter, dict) or not hq_filter.get("include"):
+        return True
+    includes = [str(x).strip() for x in (hq_filter.get("include") or []) if str(x).strip()]
+    if not includes:
+        return True
+    joined = ", ".join(includes)
+    return company_hq_matches(
+        company_country=(hit.get("company_country") or "").strip() or None,
+        campaign_hq=joined,
+    )
+
+
 def _seniority_labels(filters: dict[str, Any], *, expanded: bool) -> set[str]:
     sen = filters.get("person_seniority")
     if not isinstance(sen, dict) or not sen.get("include"):
@@ -687,6 +710,8 @@ def hit_matches_core_filters(hit: dict[str, Any], filters: dict[str, Any]) -> bo
         if not role or not title_matches_loose(role, list(title_filter["include"])):
             return False
     if not location_hard_ok(hit, filters):
+        return False
+    if not company_hq_hard_ok(hit, filters):
         return False
     if not department_hard_ok(hit, filters):
         return False
@@ -938,6 +963,7 @@ def has_targeting(filters: dict[str, Any]) -> bool:
             "_linkedin_profile_urls",
             "person_job_title",
             "person_location_search",
+            "company_location_search",
             "company",
             "company_lookalike",
             "company_industry",
@@ -1085,7 +1111,12 @@ def parse_hit(row: dict[str, Any]) -> dict[str, Any] | None:
         "size_origin": "prospeo",
         "country": country,
         "city": city,
-        "company_country": _str(org.get("country") or org.get("hq_country")),
+        "company_country": _str(
+            (org.get("location") or {}).get("country")
+            if isinstance(org.get("location"), dict)
+            else None
+        )
+        or _str(org.get("country") or org.get("hq_country")),
         "linkedin_url": _str(person.get("linkedin_url") or person.get("linkedin")),
         "has_email": email_ok,
         "has_mobile": mobile_ok,

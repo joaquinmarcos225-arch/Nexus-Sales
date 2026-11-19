@@ -626,6 +626,7 @@ export default function ExplorarPage() {
   const [names, setNames] = useState('')
   const [titles, setTitles] = useState('')
   const [location, setLocation] = useState('')
+  const [companyHq, setCompanyHq] = useState('')
   const [companies, setCompanies] = useState('')
   const [lookalikeUrls, setLookalikeUrls] = useState('')
   const [lookalikeSeeds, setLookalikeSeeds] = useState([])
@@ -673,6 +674,7 @@ export default function ExplorarPage() {
       setNames(saved.names || '')
       setTitles(saved.titles || '')
       setLocation(saved.location || '')
+      setCompanyHq(saved.companyHq || '')
       setCompanies(saved.companies || '')
       setLookalikeUrls(saved.lookalikeUrls || '')
       setLookalikeSeeds(Array.isArray(saved.lookalikeSeeds) ? saved.lookalikeSeeds : [])
@@ -694,6 +696,7 @@ export default function ExplorarPage() {
               names: saved.names || '',
               titles: saved.titles || '',
               location: saved.location || '',
+              companyHq: saved.companyHq || '',
               companies: saved.companies || '',
               lookalikeUrls: saved.lookalikeUrls || '',
               industries: saved.industries || [],
@@ -725,6 +728,7 @@ export default function ExplorarPage() {
       names,
       titles,
       location,
+      companyHq,
       companies,
       lookalikeUrls,
       industries,
@@ -747,6 +751,7 @@ export default function ExplorarPage() {
     names,
     titles,
     location,
+    companyHq,
     companies,
     lookalikeUrls,
     industries,
@@ -763,6 +768,7 @@ export default function ExplorarPage() {
       names,
       titles,
       location,
+      companyHq,
       companies,
       lookalikeUrls,
       lookalikeSeeds,
@@ -775,7 +781,7 @@ export default function ExplorarPage() {
       page,
       appliedFingerprint,
     })
-  }, [companyId, restoredFor, names, titles, location, companies, lookalikeUrls, lookalikeSeeds, industries, headcounts, seniorities, departments, potentialInfo, data, page, appliedFingerprint])
+  }, [companyId, restoredFor, names, titles, location, companyHq, companies, lookalikeUrls, lookalikeSeeds, industries, headcounts, seniorities, departments, potentialInfo, data, page, appliedFingerprint])
 
   useEffect(() => {
     if (!companyId) return
@@ -823,6 +829,7 @@ export default function ExplorarPage() {
         names,
         titles,
         location,
+        companyHq,
         companies,
         lookalikeUrls,
         industries,
@@ -846,9 +853,13 @@ export default function ExplorarPage() {
         (q.departments || []).length > 0
       // Solo nombre (o link /in/): ignorar región pegada de una búsqueda anterior.
       const namePrimary = nameList.length > 0 && !hasStructured
-      const hasAnyFilter = nameList.length > 0 || hasStructured || (q.location || '').trim()
+      const hasAnyFilter =
+        nameList.length > 0 ||
+        hasStructured ||
+        (q.location || '').trim() ||
+        (q.companyHq || '').trim()
       if (!hasAnyFilter) {
-        setError('Elegí al menos un filtro (cargo, región, industria…) antes de buscar.')
+        setError('Elegí al menos un filtro (cargo, ubicación, sede/HQ, industria…) antes de buscar.')
         return
       }
       const gen = ++searchGenRef.current
@@ -857,6 +868,7 @@ export default function ExplorarPage() {
         names: q.names,
         titles: q.titles,
         location: q.location,
+        companyHq: q.companyHq,
         companies: q.companies,
         lookalikeUrls: q.lookalikeUrls,
         industries: q.industries,
@@ -880,6 +892,7 @@ export default function ExplorarPage() {
           names: nameList,
           titles: namePrimary ? [] : splitList(q.titles),
           location: namePrimary ? null : (q.location || '').trim() || null,
+          company_hq: namePrimary ? null : (q.companyHq || '').trim() || null,
           industries: namePrimary ? [] : q.industries,
           companies: namePrimary ? [] : splitList(q.companies),
           lookalike_linkedin_urls: namePrimary ? [] : splitUrls(q.lookalikeUrls),
@@ -946,6 +959,7 @@ export default function ExplorarPage() {
             names: q.names,
             titles: q.titles,
             location: q.location,
+            companyHq: q.companyHq,
             companies: q.companies,
             lookalikeUrls: q.lookalikeUrls,
             industries: q.industries,
@@ -992,6 +1006,7 @@ export default function ExplorarPage() {
       names,
       titles,
       location,
+      companyHq,
       industries,
       companies,
       lookalikeUrls,
@@ -1009,6 +1024,7 @@ export default function ExplorarPage() {
       names: '',
       titles: q.titles,
       location: q.location,
+      companyHq: '',
       companies: '',
       lookalikeUrls: '',
       industries: q.industries,
@@ -1019,6 +1035,7 @@ export default function ExplorarPage() {
     setNames('')
     setTitles(next.titles)
     setLocation(next.location)
+    setCompanyHq('')
     setCompanies('')
     setLookalikeUrls('')
     setLookalikeSeeds([])
@@ -1040,6 +1057,7 @@ export default function ExplorarPage() {
         names: '',
         titles: (f.titles || []).join(', '),
         location: (f.location || '').trim() || 'LATAM (sin Brasil)',
+        companyHq: '',
         companies: '',
         lookalikeUrls,
         industries: f.industries || [],
@@ -1058,6 +1076,7 @@ export default function ExplorarPage() {
       setNames('')
       setTitles(next.titles)
       setLocation(next.location)
+      setCompanyHq('')
       setCompanies('')
       setIndustries(safeIndustries)
       setHeadcounts(safeHeadcounts)
@@ -1330,7 +1349,7 @@ export default function ExplorarPage() {
           ) : null}
         </div>
 
-        <div className="grid gap-3 md:grid-cols-[1.1fr_1.2fr_1fr_1fr_auto] md:items-end">
+        <div className="grid gap-3 md:grid-cols-[1fr_1.1fr_1fr_1fr_1fr_auto] md:items-end">
           <FieldWithIcon
             icon={ICONS.user}
             label="Nombre"
@@ -1347,10 +1366,17 @@ export default function ExplorarPage() {
           />
           <FieldWithIcon
             icon={ICONS.pin}
-            label="Región"
-            placeholder="Varios países: Chile, Panamá, Costa Rica…"
+            label="Ubicación del contacto"
+            placeholder="Dónde está la persona: Argentina, Chile…"
             value={location}
             onChange={(e) => setLocation(e.target.value)}
+          />
+          <FieldWithIcon
+            icon={ICONS.building}
+            label="Sede / HQ"
+            placeholder="Sede de la empresa"
+            value={companyHq}
+            onChange={(e) => setCompanyHq(e.target.value)}
           />
           <FieldWithIcon
             icon={ICONS.building}
@@ -1376,8 +1402,9 @@ export default function ExplorarPage() {
           Pegá el link de la empresa y elegí el cargo. Nexus busca esa gente en compañías del mismo palo.
         </p>
         <p className="text-xs text-nx-muted">
-          Cargo, región y empresa admiten varios valores separados por coma (ej. Chile, Panamá). Buscamos en
-          LinkedIn vía Prospeo: el techo es esa base (no Lusha). Depto y tamaño dependen de lo cargado ahí.
+          Cargo, ubicación del contacto, sede/HQ y empresa admiten valores separados por coma. Ubicación =
+          persona; sede/HQ = empresa. Buscamos en LinkedIn vía Prospeo (no Lusha). Depto y tamaño dependen
+          de lo cargado ahí.
         </p>
 
         <div>

@@ -892,7 +892,8 @@ export default function CampanaDetallePage() {
                 <>
                   <Row label="Quién buscamos" value={campaign.target_role} />
                   <Row label="Señales / keywords" value={campaign.target_interests} />
-                  <Row label="Región" value={campaign.target_country} />
+                  <Row label="Ubicación del contacto" value={campaign.target_country} />
+                  <Row label="Sede / HQ de la empresa" value={campaign.target_company_hq} />
                   <Row label="Idioma (mensajes)" value={campaign.target_language} />
                   <Row label="Situación / momento" value={campaign.target_area} />
                 </>
@@ -900,7 +901,8 @@ export default function CampanaDetallePage() {
                 <>
                   <Row label="Tamaño empresa" value={campaign.target_company_size} />
                   <Row label="Industria" value={campaign.target_industry} />
-                  <Row label="Región" value={campaign.target_country} />
+                  <Row label="Ubicación del contacto" value={campaign.target_country} />
+                  <Row label="Sede / HQ de la empresa" value={campaign.target_company_hq} />
                   <Row label="Idioma" value={campaign.target_language} />
                   <Row label="Rol" value={campaign.target_role} />
                 </>

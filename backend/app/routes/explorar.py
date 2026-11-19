@@ -25,6 +25,7 @@ class ExplorarSearchRequest(BaseModel):
     names: list[str] = Field(default_factory=list)
     titles: list[str] = Field(default_factory=list)
     location: str | None = None
+    company_hq: str | None = None
     industries: list[str] = Field(default_factory=list)
     seniorities: list[str] = Field(default_factory=list)
     companies: list[str] = Field(default_factory=list)
@@ -143,6 +144,7 @@ def explorar_search(
             names=payload.names,
             titles=payload.titles,
             location=location,
+            company_hq=(payload.company_hq or "").strip() or None,
             industries=payload.industries,
             seniorities=payload.seniorities,
             companies=payload.companies,
