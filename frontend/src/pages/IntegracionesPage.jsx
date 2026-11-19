@@ -9,9 +9,8 @@ import {
   fetchGoogleOAuthStartUrl,
   fetchUserConnections,
 } from '../utils/api.js'
-import { isNexusWhatsAppExtensionReady } from '../utils/whatsappAssistExtension.js'
-import { ExtensionInstallPanel } from '../components/integrations/ExtensionInstallPanel.jsx'
 import { GoogleConnectPanel } from '../components/integrations/GoogleConnectPanel.jsx'
+import { WhatsAppConnectPanel } from '../components/integrations/WhatsAppConnectPanel.jsx'
 
 function resolveEffectiveStatus(cardRow, verifyRow, { verifying = false } = {}) {
   if (verifyRow?.effective_status) return verifyRow.effective_status
@@ -43,7 +42,6 @@ export default function IntegracionesPage() {
   const [error, setError] = useState(null)
   const [oauthBanner, setOauthBanner] = useState(null)
   const [runDeepVerifyAfterOAuth, setRunDeepVerifyAfterOAuth] = useState(false)
-  const [extensionDetected, setExtensionDetected] = useState(false)
   const [googleBusy, setGoogleBusy] = useState(false)
 
   useEffect(() => {
@@ -151,20 +149,6 @@ export default function IntegracionesPage() {
       ? 'pending'
       : resolveEffectiveStatus(gmailRow, gmailVerify, { verifying })
 
-  useEffect(() => {
-    const tick = () => setExtensionDetected(isNexusWhatsAppExtensionReady())
-    tick()
-    const id = window.setInterval(tick, 1500)
-    const onVis = () => {
-      if (document.visibilityState === 'visible') tick()
-    }
-    document.addEventListener('visibilitychange', onVis)
-    return () => {
-      window.clearInterval(id)
-      document.removeEventListener('visibilitychange', onVis)
-    }
-  }, [])
-
   const googleNeedsReconnect =
     gmailEffective === 'reconnect_required' ||
     calEffective === 'reconnect_required' ||
@@ -231,7 +215,6 @@ export default function IntegracionesPage() {
         </p>
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
-          <ExtensionInstallPanel detected={extensionDetected} />
           <GoogleConnectPanel
             connected={googleConnected}
             needsReconnect={googleNeedsReconnect}
@@ -241,6 +224,9 @@ export default function IntegracionesPage() {
             onConnect={handleReconnectGoogle}
             onDisconnect={handleDisconnectGoogle}
           />
+          <div className="lg:col-span-2">
+            <WhatsAppConnectPanel companyId={companyId} userId={userId} />
+          </div>
           {loadingCards ? (
             <p className="text-xs text-nx-muted lg:col-span-2">Actualizando estados…</p>
           ) : null}

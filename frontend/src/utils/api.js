@@ -1226,6 +1226,57 @@ export async function fetchWhatsAppIntegrationVerify(companyId, userId, { deep =
   return request(`/users/${userId}/integrations/whatsapp/verify?${qs.toString()}`)
 }
 
+
+export async function fetchWhatsappMeowSessions(companyId, userId) {
+  return request(`/companies/${companyId}/users/${userId}/whatsapp/sessions`)
+}
+
+export async function fetchWhatsappMeowEngineStatus(companyId, userId) {
+  return request(`/companies/${companyId}/users/${userId}/whatsapp/engine-status`)
+}
+
+export async function fetchWhatsappMeowUsage(companyId, userId) {
+  return request(`/companies/${companyId}/users/${userId}/whatsapp/usage`)
+}
+
+export async function createWhatsappMeowSession(companyId, userId, body = {}) {
+  return request(`/companies/${companyId}/users/${userId}/whatsapp/sessions`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function fetchWhatsappMeowQr(companyId, userId, sessionUuid) {
+  return request(`/companies/${companyId}/users/${userId}/whatsapp/sessions/${sessionUuid}/qr`)
+}
+
+export async function cancelWhatsappMeowSession(companyId, userId, sessionUuid) {
+  return request(
+    `/companies/${companyId}/users/${userId}/whatsapp/sessions/${sessionUuid}/cancel`,
+    { method: 'POST' },
+  )
+}
+
+export async function disconnectWhatsappMeowSession(companyId, userId, sessionUuid) {
+  return request(
+    `/companies/${companyId}/users/${userId}/whatsapp/sessions/${sessionUuid}/disconnect`,
+    { method: 'POST' },
+  )
+}
+
+export async function simulateWhatsappMeowPair(companyId, userId, sessionUuid) {
+  return request(
+    `/companies/${companyId}/users/${userId}/whatsapp/sessions/${sessionUuid}/simulate-pair`,
+    { method: 'POST' },
+  )
+}
+
+export async function sendWhatsappMeowMessage(companyId, userId, sessionUuid, body) {
+  return request(
+    `/companies/${companyId}/users/${userId}/whatsapp/sessions/${sessionUuid}/messages`,
+    { method: 'POST', body: JSON.stringify(body) },
+  )
+}
 export async function fetchHubSpotIntegrationVerify(companyId, { deep = true } = {}) {
   const qs = new URLSearchParams({ deep: deep ? 'true' : 'false' })
   return request(`/companies/${companyId}/integrations/hubspot/verify?${qs.toString()}`)

@@ -106,6 +106,41 @@ def get_wa_extension_config(
     return default_wa_config()
 
 
+@router.get("/wa-watch")
+def get_wa_watch_list(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Chats de WhatsApp Web a vigilar: prospectos a los que la empresa ya les escribió."""
+    from app.services.whatsapp_web_watch import whatsapp_watch_list
+
+    return {"watch": whatsapp_watch_list(db, int(user.company_id))}
+
+
+def _clip(value: str | None, limit: int) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isprintable())[:limit]
+
+
+@router.get("/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
+def get_extension_heartbeat(
+    v: str | None = None,
+    s: str | None = None,
+    e: str | None = None,
+    auth: int | None = None,
+    wa: int | None = None,
+) -> Response:
+    """Pulso sin sesión: deja en logs en qué paso está cada extensión instalada."""
+    logger.info(
+        "ext_heartbeat ver=%s step=%s auth=%s wa_tabs=%s err=%s",
+        _clip(v, 16),
+        _clip(s, 40),
+        auth,
+        wa,
+        _clip(e, 120),
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/wa-telemetry")
 def post_wa_extension_telemetry(
     body: WaTelemetryIn,

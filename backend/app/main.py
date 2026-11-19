@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 # Cargar backend/.env ANTES del resto de imports de app (misma ruta que uvicorn usa).
 _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 _DOTENV_LOADED = load_dotenv(_ENV_FILE, override=True)
+_MEOW_ENV_FILE = Path(__file__).resolve().parent.parent / ".env.meow"
+if _MEOW_ENV_FILE.is_file():
+    load_dotenv(_MEOW_ENV_FILE, override=True)
 
 import time
 
@@ -47,6 +50,8 @@ from app.routes.dev_testing import router as dev_testing_router
 from app.routes.auth_crm import router as auth_crm_router
 from app.routes.crm import router as crm_router
 from app.routes.whatsapp_webhooks import router as whatsapp_webhooks_router
+from app.routes.whatsapp_meow import router as whatsapp_meow_router
+from app.routes.whatsapp_meow_internal import router as whatsapp_meow_internal_router
 from app.routes.extension import router as extension_router
 from app.routes.support import router as support_router
 from app.routes.notifications import router as notifications_router
@@ -214,6 +219,8 @@ app.include_router(operations_router)
 app.include_router(auth_crm_router)
 app.include_router(crm_router)
 app.include_router(whatsapp_webhooks_router)
+app.include_router(whatsapp_meow_router)
+app.include_router(whatsapp_meow_internal_router)
 app.include_router(extension_router)
 app.include_router(support_router)
 app.include_router(notifications_router)
