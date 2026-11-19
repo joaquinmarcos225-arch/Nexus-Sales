@@ -12,7 +12,7 @@ class OutreachMessageRead(BaseModel):
     campaign_id: int
     sender_type: Literal["ai", "prospect", "system", "user"]
     message: str
-    channel: Literal["linkedin", "email", "whatsapp"]
+    channel: Literal["linkedin", "email", "whatsapp", "calendar", "call"]
     direction: Literal["outbound", "inbound"]
     testing: bool = Field(default=False, alias="is_testing")
     created_at: datetime
