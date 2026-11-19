@@ -132,6 +132,7 @@ def format_channel_find_summary(
     # needed se acepta por compatibilidad de callers; la línea de resultado es siempre 3 canales.
     _ = needed
     show = ["email", "linkedin", "phone"]
+    filled = filled or {}
 
     if status == "searching":
         still_missing = _missing_channels(prospect) & set(show)
@@ -160,7 +161,6 @@ def format_channel_find_summary(
                 )
         return " · ".join(bits) if bits else None
 
-    filled = filled or {}
     bits = []
     for k in show:
         if k == "email":
