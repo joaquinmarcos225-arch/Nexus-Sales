@@ -598,16 +598,18 @@ def _value_line_has_clear_offer(text: str) -> bool:
         low,
     ):
         return True
-    # Otros productos: verbo de valor + beneficio concreto (stock, reuniones, etc.).
+    # Otros productos: verbo de valor + beneficio concreto (stock, reuniones, firmas, etc.).
     return bool(
         re.search(
             r"\b(?:ayudamos|reducimos|automatizamos|permitimos|damos|evitamos|"
-            r"centralizamos|operamos|habilitamos|orquestamos|bajamos)\b",
+            r"centralizamos|operamos|habilitamos|orquestamos|bajamos|"
+            r"digitalizamos|gestionamos|acortamos|unificamos|simplificamos)\b",
             low,
         )
         and re.search(
             r"reuniones|quiebres|stock|inventario|automatiz|outbound|prospecci|"
-            r"cobran|factur|ahorr|costo|pedido|alerta|seguimiento|manual",
+            r"cobran|factur|ahorr|costo|pedido|alerta|seguimiento|manual|"
+            r"firma|contrat|document|aprobaci|plantilla|flujo|trazabilidad|ciclo",
             low,
         )
     )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -85,8 +86,59 @@ def _remove_fired(prospect: Prospect, day: int) -> None:
     prospect.sequence_fired_milestones = json.dumps(days)
 
 
+def _touch_has_persisted_outreach(prospect: Prospect, entry: dict[str, Any]) -> bool | None:
+    """
+    True/False si se puede verificar OutreachMessage; None si no hay sesión ORM
+    o el toque no trae ids (no aplica el chequeo).
+    Cubre fantasmas: log «enviado» con message_id/wamid tras wipe de historial.
+    """
+    mid_raw = entry.get("message_id")
+    wamid = str(entry.get("whatsapp_message_id") or "").strip()
+    gmid = str(entry.get("gmail_message_id") or "").strip()
+    if mid_raw is None and not wamid and not gmid:
+        return None
+    try:
+        from sqlalchemy.orm import object_session
+
+        session = object_session(prospect)
+    except Exception:
+        session = None
+    if session is None:
+        return None
+    from app.models.outreach import OutreachMessage
+
+    pid = int(prospect.id)
+    if mid_raw is not None:
+        try:
+            mid = int(mid_raw)
+        except (TypeError, ValueError):
+            mid = 0
+        if mid > 0:
+            om = session.get(OutreachMessage, mid)
+            if om is not None and int(om.prospect_id) == pid:
+                return True
+    if wamid:
+        hit = session.scalars(
+            select(OutreachMessage)
+            .where(
+                OutreachMessage.prospect_id == pid,
+                OutreachMessage.whatsapp_message_id == wamid,
+            )
+            .limit(1)
+        ).first()
+        if hit is not None:
+            return True
+    if gmid:
+        # Gmail: message_id de Outreach suele ser el id interno; gmail_message_id va en el log.
+        # Si solo hay gmail id y no hay fila, tratar como fantasma.
+        return False
+    if mid_raw is not None or wamid:
+        return False
+    return None
+
+
 def _touch_entry_lacks_real_delivery_meta(prospect: Prospect, day: int, entry: dict[str, Any]) -> bool:
-    """True si el toque figura enviado pero no hubo entrega real (fallback/sim)."""
+    """True si el toque figura enviado pero no hubo entrega real (fallback/sim/fantasma)."""
     if entry.get("fallback_test"):
         return True
     # WhatsApp Web asistido (SDR marcó enviado): es entrega real, no Cloud API wamid.
@@ -100,6 +152,12 @@ def _touch_entry_lacks_real_delivery_meta(prospect: Prospect, day: int, entry: d
         step = _playbook_step(day, campaign)
         if step is not None and str(getattr(step, "channel", "") or "").lower() == "whatsapp":
             return False
+
+    # Fantasma post-wipe: ids en el log pero sin OutreachMessage → no cuenta como enviado.
+    if entry.get("status") in (TOUCH_ENVIADO, TOUCH_RESPONDIDO):
+        persisted = _touch_has_persisted_outreach(prospect, entry)
+        if persisted is False:
+            return True
 
     campaign = getattr(prospect, "campaign", None)
     step = _playbook_step(day, campaign)
@@ -554,7 +612,12 @@ def reconcile_sequence_state(
     """
     changed = False
     if prospect.sequence_started_at is not None:
-        nxt = next_executable_day(prospect)
+        campaign = _resolve_campaign(db, prospect)
+        # Incluye fantasmas que dejan next=None («secuencia completa» falsa).
+        for day in _planned_days(prospect, campaign):
+            if _maybe_reset_pseudo_sent_touch(prospect, day):
+                changed = True
+        nxt = next_executable_day(prospect, campaign)
         if nxt is not None and _maybe_reset_pseudo_sent_touch(prospect, nxt):
             changed = True
         if changed and commit:
@@ -1791,6 +1854,30 @@ def _generate_real_touch_content(
     )
 
     if sequence_first:
+        from app.services.cold_message_bank import _ensure_role_and_company
+        from app.services.outreach_display_names import (
+            prospect_company_for_outreach,
+            prospect_role_for_outreach,
+        )
+
+        rol = prospect_role_for_outreach(
+            getattr(prospect, "role", None),
+            getattr(prospect, "name", None),
+            company_name=getattr(prospect, "company_name", None),
+        )
+        emp = prospect_company_for_outreach(
+            company_name=getattr(prospect, "company_name", None),
+            email=getattr(prospect, "email", None),
+            source_provider=getattr(prospect, "source_provider", None),
+        )
+        body = _ensure_role_and_company(
+            body or "",
+            slots={
+                "empresa": emp or "",
+                "rol": rol or "",
+                "marca": str(company_brand_name(campaign) or ""),
+            },
+        )
         body = enforce_anchor_value_bridge(
             body=body,
             sequence_first_touch=True,
@@ -1818,6 +1905,16 @@ def _generate_real_touch_content(
         prior_touches=prior,
         sequence_first_touch=sequence_first,
         brand=str(company_brand_name(campaign) or ""),
+    )
+    from app.services.sequence_first_touch_value_guard import (
+        enforce_first_touch_product_offer,
+    )
+
+    body = enforce_first_touch_product_offer(
+        body=body or "",
+        product=_product_dict(product),
+        sequence_first_touch=sequence_first,
+        seed=f"{getattr(prospect, 'id', '')}|{day}|ft-offer",
     )
     body = enforce_followup_value_angle(
         body=body or "",
@@ -1979,27 +2076,63 @@ def bootstrap_sequence_scaffold_fast(
     }
 
 
-def start_prospect_sequence(db: Session, *, user: User, prospect: Prospect) -> Prospect:
+def start_prospect_sequence(
+    db: Session,
+    *,
+    user: User,
+    prospect: Prospect,
+    continuation_after_claim: bool = False,
+) -> Prospect:
+    """
+    ``continuation_after_claim``: el kickoff individual ya cobró crédito / claimó
+    ``sequence_started_at``; no re-bloquear por readiness de ownership.
+    """
     reconcile_sequence_state(db, prospect, commit=True)
-    readiness = assess_outreach_readiness(db, prospect=prospect)
-    block = explain_start_sequence_block(user, prospect, readiness=readiness)
-    if block:
-        raise HTTPException(status_code=403, detail=block)
-    if prospect.owner_user_id != user.id and normalize_role(user.role) == UserRole.sdr:
-        raise HTTPException(status_code=403, detail="Solo el owner puede iniciar la secuencia")
+    if not continuation_after_claim:
+        readiness = assess_outreach_readiness(db, prospect=prospect)
+        block = explain_start_sequence_block(user, prospect, readiness=readiness)
+        if block:
+            raise HTTPException(status_code=403, detail=block)
+        if prospect.owner_user_id != user.id and normalize_role(user.role) == UserRole.sdr:
+            raise HTTPException(status_code=403, detail="Solo el owner puede iniciar la secuencia")
+    else:
+        from app.services.meeting_booking import prospect_meeting_blocks_new_sequence
+
+        meeting_block = prospect_meeting_blocks_new_sequence(prospect, db=db)
+        if meeting_block:
+            raise HTTPException(status_code=400, detail=meeting_block)
+        if prospect.owner_user_id != user.id and normalize_role(user.role) == UserRole.sdr:
+            raise HTTPException(status_code=403, detail="Solo el owner puede iniciar la secuencia")
 
     now = _now()
-    own.mark_sequence_started(db, user=user, prospect=prospect)
-    prospect.sequence_started_at = now
+    if prospect.sequence_started_at is None:
+        own.mark_sequence_started(db, user=user, prospect=prospect)
+        prospect.sequence_started_at = now
     prospect.sequence_group = "contactado"
     prospect.sequence_state = "sin_respuesta"
     prospect.sequence_paused = False
     prospect.sequence_fired_milestones = "[]"
     prospect.playbook_name = prospect.playbook_name or PLAYBOOK_NAME
-    log = _touch_log(prospect)
-    if not log:
-        _init_touch_log_generado(prospect)
-    next_at, _ = compute_next_touch(prospect)
+    # No heredar silencio de reunión de una tanda anterior (bloqueaba inbound Meow).
+    try:
+        from app.services.meeting_scheduling_extras import (
+            clear_post_meeting_silence_for_new_sequence,
+        )
+
+        clear_post_meeting_silence_for_new_sequence(prospect)
+    except Exception:
+        logger.debug("clear_post_meeting_silence_for_new_sequence failed", exc_info=True)
+    # Nueva tanda: claves Meow distintas (evita «enviado» fantasma por idempotency vieja).
+    try:
+        from app.services.commercial_conversation_state import bump_sequence_send_cycle
+
+        bump_sequence_send_cycle(prospect)
+    except Exception:
+        logger.debug("bump_sequence_send_cycle failed", exc_info=True)
+    # Siempre log limpio al iniciar: no heredar «enviado» fantasma de un retest anterior.
+    campaign = _resolve_campaign(db, prospect)
+    _init_touch_log_generado(prospect, steps=_playbook_steps(campaign))
+    next_at, _ = compute_next_touch(prospect, campaign)
     prospect.next_touch_at = next_at
     db.commit()
     db.refresh(prospect)
@@ -2141,10 +2274,21 @@ def execute_sequence_touch(
     prospect: Prospect,
     day: int,
     scheduled: bool = False,
+    channel_override: str | None = None,
 ) -> dict[str, Any]:
     campaign = _resolve_campaign(db, prospect)
     advance_auto_skipped_linkedin_touches(db, prospect=prospect, campaign=campaign)
     if scheduled:
+        from app.services.operational_safety import company_has_global_stop
+
+        if company_has_global_stop(db, int(prospect.company_id)):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Parada de emergencia activa: no se ejecutan toques automáticos. "
+                    "Reanudalá en Operaciones si corresponde."
+                ),
+            )
         if campaign is None or not campaign.seller_id or user.id != campaign.seller_id:
             raise HTTPException(
                 status_code=403,
@@ -2180,6 +2324,17 @@ def execute_sequence_touch(
         )
 
     step = _playbook_step(day, campaign)
+    override = str(channel_override or "").strip().lower()
+    if override in ("wa", "phone"):
+        override = "whatsapp"
+    if override in ("email", "linkedin", "whatsapp", "call"):
+        from app.services.lead_sourcing.mvp_outreach_playbook import PlaybookStepDef
+
+        step = PlaybookStepDef(
+            day=day,
+            channel=override,  # type: ignore[arg-type]
+            objective=step.objective if step is not None else f"Toque día {day}",
+        )
     if step is None:
         raise HTTPException(status_code=400, detail="Toque no encontrado en playbook")
 
@@ -2631,39 +2786,113 @@ def execute_sequence_touch(
             # connect | message | checking: toque en cola (verificación o envío manual).
             linkedin_assisted = True
         elif step.channel == "whatsapp":
+            from app.services.sequence_touch_whatsapp import (
+                deliver_sequence_whatsapp_touch,
+                sequence_whatsapp_touch_uses_api,
+            )
+            from app.services.whatsapp_meow_sequence import (
+                deliver_sequence_whatsapp_touch_native,
+                sequence_whatsapp_touch_uses_native_meow,
+            )
             from app.services.whatsapp_assisted_service import (
                 prospect_whatsapp_digits,
                 queue_whatsapp_sequence_touch,
             )
 
-            wa_action = queue_whatsapp_sequence_touch(
-                db, prospect, campaign, message_body, log_event=True
-            )
-            if wa_action == "skip":
-                if not prospect_whatsapp_digits(prospect):
-                    result = _auto_omit_sequence_touch(
-                        db,
-                        prospect=prospect,
-                        day=day,
-                        reason="whatsapp_sin_dato",
-                    )
-                    db.commit()
-                    tracking = build_sequence_tracking(db, prospect=prospect)
-                    return {
-                        "prospect_id": prospect.id,
-                        "day": day,
-                        "channel": step.channel,
-                        "whatsapp_assisted": False,
-                        "skipped": True,
-                        "omitted": True,
-                        "message": result["message"],
-                        "tracking": tracking,
-                    }
-                raise HTTPException(
-                    status_code=400,
-                    detail="No se pudo generar el borrador de WhatsApp. Reintentá el toque.",
+            # Meow (número conectado del vendedor) antes que Gupshup/Cloud: secuencias con WA primero.
+            if sequence_whatsapp_touch_uses_native_meow(
+                db, campaign=campaign, day=day, channel=step.channel, prospect=prospect, user=user
+            ):
+                whatsapp_delivery = deliver_sequence_whatsapp_touch_native(
+                    db,
+                    user=user,
+                    campaign=campaign,
+                    prospect=prospect,
+                    day=day,
+                    body=str(content.get("body") or message_body or ""),
                 )
-            whatsapp_assisted = True
+                msg = db.get(OutreachMessage, int(whatsapp_delivery["message_id"]))
+                if msg is None:
+                    raise RuntimeError(
+                        "No se encontró el mensaje outbound tras enviar por WhatsApp nativo"
+                    )
+            elif sequence_whatsapp_touch_uses_api(day=day, channel="whatsapp"):
+                whatsapp_delivery = deliver_sequence_whatsapp_touch(
+                    db,
+                    user=user,
+                    campaign=campaign,
+                    prospect=prospect,
+                    day=day,
+                    body=str(content.get("body") or message_body or ""),
+                )
+                msg = db.get(OutreachMessage, int(whatsapp_delivery["message_id"]))
+                if msg is None:
+                    raise RuntimeError(
+                        "No se encontró el mensaje outbound tras enviar por WhatsApp API"
+                    )
+            else:
+                wa_action = queue_whatsapp_sequence_touch(
+                    db,
+                    prospect,
+                    campaign,
+                    message_body,
+                    log_event=True,
+                    day=day,
+                    user=user,
+                )
+                if wa_action == "sent":
+                    msg = db.scalars(
+                        select(OutreachMessage)
+                        .where(
+                            OutreachMessage.prospect_id == prospect.id,
+                            OutreachMessage.channel == "whatsapp",
+                            OutreachMessage.direction == "outbound",
+                        )
+                        .order_by(OutreachMessage.created_at.desc(), OutreachMessage.id.desc())
+                        .limit(1)
+                    ).first()
+                    whatsapp_assisted = False
+                elif wa_action == "skip":
+                    if not prospect_whatsapp_digits(prospect):
+                        result = _auto_omit_sequence_touch(
+                            db,
+                            prospect=prospect,
+                            day=day,
+                            reason="whatsapp_sin_dato",
+                        )
+                        db.commit()
+                        tracking = build_sequence_tracking(db, prospect=prospect)
+                        return {
+                            "prospect_id": prospect.id,
+                            "day": day,
+                            "channel": step.channel,
+                            "whatsapp_assisted": False,
+                            "skipped": True,
+                            "omitted": True,
+                            "message": result["message"],
+                            "tracking": tracking,
+                        }
+                    if not sequence_whatsapp_touch_uses_native_meow(
+                        db,
+                        campaign=campaign,
+                        day=day,
+                        channel="whatsapp",
+                        prospect=prospect,
+                        user=user,
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                "WhatsApp no está conectado en Integraciones. "
+                                "Escaneá el QR y volvé a iniciar la secuencia."
+                            ),
+                        )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="No se pudo enviar el WhatsApp. Reintentá el toque.",
+                    )
+                else:
+                    whatsapp_assisted = True
         elif step.channel == "call":
             # Legacy call channel removed: omit and continue the sequence.
             result = _auto_omit_sequence_touch(
@@ -3458,6 +3687,45 @@ def expire_unsent_assisted_touches_for_calendar(
         omitted.append(day)
         log = _touch_log(prospect)
         ensure_single_assisted_live_queue(prospect, campaign)
+    return omitted
+
+
+def stale_touch_days() -> int:
+    """Días de atraso máximo antes de omitir un toque vencido (default 14)."""
+    raw = (os.getenv("NEXUS_STALE_TOUCH_DAYS") or "14").strip()
+    try:
+        return max(3, min(int(raw), 90))
+    except ValueError:
+        return 14
+
+
+def expire_stale_overdue_touches(
+    db: Session,
+    *,
+    prospect: Prospect,
+    campaign: Campaign | None,
+    now: datetime | None = None,
+) -> list[int]:
+    """Omite toques pendientes vencidos hace más de N días: mandarlos semanas tarde queda mal."""
+    now = now or _now()
+    limit = timedelta(days=stale_touch_days())
+    omitted: list[int] = []
+    for _ in range(30):
+        nxt = next_executable_day(prospect, campaign)
+        due = prospect.next_touch_at
+        if nxt is None or due is None:
+            break
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=UTC)
+        if now - due <= limit:
+            break
+        if _touch_log(prospect).get(str(nxt), {}).get("status") not in (None, TOUCH_PENDIENTE):
+            break
+        # Sin despedida post-secuencia: llegaría semanas después del último mensaje real.
+        _auto_omit_sequence_touch(
+            db, prospect=prospect, day=nxt, reason="vencido_sin_enviar"
+        )
+        omitted.append(nxt)
     return omitted
 
 

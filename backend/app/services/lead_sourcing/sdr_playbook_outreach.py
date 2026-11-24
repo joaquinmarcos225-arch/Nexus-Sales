@@ -496,6 +496,10 @@ def _product_context_block(
             "VALOR OBLIGATORIO: en solution/benefits (o el bloque único de valor) REESCRIBÍ "
             "en tus palabras (voz nosotros / conversacional) los hechos concretos de la ficha "
             "(%, canales, resultado medible). "
+            "El prospecto tiene que entender QUÉ OFRECEN / qué hace el producto "
+            "(oferta clara), no solo el problema o desafío del rol. "
+            "PROHIBIDO quedarse en diagnóstico («sabemos que el desafío es…», listas de dolores) "
+            "sin decir la oferta. "
             "PROHIBIDO copiar value_proposition o description casi literal. "
             "PROHIBIDO «Con {nombre} incrementa/automatiza…» — conjugá «incrementamos/automatizamos». "
             "PROHIBIDO buzzwords vacíos («menos fricción operativa», «mejorar eficiencia», "
@@ -2867,6 +2871,25 @@ def generate_sdr_playbook_touch(
             product_name=short_title,
             prior_touches=prior_touches,
             sequence_first_touch=sequence_first,
+            brand=str((campaign or {}).get("brand_name") or short_title),
+        )
+    # 1º toque — JAMÁS salteable: oferta/valor del producto (no solo el problema).
+    from app.services.sequence_first_touch_value_guard import (
+        enforce_first_touch_product_offer,
+    )
+
+    body = enforce_first_touch_product_offer(
+        body=body or "",
+        product=product_copy,
+        sequence_first_touch=sequence_first,
+        seed=f"{prospect.get('id') or ''}|{step_day}|ft-offer",
+    )
+    if sequence_first and short_title:
+        body = enforce_product_name_limit(
+            body=body or "",
+            product_name=short_title,
+            prior_touches=prior_touches,
+            sequence_first_touch=True,
             brand=str((campaign or {}).get("brand_name") or short_title),
         )
     # FU intermedios: ángulo de valor nuevo (el último/breakup puede ir vacío).

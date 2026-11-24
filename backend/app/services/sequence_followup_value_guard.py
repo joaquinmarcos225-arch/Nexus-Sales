@@ -84,6 +84,13 @@ def _facet_angles_from_product(product: dict | None) -> list[str]:
         facets.append(
             "Orquestamos el contacto por email, LinkedIn y WhatsApp en un solo flujo."
         )
+    if re.search(r"firma|contrat|documental|aprobaci|gesti[oó]n documental", low):
+        facets.append(
+            "Centralizamos plantillas, aprobaciones y firma digital en un solo flujo."
+        )
+        facets.append(
+            "Dejamos trazabilidad de pendientes y resguardo de la documentación."
+        )
     return facets
 
 
