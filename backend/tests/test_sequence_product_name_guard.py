@@ -1,9 +1,9 @@
 """Regla 10: no martillar el nombre del producto."""
 
+from app.services.linkedin_copy_quality import mention_count
 from app.services.sequence_product_name_guard import (
     enforce_product_name_limit,
     limit_product_name_in_body,
-    mention_count,
 )
 
 

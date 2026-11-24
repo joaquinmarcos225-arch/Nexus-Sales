@@ -63,3 +63,34 @@ def test_build_subject_includes_hook():
     subj = build_value_email_subject(product=_NEXUS, company="Acme", seed="x")
     assert subj
     assert len(subj) <= 72
+
+
+def test_non_outbound_product_hook_not_nexus():
+    product = {
+        "name": "Contractia | Software de contratos",
+        "value_proposition": (
+            "Centralizamos creación, revisión y firma digital de contratos."
+        ),
+        "description": "Gestión de contratos y e-sign.",
+    }
+    hook = short_value_subject_hook(product)
+    low = hook.lower()
+    assert "outbound" not in low
+    assert "prospecci" not in low
+    assert "tareas manuales" not in low
+
+
+def test_contractia_envío_de_documentos_not_logistics_subject():
+    """«envío» de documentos en la ficha ≠ logística / Simplificá tus envíos."""
+    product = {
+        "name": "Contractia | Plataforma de gestión documental",
+        "value_proposition": (
+            "Digitalizamos el ciclo de los documentos, desde su generación y envío "
+            "hasta la firma, el seguimiento y el resguardo."
+        ),
+        "description": "Contratos, firma electrónica y gestión documental.",
+    }
+    hook = short_value_subject_hook(product)
+    low = hook.lower()
+    assert "envíos" not in low
+    assert "contrat" in low or "firma" in low or "document" in low

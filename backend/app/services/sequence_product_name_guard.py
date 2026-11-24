@@ -8,23 +8,7 @@ from __future__ import annotations
 
 import re
 
-
-def mention_count(text: str, terms: list[str]) -> int:
-    """Apariciones no superpuestas; gana el término más largo."""
-    low = text or ""
-    if not low:
-        return 0
-    cleaned = [t.strip() for t in terms if t and len(t.strip()) >= 2]
-    if not cleaned:
-        return 0
-    spans: list[tuple[int, int]] = []
-    for term in sorted(set(cleaned), key=len, reverse=True):
-        for m in re.finditer(rf"(?<!\w){re.escape(term)}(?!\w)", low, flags=re.I):
-            start, end = m.span()
-            if any(start < pe and end > ps for ps, pe in spans):
-                continue
-            spans.append((start, end))
-    return len(spans)
+from app.services.linkedin_copy_quality import mention_count
 
 
 def _product_terms(product_name: str, brand: str = "") -> list[str]:

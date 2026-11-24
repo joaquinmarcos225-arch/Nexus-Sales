@@ -36,14 +36,37 @@ _VALUE_SIGNAL_RE = re.compile(
     r")\b"
 )
 
-_HOOK_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+# Ganchos de outreach SaaS: solo si la ficha habla de prospección/outbound.
+_OUTBOUND_HOOK_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)automatiz\w*.{0,60}outbound"), "Automatizá tu outbound"),
     (re.compile(r"(?i)automatiz\w*.{0,60}prospecci"), "Automatizá tu prospección"),
     (re.compile(r"(?i)outbound\s+multicanal|multicanal.{0,40}outbound"), "Outbound multicanal"),
     (re.compile(r"(?i)60\s*%|90\s*%|tareas?\s+manual"), "Menos tareas manuales de outbound"),
     (re.compile(r"(?i)secuen\w*.{0,40}(email|linkedin|whatsapp)"), "Secuencias email + LinkedIn + WhatsApp"),
-    (re.compile(r"(?i)entreg|env[ií]o|log[ií]stic|last\s*mile|uber\s*direct"), "Simplificá tus envíos"),
+)
+
+# Ganchos generales (cualquier producto).
+# «envío» suelto NO: en fichas de contratos aparece «generación y envío» de docs.
+_GENERAL_HOOK_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"(?i)("
+            r"last\s*mile|uber\s*direct|"
+            r"log[ií]stic|"
+            r"entrega(?:s)?\s+(?:local|same[\s-]?day|mismo\s+d[ií]a)|"
+            r"env[ií]os?\s+(?:local(?:es)?|same[\s-]?day|de\s+paquetes|de\s+mercader[ií]a)"
+            r")"
+        ),
+        "Simplificá tus envíos",
+    ),
+    (re.compile(r"(?i)contrat|firm[ae]|e-?sign|firma\s+digital"), "Simplificá tus contratos"),
     (re.compile(r"(?i)costo|ahorr|reduc\w*\s+gasto"), "Bajá costos operativos"),
+)
+
+# Compat: tests / callers que lean _HOOK_RULES.
+_HOOK_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    *_OUTBOUND_HOOK_RULES,
+    *_GENERAL_HOOK_RULES,
 )
 
 _SUBJECT_SHAPES: tuple[str, ...] = (
@@ -68,17 +91,39 @@ def _product_blob(product: dict | None) -> str:
     return "\n".join(p for p in parts if p.strip())
 
 
+def _ficha_claims_outbound(product: dict | None) -> bool:
+    """True solo si ESTA ficha habla de prospección/outbound (no asumir Nexus)."""
+    try:
+        from app.services.message_structure_variants import _ficha_claims_outbound_automation
+
+        return bool(_ficha_claims_outbound_automation(product))
+    except Exception:
+        blob = _product_blob(product).lower()
+        return bool(
+            re.search(
+                r"prospecci|outbound|multicanal|tareas\s+manuales\s+de\s+prospecci",
+                blob,
+            )
+        )
+
+
 def short_value_subject_hook(product: dict | None) -> str:
-    """Gancho corto de valor para asunto (máx ~48 chars)."""
+    """Gancho corto de valor para asunto (máx ~48 chars) desde la ficha del producto."""
     blob = _product_blob(product)
-    for pat, hook in _HOOK_RULES:
+    rules = list(_GENERAL_HOOK_RULES)
+    if _ficha_claims_outbound(product):
+        rules = list(_OUTBOUND_HOOK_RULES) + rules
+    for pat, hook in rules:
         if pat.search(blob):
             return hook[:48]
-    # Fallback: primeras palabras útiles de la VP / description.
+    # Fallback: primeras palabras útiles de la VP / description / nombre corto.
+    from app.services.outreach_display_names import product_outreach_display_name
+
     raw = (
         str((product or {}).get("value_proposition") or "")
         or str((product or {}).get("description") or "")
-        or str((product or {}).get("name") or "Una idea breve")
+        or product_outreach_display_name((product or {}).get("name") if product else None)
+        or "Una idea breve"
     )
     raw = re.sub(r"\s+", " ", raw).strip()
     # Sacar muleta inicial.
@@ -90,11 +135,9 @@ def short_value_subject_hook(product: dict | None) -> str:
     words = raw.split()
     if not words:
         return "Una idea breve"
-    # Imperativo suave si empieza con verbo en infinitivo / 3ª persona.
     clip = " ".join(words[:7])
     if len(clip) > 48:
         clip = clip[:45].rstrip() + "…"
-    # Capitalizar primera letra.
     return clip[:1].upper() + clip[1:] if clip else "Una idea breve"
 
 

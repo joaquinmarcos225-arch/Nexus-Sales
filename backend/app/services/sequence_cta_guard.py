@@ -38,19 +38,55 @@ _SOFT_CTA_FILLER_RE = re.compile(
 )
 
 # Alternativas tipicas de CTA (outbound: ofrecemos reunión).
-# Preferimos 2 opciones blandas cuando NO hay Calendar (día/hora reales las pone calendar_cta).
+# Sin minutos en copy (la reunión real se agenda en ~30'). Tono profesional.
 _CTA_ALTERNATIVES: tuple[str, ...] = (
-    "¿Te viene mejor esta semana o la próxima para una llamada breve?",
-    "¿Preferís esta semana o la que viene para una videollamada corta?",
-    "¿Te calza hoy u otro día esta semana para 10 minutos?",
-    "¿Coordinamos 10 o 15 minutos esta semana?",
-    "¿Hacemos una charla corta esta semana o la que viene?",
-    "¿Agendamos 10 minutos para ver si encaja?",
-    "¿Te sirve una reunión breve para chequear si aplica?",
-    "¿Armamos un espacio corto de 10 minutos?",
+    "¿Te queda mejor esta semana o la próxima para una llamada?",
+    "¿Preferís esta semana o la que viene para una videollamada?",
+    "¿Podemos coordinar una llamada esta semana o la próxima?",
+    "¿Agendamos una llamada breve esta semana o la que viene?",
+    "¿Te sirve una reunión corta esta semana o la próxima?",
+    "¿Coordinamos una charla esta semana?",
 )
 
+# «viene bien» suena informal; minutos en el CTA no (se agenda ~30' después).
+_VIENE_BIEN_RE = re.compile(r"(?i)\bte\s+viene\s+bien\b")
+_CTA_MINUTES_RE = re.compile(
+    r"(?i)(?:\s*(?:de|para|por)?\s*)?(?:\d{1,2}\s*o\s*)?\d{1,2}\s*minutos?"
+)
+_CTA_MIN_RANGE_RE = re.compile(r"(?i)\d{1,2}\s*[-–/]\s*\d{1,2}\s*min")
+
 _MAX_SAME_CTA = 2
+
+
+def polish_outbound_meeting_cta(body: str) -> str:
+    """Tono CTA: sin «viene bien» informal; sin minutos en el pedido de reunión."""
+    text = (body or "").replace("\r\n", "\n")
+    if not text.strip():
+        return text.strip()
+    text = _VIENE_BIEN_RE.sub("te queda bien", text)
+
+    def _strip_minutes_in_question(q: str) -> str:
+        out = _CTA_MIN_RANGE_RE.sub("", q)
+        out = _CTA_MINUTES_RE.sub("", out)
+        out = re.sub(r"(?i)\b(?:de|para|por)\s+(?=para\b|\?)", "", out)
+        out = re.sub(r"\s{2,}", " ", out)
+        out = re.sub(r"\s+([?])", r"\1", out)
+        out = re.sub(r"\s+,", ",", out)
+        # «para para» / «una llamada para?» leftovers
+        out = re.sub(r"(?i)\bpara\s+para\b", "para", out)
+        out = re.sub(r"(?i)\b(llamada|reuni[oó]n|charla|videollamada)\s+para\?", r"\1?", out)
+        return out.strip()
+
+    def _repl_question(m: re.Match[str]) -> str:
+        q = m.group(0)
+        if not is_meeting_cta(q):
+            return q
+        return _strip_minutes_in_question(q)
+
+    text = _QUESTION_RE.sub(_repl_question, text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def normalize_cta(cta: str) -> str:

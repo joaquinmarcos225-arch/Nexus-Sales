@@ -20,15 +20,19 @@ def _prospect(**kw):
         campaign_id=1,
         name="Mia Alvarez",
         company_name="Acme",
+        role="BDR",
         whatsapp="+5491128942875",
         phone=None,
         interest_level="medium",
+        status="compatible",
         whatsapp_assisted_draft=None,
         whatsapp_assist_status="none",
         whatsapp_assist_session_id=None,
         whatsapp_last_assisted_at=None,
         whatsapp_sdr_marked_sent_at=None,
         sequence_paused=False,
+        meeting_scheduling_state=None,
+        email=None,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -873,6 +877,129 @@ def test_gracias_after_rejection_close_stays_silent():
         db=db,
     )
     assert draft == ""
+
+
+def test_de_que_se_trata_is_open_ended_product_ask_not_unknown_feature():
+    """«De qué se trata?» = pitch de ficha; nunca defer SOC2/call sin explicar."""
+    from app.services.whatsapp_reply_compose import (
+        _feature_topic_label,
+        _ficha_covers_inbound_ask,
+        _inbound_is_specific_feature_ask,
+        _inbound_reply_angle,
+        inbound_is_info_question,
+        inbound_is_open_ended_more_info,
+    )
+
+    for text in (
+        "De que se trata?",
+        "De qué se trata?",
+        "de que se trata",
+        "de qué va esto?",
+        "En qué consiste?",
+        "En que consiste?",
+        "Que me ofrecen?",
+    ):
+        assert inbound_is_open_ended_more_info(text), text
+        assert not _inbound_is_specific_feature_ask(text), text
+        assert inbound_is_info_question(text) or inbound_is_open_ended_more_info(text), text
+        assert _inbound_reply_angle(text) == "how_it_works", text
+        assert _feature_topic_label(text) not in ("trata", "consiste", "ofrecen"), text
+
+    camp = _campaign()
+    assert _ficha_covers_inbound_ask(camp, "En qué consiste?")
+    draft = whatsapp_inbound_offline_draft(
+        _prospect(name="Mia"),
+        camp,
+        inbound_text="En qué consiste?",
+    )
+    low = draft.lower()
+    assert "soc2" not in low
+    assert "dispersa" not in low
+    assert "floja" not in low
+    assert "a medias" not in low
+    assert "estándares" not in low and "estandares" not in low
+    assert "nexus" in low or "outbound" in low or "automatiz" in low or "prospec" in low
+    # No puede ser solo CTA a call sin valor.
+    assert len(draft.split()) >= 8
+
+
+def test_compose_en_que_consiste_never_defers_to_soc2(monkeypatch):
+    """OpenAI off → pitch de ficha, no defer SOC2."""
+    monkeypatch.setattr(
+        "app.services.openai_service.openai_configured",
+        lambda: False,
+    )
+    draft = compose_whatsapp_inbound_reply(
+        MagicMock(),
+        prospect=_prospect(),
+        campaign=_campaign(),
+        inbound_text="En qué consiste?",
+        history=[],
+    )
+    low = draft.lower()
+    assert "soc2" not in low
+    assert "a medias" not in low
+    assert "nexus" in low or "outbound" in low or "automatiz" in low or "prospec" in low
+
+
+def test_interpret_first_does_not_early_defer_before_openai(monkeypatch):
+    """Con OpenAI on: cualquier pregunta de producto llega a la IA (no corte por frase)."""
+    from app.services import openai_service as oai
+    from app.services import whatsapp_reply_compose as w
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(oai, "openai_configured", lambda: True)
+    monkeypatch.setattr(
+        oai,
+        "generate_linkedin_inbound_reply",
+        lambda **kw: calls.append(kw.get("inbound_message") or "")
+        or (
+            "Con Nexus Sales automatizamos prospección outbound multicanal "
+            "y generamos mensajes con IA entrenada en tu producto."
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.ai_instruction_context.campaign_education_blob",
+        lambda *a, **k: "FICHA: Nexus Sales automatiza outbound.",
+    )
+    monkeypatch.setattr(w, "history_or_load", lambda *a, **k: [])
+    monkeypatch.setattr(w, "messages_to_conversation_history", lambda *a, **k: [])
+    # Evitar depender del shape completo del ORM en el payload.
+    monkeypatch.setattr(w, "_prospect_payload", lambda p: {"name": p.name, "company_name": "Acme", "role": "BDR"})
+    monkeypatch.setattr(w, "_campaign_payload", lambda c: {"name": c.name, "tone": "profesional", "calendar_link": None})
+    monkeypatch.setattr(
+        w,
+        "_product_payload",
+        lambda c: {"name": "Nexus Sales", "value_proposition": "automatiza outbound", "description": ""},
+    )
+    defer_calls = {"n": 0}
+
+    def _boom(**_k):
+        defer_calls["n"] += 1
+        return "DEFER SOC2 BAD"
+
+    monkeypatch.setattr(w, "unknown_fact_defer_to_meeting", _boom)
+
+    for text in (
+        "En qué consiste?",
+        "De qué se trata?",
+        "Y eso cómo ayuda a un BDR?",
+        "Me sirve para mi equipo de ventas?",
+    ):
+        calls.clear()
+        defer_calls["n"] = 0
+        draft = compose_whatsapp_inbound_reply(
+            MagicMock(),
+            prospect=_prospect(),
+            campaign=_campaign(),
+            inbound_text=text,
+            history=[],
+        )
+        assert calls == [text], text
+        assert defer_calls["n"] == 0, text
+        assert "soc2" not in draft.lower()
+        assert "nexus" in draft.lower() or "outbound" in draft.lower()
 
 
 def test_how_it_works_before_scheduling_word():

@@ -140,10 +140,12 @@ _SHORT_YES_RE = re.compile(
 )
 
 # Solo horas de reloj 0–23 (evitar “24hs” de SLA/onboarding).
+# Incluye «10am» / «10 pm» / «a las 10am» (am/pm pegado o separado).
 _TIME_HINT_RE = re.compile(
-    r"\ba\s+las?\s+([01]?\d|2[0-3])(?::(\d{2}))?\b|"
-    r"\b([01]?\d|2[0-3]):(\d{2})\b|"
-    r"\b([01]?\d|2[0-3])\s*(?:hs|hrs?|h)\b",
+    r"\ba\s+las?\s+([01]?\d|2[0-3])(?::(\d{2}))?\s*(?:a\.?m\.?|p\.?m\.?)?\b|"
+    r"\b([01]?\d|2[0-3]):(\d{2})\s*(?:a\.?m\.?|p\.?m\.?)?\b|"
+    r"\b([01]?\d|2[0-3])\s*(?:hs|hrs?|h)\b|"
+    r"\b([01]?\d|2[0-3])\s*(a\.?m\.?|p\.?m\.?)\b",
     re.I,
 )
 
@@ -161,23 +163,25 @@ _WA_REPLY_RULES = (
     "Si preguntan '¿integran con X?': respondé sobre integración/conexión con X. "
     "PROHIBIDO pivotear a 'Mirá la diferencia' / vs / contraste salvo que pidan "
     "comparar o digan que ya usan esa tool. "
-    "REGLA UNIVERSAL / GUARDRAIL ESTRICTO (cualquier tema): "
-    "Leé TODO el mensaje y entendé la intención real. "
-    "si el dato NO está en la ficha/contexto, PROHIBIDO afirmar o negar O describir "
-    "capacidades ('sí', 'no', 'contamos con', 'tenemos', 'soportamos', 'ofrecemos', "
-    "'hay API', 'puede manejar', 'en varios idiomas', 'ajustando mensajes'). "
-    "Solo reconocé el tema con sus palabras y derivá a reunión/call corta con su caso. "
+    "REGLA UNIVERSAL — LEER EL INBOUND ES LO MÁS IMPORTANTE: "
+    "Leé TODO el mensaje y el hilo; contestá la intención real (no un CTA genérico). "
+    "Si pide info ('contame más', 'qué hacen', 'cómo funciona', cualquier duda): "
+    "RESPONDÉ con la ficha/educación del producto en 1–3 frases concretas. "
+    "PROHIBIDO responder solo 'lo vemos en la call' / '¿agendamos?' sin haber contestado. "
+    "Después de contestar, podés ofrecer una call corta (un solo CTA). "
+    "si el dato concreto NO está en la ficha/contexto, PROHIBIDO inventar capacidades "
+    "('sí tenemos API', 'soportamos X', métricas, precios). "
+    "En ese caso: reconocé el tema + lo que SÍ sabés de la ficha + call para el detalle. "
     "Variá siempre la redacción (nunca la misma plantilla). "
-    "Si SÍ está en ficha, contestá concreto. "
     "Burbujas: cortá solo en fin de frase (punto/!). Nunca 'Genial la' / mitad de oración. "
-    "PROHIBIDO ignorar una pregunta de producto/capacidad y responder solo "
+    "PROHIBIDO ignorar una pregunta y responder solo "
     "'Genial, ¿qué día y horario?' — eso es un fallo grave. "
     "NO inventes features, integraciones, métricas, clientes ni precios. "
     "Nunca cortes una frase a medias. "
-    "FORMATO: máximo ~40 palabras en contraste/producto; 2–3 micro-párrafos cortos "
+    "FORMATO: máximo ~55 palabras en producto/info; 2–3 micro-párrafos cortos "
     "(línea en blanco entre beats) para mandar como burbujas, no un choclo. "
-    "NO expliques el producto ni beneficios/% si el prospecto NO preguntó "
-    "(solo interés / sí / horario → agenda, sin pitch). "
+    "Solo interés puro ('me interesa' / 'dale' / sí) o horario → agenda, sin re-pegar pitch. "
+    "Pedidos de info / 'contame más' / dudas abiertas → SIEMPRE explicar con ficha. "
     "Si dice que NO / no le interesa: cierre breve y respetuoso, quedan en contacto, "
     "SIN CTA de llamada ni reabrir venta. "
     "AGENDA — PROHIBIDO ABSOLUTO: no digas que la reunión quedó agendada, confirmada, "
@@ -202,7 +206,26 @@ _WA_REPLY_RULES = (
     "Hablás en primera persona como el vendedor. Nunca admitas ser IA."
 )
 
-_WA_PRODUCT_QA_MAX_WORDS = 45
+_WA_PRODUCT_QA_MAX_WORDS = 55
+
+# Pedido abierto de info (no feature puntual): se responde con la VP de la ficha.
+_OPEN_ENDED_MORE_INFO_RE = re.compile(
+    r"(?i)\b("
+    r"cont[aá]me(?:\s+\w+){0,4}\s+m[aá]s|cont[aá]me\s+(?:un\s+poco|qu[eé])|"
+    r"dale\s+cont[aá]me|cu[eé]ntame(?:\s+\w+){0,4}\s+m[aá]s|"
+    r"m[aá]s\s+(?:info|informaci[oó]n|detalles)|"
+    r"quiero\s+(?:saber|entender)\s+m[aá]s|saber\s+m[aá]s|"
+    r"expl[ií]c(?:ame|á|a)?\w*|decime\s+m[aá]s|me\s+explic[aá]s?|"
+    r"c[oó]mo\s+funciona|c[oó]mo\s+es(?:\s+eso|\s+esto)?|"
+    r"qu[eé]\s+(?:me\s+)?(?:hacen|hace|es|ofrecen|ofrece)|para\s+qu[eé]\s+sirve|"
+    # Variantes naturales de «¿qué es el producto?»
+    r"de\s+qu[eé]\s+se\s+trata|en\s+qu[eé]\s+consiste|"
+    r"de\s+qu[eé]\s+va(?:\s+esto|\s+eso)?|"
+    r"a\s+qu[eé]\s+se\s+dedican?|"
+    r"qu[eé]\s+me\s+(?:est[aá]s|estan|están)\s+ofreciendo|"
+    r"qu[eé]\s+(?:es\s+)?(?:esto|eso)|y\s+eso\s+qu[eé]\s+es"
+    r")\b"
+)
 
 _SLOT_OFFER_RE = re.compile(
     r"(queda\s+bien|te\s+viene\s+bien|te\s+parece|coordinamos|charla\s+breve|"
@@ -292,6 +315,29 @@ def merge_quoted_inbound(text: str, quoted: str | None = None) -> str:
     return body
 
 
+def inbound_is_open_ended_more_info(text: str | None) -> bool:
+    """«Contame más / más info / cómo funciona»: pide explicación, no un feature puntual."""
+    raw = _strip_whatsapp_prefix(text or "")
+    if not raw.strip():
+        return False
+    from app.services.conversation_intelligence import fold_accents
+
+    folded = fold_accents(raw)
+    if _OPEN_ENDED_MORE_INFO_RE.search(raw) or _OPEN_ENDED_MORE_INFO_RE.search(folded):
+        return True
+    angle = _inbound_reply_angle(raw)
+    return angle == "how_it_works" and _feature_topic_label(raw) in (
+        "eso",
+        "contame",
+        "cuentame",
+        "cuéntame",
+        "info",
+        "funciona",
+        "explicame",
+        "explícame",
+    )
+
+
 def inbound_is_product_aside(text: str | None) -> bool:
     """Pregunta de producto/origen: no re-pedir mail ni repetir el slot."""
     raw = _strip_whatsapp_prefix(text or "")
@@ -305,6 +351,8 @@ def inbound_is_product_aside(text: str | None) -> bool:
     if _JUST_CURIOUS_RE.search(raw) and "@" not in raw:
         return True
     if _CRM_INTEGRATION_RE.search(raw):
+        return True
+    if inbound_is_open_ended_more_info(raw):
         return True
     # «¿Nexus ya lo usan / es piloto?» aunque el ángulo caiga en interest.
     if _inbound_asks_about_product(raw) and ("?" in raw or "¿" in raw):
@@ -539,6 +587,15 @@ _QUESTION_STOPWORDS = frozenset(
         "son",
         "esa",
         "eso",
+        "trata",
+        "consiste",
+        "dedican",
+        "dedica",
+        "ofreciendo",
+        "ofrecen",
+        "ofrece",
+        "explicas",
+        "explica",
         "tambien",
         "también",
         "algo",
@@ -553,6 +610,18 @@ _QUESTION_STOPWORDS = frozenset(
         "hora",
         "dias",
         "días",
+        # Pedidos abiertos de info (no son un feature puntual).
+        "contame",
+        "cuentame",
+        "cuéntame",
+        "explicame",
+        "explícame",
+        "decime",
+        "info",
+        "informacion",
+        "información",
+        "detalles",
+        "poco",
         # Timing / agenda (no son el tema de producto).
         "antes",
         "despues",
@@ -594,8 +663,19 @@ def inbound_is_info_question(inbound_text: str | None) -> bool:
     low = clean.lower()
     if _NOT_INTERESTED_RE.search(low):
         return False
+    # «¿Sos una IA?» no es duda de producto: no pasar por defer «ángulo IA».
+    try:
+        from app.services.whatsapp_humanize import is_ai_identity_question
+
+        if is_ai_identity_question(clean):
+            return False
+    except Exception:
+        pass
     if _SHORT_YES_RE.match(clean.strip()):
         return False
+    # Contame / explícame / más info: info de producto aunque no haya «?».
+    if inbound_is_open_ended_more_info(clean):
+        return True
     try:
         if price_asked(clean) or inbound_asks_integration(clean):
             return True
@@ -669,12 +749,16 @@ def prefer_offline_whatsapp_reply(inbound_text: str) -> bool:
         return True
     if _SHORT_YES_RE.match(clean.strip()):
         return True
-    # Solo interés sin pregunta → empujar agenda, sin pitch.
-    if angle == "interest" and not _inbound_asks_about_product(clean):
+    # Solo «me interesa» / «nos interesa» cortos → agenda. Charlas abiertas → OpenAI.
+    if re.match(
+        r"^(?:me|nos)\s+interesa(?:\s+mucho)?[\s!.]*$",
+        clean.strip(),
+        re.I,
+    ):
         return True
     if _PAUSE_SEQUENCES_RE.search(low) or ("pausar" in low and "secuenc" in low):
         return True
-    # how_it_works / differentiation / precio / CRM / substantive → LLM + education.
+    # Todo lo demás (contame más, dudas, charla) → OpenAI lee el inbound.
     return False
 
 
@@ -831,21 +915,36 @@ def _looks_like_cold_open(draft: str) -> bool:
 
 def _extract_time_hint(inbound: str) -> str | None:
     """Devuelve hora legible si el prospecto mencionó una (ej. '15hs' → '15:00')."""
-    m = _TIME_HINT_RE.search(inbound or "")
+    raw = inbound or ""
+    m = _TIME_HINT_RE.search(raw)
     if not m:
         return None
-    hour = m.group(1) or m.group(3) or m.group(5)
+    # Grupos: (1,2) a las HH[:MM][am]; (3,4) HH:MM; (5) HHhs; (6,7) HH am/pm
+    hour = m.group(1) or m.group(3) or m.group(5) or m.group(6)
     minute = m.group(2) or m.group(4) or "00"
+    ampm = (m.group(7) or "").lower().replace(".", "")
+    if not ampm:
+        # «a las 10am» / «10:30pm» pueden venir en el match sin grupo 7
+        tail = (m.group(0) or "").lower()
+        if re.search(r"p\.?m\.?\b", tail):
+            ampm = "pm"
+        elif re.search(r"a\.?m\.?\b", tail):
+            ampm = "am"
     if not hour:
         return None
     h = int(hour)
+    if ampm == "pm" and 1 <= h <= 11:
+        h += 12
+    elif ampm == "am" and h == 12:
+        h = 0
     if h > 23:
         return None
     return f"{h}:{minute.zfill(2)}"
 
 
 _WEEKDAY_HINT_RE = re.compile(
-    r"\b(el\s+)?(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b",
+    r"\b(el\s+)?(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b|"
+    r"\b(hoy|ma[nñ]ana)\b",
     re.I,
 )
 _SLOT_ACCEPT_RE = re.compile(
@@ -863,8 +962,12 @@ def _extract_weekday_hint(inbound: str) -> str | None:
     m = _WEEKDAY_HINT_RE.search(inbound or "")
     if not m:
         return None
-    day = (m.group(2) or "").strip().lower()
-    return f"el {day}" if day else None
+    day = (m.group(2) or m.group(3) or "").strip().lower()
+    if not day:
+        return None
+    if day in ("hoy", "mañana", "manana"):
+        return day.replace("manana", "mañana")
+    return f"el {day}"
 
 
 def _inbound_looks_like_slot_pick(inbound: str) -> bool:
@@ -1121,9 +1224,11 @@ def _openai_defer_unknown_fact(
             "- Inventar clientes/empresas, casos, métricas o "
             "'es clave/relevante para muchos'.\n"
             "- Describir cómo funciona el producto, qué 'se adapta' o 'se ajusta'.\n"
-            "SÍ hacé: mostrar que leíste el mensaje (nombrá el ángulo: japonés, "
-            "white label, SOC2, API…), decir que preferís no tirar data floja por "
-            "chat, e invitar a una call corta para bajarlo a SU caso. "
+            "SÍ hacé: mostrar que leíste SU pregunta (usando el tema detectado, "
+            "sin inventar features ajenos), decir que preferís no tirar data floja "
+            "por chat, e invitar a una call corta para bajarlo a SU caso. "
+            "PROHIBIDO mencionar SOC2, API, white label u otros features si el "
+            "prospecto no los nombró y no están en la ficha.\n"
             "Vendés la conversación, no el feature.\n"
             "ESTILO: 1–2 micro-párrafos (línea en blanco = burbuja). Sin firma. "
             "Sin 'Saludos'. Sin markdown.\n"
@@ -1326,33 +1431,75 @@ def _blob_has_topic_token(blob: str, topic: str) -> bool:
     )
 
 
+def _inbound_is_specific_feature_ask(inbound: str | None) -> bool:
+    """Feature puntual (API/SSO/CRM/precio…): sin dato en ficha → defer. No aplica a «qué es?»."""
+    text = _strip_whatsapp_prefix(inbound or "")
+    if not text.strip():
+        return False
+    try:
+        if price_asked(text) or inbound_asks_integration(text):
+            return True
+    except Exception:
+        pass
+    if _CRM_INTEGRATION_RE.search(text):
+        return True
+    if _FEATURE_TOPIC_RE.search(text):
+        return True
+    return False
+
+
+def _answer_open_product_ask_from_ficha(
+    campaign: Campaign,
+    *,
+    booked_when: str | None = None,
+) -> str | None:
+    """Pitch de ficha + CTA suave. None si no hay VP usable."""
+    pitch = product_value_pitch(campaign, max_chars=220)
+    if not pitch:
+        return None
+    cta = (
+        f"Si querés lo bajamos a tu caso en la call del {booked_when}."
+        if booked_when
+        else "Si querés lo vemos en una call corta."
+    )
+    return _wa_beats(_trim_words(pitch, max_words=40), cta)
+
+
 def _ficha_covers_inbound_ask(campaign: Campaign, inbound: str) -> bool:
     """True si la ficha documenta el tema concreto (no substring flojo)."""
     blob = _product_brief_blob(campaign)
     if not blob.strip():
         return False
-    # Cómo funciona / en qué se diferencia: basta ficha con sustancia (VP/descripción).
-    # No exigir token «antes»/«diferencia» — eso mandaba siempre a call aunque hubiera datos.
+    # Feature puntual (API/SSO/CRM/precio…): SOLO si el token está en ficha.
+    # Nunca «how_it_works» genérico por «tienen X» → cubrir sin mirar el dato.
+    if _inbound_is_specific_feature_ask(inbound):
+        topic = _feature_topic_label(inbound)
+        if topic == "precio" or (topic or "").startswith("integración"):
+            return _blob_has_topic_token(
+                blob,
+                topic.split()[-1] if (topic or "").startswith("integración") else topic,
+            )
+        if topic and topic != "eso":
+            return _blob_has_topic_token(blob, topic)
+        for kw in _content_keywords(inbound):
+            if _blob_has_topic_token(blob, kw):
+                return True
+        return False
+    # Curiosidad de producto / cómo funciona / contraste: basta ficha con sustancia.
     angle = _inbound_reply_angle(inbound)
     if angle in ("how_it_works", "differentiation") and len(blob) > 40:
         return True
-    # Tema explícito (sso/api/onboarding…): tiene que aparecer en la ficha.
+    if inbound_is_open_ended_more_info(inbound) and len(blob) > 40:
+        return True
+    if inbound_is_info_question(inbound) and len(blob) > 40:
+        return True
     topic = _feature_topic_label(inbound)
     if topic and topic != "eso":
-        # «precio» sin números en ficha → no cubre (regla: call, no inventar).
-        if topic == "precio" or topic.startswith("integración"):
-            return _blob_has_topic_token(blob, topic.split()[-1] if topic.startswith("integración") else topic)
         return _blob_has_topic_token(blob, topic)
     kws = _content_keywords(inbound)
     if not kws:
-        # «¿Qué hace?» genérico: alcanza con tener ficha.
         return len(blob) > 40
-    hits = 0
-    for kw in kws:
-        if _blob_has_topic_token(blob, kw):
-            hits += 1
-    # Al menos un keyword distintivo en ficha.
-    return hits >= 1
+    return any(_blob_has_topic_token(blob, kw) for kw in kws)
 
 
 def _ficha_covers_inbound_topic(campaign: Campaign, inbound: str) -> bool:
@@ -1436,21 +1583,47 @@ def ensure_info_question_handled(
     avoid_repeat: str | None = None,
 ) -> str:
     """
-    Gate universal (cualquier pregunta de producto/info):
-    - Si hay dato en ficha → se respeta la respuesta (OpenAI).
-    - Si no hay dato → SIEMPRE defer fresco a reunión (nunca conservar el draft:
-      puede colar hechos suaves aunque suene a call).
-    - Nunca agenda ciega («Genial, ¿qué día?») ni invento.
+    Red de seguridad POST interpretación (no reemplaza entender el inbound):
+    - Si la ficha cubre / curiosidad de producto → se respeta el draft o se picha VP.
+    - Si el draft inventa / solo empuja calendario sin contestar → pitch o defer.
+    - Feature puntual sin ficha → defer (nunca conservar invento).
     """
     inbound = _strip_whatsapp_prefix(inbound_text or "")
     body = (draft or "").strip()
+    # Identidad («¿sos una IA?»): negar claro. Nunca reescribir a defer de producto.
+    try:
+        from app.services.whatsapp_humanize import (
+            ai_denial_reply,
+            is_ai_identity_question,
+        )
+
+        if is_ai_identity_question(inbound):
+            low = body.lower()
+            if "te escribo yo" in low or "jaj no" in low:
+                return body
+            return ai_denial_reply(
+                continue_with=(
+                    "¿Qué día y horario te quedan cómodos para una charla corta?"
+                ),
+            )
+    except Exception:
+        pass
     if not inbound_is_info_question(inbound):
         return body
     topic = _feature_topic_label(inbound)
     covers = _ficha_covers_inbound_ask(campaign, inbound)
     if covers:
-        # Con ficha: igual bloqueamos inventos fuera de tema / agenda ciega.
+        # Con ficha: no dejar que ignore la pregunta y solo pida día/horario.
         if draft_calendar_push_ignores_question(inbound, body):
+            # Curiosidad de producto / open-ended: pitch de ficha, NUNCA defer SOC2.
+            if inbound_is_open_ended_more_info(inbound) or not _inbound_is_specific_feature_ask(
+                inbound
+            ):
+                pitched = _answer_open_product_ask_from_ficha(
+                    campaign, booked_when=booked_when
+                )
+                if pitched:
+                    return pitched
             return unknown_fact_defer_to_meeting(
                 topic=topic,
                 booked_when=booked_when,
@@ -1458,7 +1631,14 @@ def ensure_info_question_handled(
                 avoid_repeat=avoid_repeat,
             )
         return body
-    # Sin cobertura: nunca confiar en el draft del modelo.
+    # Pedido abierto: si hay VP, usala (no defer genérico).
+    if inbound_is_open_ended_more_info(inbound) or not _inbound_is_specific_feature_ask(
+        inbound
+    ):
+        pitched = _answer_open_product_ask_from_ficha(campaign, booked_when=booked_when)
+        if pitched:
+            return pitched
+    # Feature puntual sin cobertura: nunca confiar en el draft del modelo.
     return unknown_fact_defer_to_meeting(
         topic=topic,
         booked_when=booked_when,
@@ -1682,21 +1862,21 @@ def whatsapp_inbound_offline_draft(
         body = "Sí, se puede pausar cuando hace falta; no sigue mandando toques en pausa."
     elif _PAUSE_SEQUENCES_RE.search(low):
         body = "Sí, se puede pausar cuando hace falta; no sigue mandando toques en pausa."
-    elif angle == "how_it_works":
+    elif angle == "how_it_works" or inbound_is_open_ended_more_info(inbound):
+        # Contestar con valor de ficha primero; CTA suave después (nunca solo «lo vemos en call»).
         cta = (
-            f"Lo vemos en la call del {booked_when}."
+            f"Si querés lo bajamos a tu caso en la call del {booked_when}."
             if booked_when
-            else "¿Querés que te lo muestre en una demo corta?"
+            else "Si querés lo vemos en una call corta."
         )
         if summary:
-            # Una idea corta + CTA en burbujas (no choclo).
             lead = summary
-            if len(lead.split()) > 28:
-                lead = _trim_words(lead, max_words=28)
+            if len(lead.split()) > 36:
+                lead = _trim_words(lead, max_words=36)
             body = _wa_beats(lead, cta)
         else:
             body = _wa_beats(
-                f"Te cuento bien qué hace {product} en una call corta.",
+                f"{product} ayuda a salir a buscar reuniones con secuencias en mail, LinkedIn y WhatsApp.",
                 cta,
             )
     elif angle == "differentiation":
@@ -1764,6 +1944,37 @@ def whatsapp_inbound_offline_draft(
         known = prospect_booking_email(prospect)
         day_hint = _extract_weekday_hint(inbound)
         noted = time_hint or day_hint
+        if not noted:
+            # «Hoy a las 10am» a veces no matchea regex viejo: usar parser real.
+            try:
+                from app.services.meeting_slot_parser import (
+                    parse_meeting_slot,
+                    prospect_proposed_meeting_slot,
+                )
+
+                if prospect_proposed_meeting_slot(inbound):
+                    tz = (
+                        getattr(campaign, "timezone", None) or "America/Argentina/Buenos_Aires"
+                    ).strip()
+                    slot = parse_meeting_slot(inbound, timezone=tz)
+                    if slot is not None:
+                        try:
+                            from zoneinfo import ZoneInfo
+
+                            local = slot.astimezone(ZoneInfo(tz))
+                            noted = local.strftime("%A %H:%M").replace(
+                                "Monday", "lunes"
+                            ).replace("Tuesday", "martes").replace(
+                                "Wednesday", "miércoles"
+                            ).replace("Thursday", "jueves").replace(
+                                "Friday", "viernes"
+                            ).replace("Saturday", "sábado").replace(
+                                "Sunday", "domingo"
+                            )
+                        except Exception:
+                            noted = time_hint or "ese horario"
+            except Exception:
+                pass
         if (
             not noted
             and _inbound_affirms_offered_slot(inbound, db=db, prospect=prospect)
@@ -1913,28 +2124,38 @@ def compose_whatsapp_inbound_reply(
             prospect, campaign, inbound_text=inbound_text, db=db
         )
 
-    # Pregunta de producto sin dato en ficha → defer IA directo (no dejar que el
-    # modelo principal invente capacidades y después haya que limpiar).
-    if inbound_is_info_question(inbound_text) and not _ficha_covers_inbound_ask(
-        campaign, inbound_text
-    ):
+    # INTERPRET-FIRST: no cortar por regex de frases antes de que la IA lea el inbound.
+    # Si OpenAI está off y hay ficha → pitch. Feature puntual sin ficha → defer offline.
+    if not openai_service.openai_configured() and inbound_is_info_question(inbound_text):
         from app.services.whatsapp_humanize import strip_chat_name_vocative
 
-        last_out = _last_whatsapp_outbound_plain(prospect, db)
-        safe = unknown_fact_defer_to_meeting(
-            topic=_feature_topic_label(inbound_text),
-            booked_when=None,
-            inbound_text=inbound_text,
-            avoid_repeat=last_out or None,
-        )
-        return strip_chat_name_vocative(safe, prospect)
+        if _ficha_covers_inbound_ask(campaign, inbound_text) or (
+            not _inbound_is_specific_feature_ask(inbound_text)
+            and len(_product_brief_blob(campaign)) > 40
+        ):
+            pitched = _answer_open_product_ask_from_ficha(campaign)
+            if pitched:
+                return strip_chat_name_vocative(pitched, prospect)
+        if _inbound_is_specific_feature_ask(inbound_text):
+            last_out = _last_whatsapp_outbound_plain(prospect, db)
+            safe = unknown_fact_defer_to_meeting(
+                topic=_feature_topic_label(inbound_text),
+                booked_when=None,
+                inbound_text=inbound_text,
+                avoid_repeat=last_out or None,
+                use_llm=False,
+            )
+            return strip_chat_name_vocative(safe, prospect)
 
     messages = history_or_load(db, prospect, history, channel="whatsapp")
     conv = messages_to_conversation_history(messages)
     education = campaign_education_blob(
         db, campaign, inbound_reply_channel="whatsapp", inbound_text=inbound_text
     )
-    allow_pitch = _inbound_asks_about_product(inbound_text)
+    # Interpret-first: si es pregunta de info, el pitch de ficha NO es “no pedido”.
+    allow_pitch = inbound_is_info_question(inbound_text) or _inbound_asks_about_product(
+        inbound_text
+    )
     seller_country = ""
     try:
         from app.services.user_outreach_style import style_record_for_user
@@ -1950,22 +2171,29 @@ def compose_whatsapp_inbound_reply(
         f"{dialect_prompt_block(dialect_from_country(seller_country))}"
     )
 
-    product_qa = allow_pitch or _inbound_reply_angle(inbound_text) in (
-        "how_it_works",
-        "differentiation",
-        "substantive",
+    # Cualquier pregunta de info: la IA interpreta primero (no lista de frases).
+    product_qa = inbound_is_info_question(inbound_text) or allow_pitch or (
+        _inbound_reply_angle(inbound_text)
+        in ("how_it_works", "differentiation", "substantive")
     )
     word_cap = _WA_PRODUCT_QA_MAX_WORDS if product_qa else _WHATSAPP_REPLY_MAX_WORDS
     if product_qa:
         education = (
             f"{education}\n\n"
-            "MODO PRODUCTO-QA (cualquier pregunta sobre el producto): "
-            "1) Leé TODO el mensaje. 2) Si el dato está en ficha/educación, contestá concreto. "
-            "3) Si NO está: PROHIBIDO sí/no/'contamos con'/'tenemos API'/'puede manejar'/"
-            "'en varios idiomas' — solo defer a call, redacción NUEVA cada vez. "
-            "4) PROHIBIDO responder solo pidiendo día/horario. "
-            "5) Burbujas solo en fin de frase. "
-            "No inventes. No pivotees a pitch genérico ni a agenda ciega."
+            "MODO INTERPRET-FIRST (obligatorio, en este orden):\n"
+            "1) INTERPRETÁ qué pregunta el prospecto (en tus palabras internas; "
+            "no lo parafrasees en la respuesta tipo 'Vi que preguntás…').\n"
+            "2) Mirás la FICHA / value proposition / descripción del producto.\n"
+            "3a) Si la ficha alcanza para responder (qué es, qué hace, valor, "
+            "cómo ayuda, o un feature que SÍ está escrito): RESPONDÉ con esos "
+            "hechos en 1–3 frases. CTA de call al final, opcional y suave.\n"
+            "3b) Si pide un dato concreto que NO está en la ficha: reconocé el "
+            "tema sin inventar (prohibido sí/no/'tenemos X'/'SOC2'/'API' si no "
+            "está escrito) y proponé una call corta para bajarlo a SU caso.\n"
+            "PROHIBIDO: responder solo 'lo vemos en la call' cuando la ficha SÍ "
+            "explica el producto. "
+            "PROHIBIDO: inventar features. "
+            "Burbujas solo en fin de frase. Un solo CTA de reunión."
         )
 
     if openai_service.openai_configured():
@@ -2009,7 +2237,12 @@ def compose_whatsapp_inbound_reply(
                     "whatsapp inbound openai returned cold-open prospect_id=%s — offline",
                     prospect.id,
                 )
-            elif draft and (not allow_pitch) and _looks_like_unsolicited_product_pitch(draft):
+            elif (
+                draft
+                and (not allow_pitch)
+                and (not product_qa)
+                and _looks_like_unsolicited_product_pitch(draft)
+            ):
                 logger.warning(
                     "whatsapp inbound openai pitched product without ask prospect_id=%s — offline",
                     prospect.id,
@@ -2052,13 +2285,23 @@ def compose_whatsapp_inbound_reply(
                 )
                 return strip_chat_name_vocative(safe, prospect)
             elif draft and draft_calendar_push_ignores_question(inbound_text, draft):
+                from app.services.whatsapp_humanize import strip_chat_name_vocative
+
+                # Curiosidad de producto: pitch de ficha. Feature puntual: defer.
+                if not _inbound_is_specific_feature_ask(inbound_text):
+                    pitched = _answer_open_product_ask_from_ficha(campaign)
+                    if pitched:
+                        logger.warning(
+                            "whatsapp inbound openai calendar-push ignored question "
+                            "prospect_id=%s — ficha pitch",
+                            prospect.id,
+                        )
+                        return strip_chat_name_vocative(pitched, prospect)
                 logger.warning(
                     "whatsapp inbound openai calendar-push ignored question "
                     "prospect_id=%s — llm defer",
                     prospect.id,
                 )
-                from app.services.whatsapp_humanize import strip_chat_name_vocative
-
                 safe = unknown_fact_defer_to_meeting(
                     topic=_feature_topic_label(inbound_text),
                     booked_when=None,

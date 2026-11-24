@@ -69,6 +69,11 @@ def sequence_send_cycle(prospect: Any) -> int:
         return 0
 
 
+def sequence_send_cycle_at(prospect: Any) -> str:
+    """Marca temporal del último bump — parte de la clave Meow para no chocar con envíos viejos."""
+    return str(_root(prospect).get("send_cycle_at") or "").strip()
+
+
 def bump_sequence_send_cycle(prospect: Any) -> int:
     """Nueva tanda (reinsert / otra campaña): permite un toque 1 nuevo, sin reintento doble."""
     root = _root(prospect)
@@ -482,6 +487,9 @@ def try_advance_meeting_booking(
     is_reschedule = meeting is not None
 
     offered = extras.offered_slots(prospect)
+    if not offered and hasattr(db, "scalars"):
+        # «A las 9 está bien» tras una lista Lunes 09:00/09:30: no parsear como «hoy».
+        offered = extras.recover_offered_slots_from_thread(db, prospect, timezone=tz)
     picked_offered = extras.pick_offered_slot(body, offered, timezone=tz) if offered else None
     confirming_mail = bool(
         extras.extract_email(body) or extras.inbound_confirms_proposed_email(prospect, body)
