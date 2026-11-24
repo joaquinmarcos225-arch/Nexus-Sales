@@ -545,6 +545,8 @@ def _apply_sqlite_light_migrations(bind) -> None:
                 ("pending_plan", "VARCHAR(64)"),
                 ("billing_period_end", "TEXT"),
                 ("last_payment_at", "TEXT"),
+                ("creator_display_baseline", "TEXT"),
+                ("whatsapp_commercial", "TEXT"),
             ):
                 if col_name not in _cols("companies"):
                     conn.execute(text(f"ALTER TABLE companies ADD COLUMN {col_name} {col_def}"))

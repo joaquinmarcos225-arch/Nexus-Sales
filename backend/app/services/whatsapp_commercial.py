@@ -52,7 +52,8 @@ def account_unique_24h_limit() -> int:
 
 
 def commercial_config(company: Company) -> dict[str, Any]:
-    raw = company.whatsapp_commercial if isinstance(company.whatsapp_commercial, dict) else {}
+    raw = getattr(company, "whatsapp_commercial", None)
+    raw = raw if isinstance(raw, dict) else {}
     packet = raw.get("packet_units")
     unique = raw.get("unique_24h_limit")
     spend = raw.get("spend_cap_usd")

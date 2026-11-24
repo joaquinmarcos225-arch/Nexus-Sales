@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Integer, JSON, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
@@ -32,6 +32,8 @@ class Company(Base):
     plan: Mapped[str] = mapped_column(String(64), nullable=False, default="starter")
     employee_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     global_automation_stop: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    creator_display_baseline: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    whatsapp_commercial: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Billing / suscripción (Stripe + Mercado Pago)
     billing_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
