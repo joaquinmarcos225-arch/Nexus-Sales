@@ -60,8 +60,123 @@ _WA_OPENING_KEEP_SEPARATE_RE = re.compile(
 )
 
 
+_WA_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+(?=[¿¡\"«A-ZÁÉÍÓÚÑ])")
+# Párrafos de explicación (sin \n\n) que no deben ir en una sola burbuja.
+_WA_LONG_BUBBLE_SOFT = 170
+
+
+def _capitalize_sentence_start(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return raw
+    if raw[0].islower():
+        return raw[0].upper() + raw[1:]
+    return raw
+
+
+def _split_single_long_clause(raw: str, *, soft_max: int) -> list[str]:
+    """
+    Una sola oración enorme: cortar en límites con sentido (: ; o mitad por coma).
+    Nunca mid-word ni dejando «y con» colgando.
+    """
+    text = (raw or "").strip()
+    if not text or len(text) <= soft_max:
+        return [text] if text else []
+    # «…antes y después: lista, lista, lista.»
+    colon = text.find(": ")
+    if colon >= 40 and len(text) - colon >= 40:
+        left = text[:colon].rstrip()
+        right = _capitalize_sentence_start(text[colon + 2 :])
+        if not left.endswith((".", "!", "?", "…")):
+            left = f"{left}."
+        return [left, right]
+    # «…; …»
+    if "; " in text:
+        parts = [p.strip() for p in text.split("; ") if p.strip()]
+        if len(parts) >= 2 and len(parts[0]) >= 40 and len(parts[1]) >= 30:
+            head = parts[0]
+            if not head.endswith((".", "!", "?", "…")):
+                head = f"{head}."
+            tail = _capitalize_sentence_start("; ".join(parts[1:]))
+            return [head, tail]
+    # Mitad cercana a coma (evitar cortar tras artículo corto).
+    mid = len(text) // 2
+    window_lo = max(40, mid - 90)
+    window_hi = min(len(text) - 40, mid + 90)
+    best = -1
+    for i in range(window_lo, window_hi):
+        if text[i : i + 2] != ", ":
+            continue
+        after = text[i + 2 : i + 12]
+        # No dejar «y con …» solo en la 2ª si la 1ª queda sin producto/puente.
+        if after.lower().startswith(("y ", "o ", "u ")):
+            continue
+        best = i
+        break
+    if best > 0:
+        left = text[:best].rstrip()
+        right = _capitalize_sentence_start(text[best + 2 :])
+        if not left.endswith((".", "!", "?", "…")):
+            left = f"{left}."
+        if len(left) >= 35 and len(right) >= 35:
+            return [left, right]
+    return [text]
+
+
+def _split_long_explanation_sentences(text: str, *, soft_max: int = _WA_LONG_BUBBLE_SOFT) -> list[str]:
+    """
+    Parte choclos de valor/explicación en 2–3 burbujas por oración completa.
+    No corta mid-phrase: solo tras . ! ? … (o : / ; en oraciones únicas largas).
+    """
+    raw = (text or "").strip()
+    if not raw or len(raw) <= soft_max:
+        return [raw] if raw else []
+    if _is_opening_keep_separate(raw):
+        return [raw]
+    sents = [s.strip() for s in _WA_SENTENCE_SPLIT_RE.split(raw) if s and s.strip()]
+    if len(sents) <= 1:
+        return _split_single_long_clause(raw, soft_max=soft_max)
+    # Empaquetar oraciones hasta soft_max; CTA (¿…?) casi siempre sola al final.
+    packs: list[str] = []
+    buf = ""
+    for sent in sents:
+        is_q = sent.startswith(("¿", "?")) or sent.endswith("?")
+        if is_q and buf:
+            packs.append(buf.strip())
+            buf = sent
+            continue
+        candidate = f"{buf} {sent}".strip() if buf else sent
+        if buf and len(candidate) > soft_max:
+            packs.append(buf.strip())
+            buf = sent
+        else:
+            buf = candidate
+    if buf:
+        packs.append(buf.strip())
+    # Si quedó 1 pack enorme, forzar corte por oración (sin vaciar sentido).
+    if len(packs) == 1 and len(sents) >= 2:
+        mid = max(1, len(sents) // 2)
+        packs = [
+            " ".join(sents[:mid]).strip(),
+            " ".join(sents[mid:]).strip(),
+        ]
+    # Packs individuales que siguen siendo choclo → cláusula.
+    refined: list[str] = []
+    for pack in packs:
+        if len(pack) > soft_max:
+            refined.extend(_split_single_long_clause(pack, soft_max=soft_max))
+        else:
+            refined.append(pack)
+    return [p for p in refined if p]
+
+
+_SOY_PRESENTATION_HEAD_RE = re.compile(
+    r"(?is)^(Soy\s+\S[\wÁÉÍÓÚÑáéíóúñ'’.-]*(?:\s+de\s+[^.!?\n]{1,80})?\.)\s+(.+)$"
+)
+
+
 def _expand_whatsapp_human_bubble(part: str) -> list[str]:
-    """Parte afirmación + resto si vinieron juntos."""
+    """Parte afirmación + resto si vinieron juntos; y choclos de explicación."""
     text = (part or "").strip()
     if not text:
         return []
@@ -71,10 +186,17 @@ def _expand_whatsapp_human_bubble(part: str) -> list[str]:
         rest = text[affirm.end() :].strip()
         # No partir a mitad de oración (resto en minúscula = continúa la frase).
         if rest and rest[0].islower() and not rest.startswith(("¿", "¡")):
-            return [text]
+            return _split_long_explanation_sentences(text)
         if rest and len(rest) > 8:
-            return [head, rest]
-    return [text]
+            return [head, *_split_long_explanation_sentences(rest)]
+    # «Soy X de Y.» sola; el valor / ancla va en otra burbuja.
+    soy = _SOY_PRESENTATION_HEAD_RE.match(text)
+    if soy:
+        return [
+            soy.group(1).strip(),
+            *_split_long_explanation_sentences(soy.group(2).strip()),
+        ]
+    return _split_long_explanation_sentences(text)
 
 
 def _is_opening_keep_separate(text: str) -> bool:
@@ -844,6 +966,15 @@ def deliver_sequence_whatsapp_touch_native(
     text = ensure_sdr_brand_presentation(text, sdr_first=sdr_first, brand=brand)
     if not text:
         raise HTTPException(status_code=400, detail="Mensaje vacío.")
+    try:
+        from app.services.outreach_display_names import scrub_piped_product_title_in_body
+
+        prod = getattr(campaign, "product", None)
+        pname = (getattr(prod, "name", None) or "").strip()
+        if pname:
+            text = scrub_piped_product_title_in_body(text, product_name=pname)
+    except Exception:
+        pass
 
     try:
         gate = assert_can_send_whatsapp_meow(db, company, digits=to_digits)

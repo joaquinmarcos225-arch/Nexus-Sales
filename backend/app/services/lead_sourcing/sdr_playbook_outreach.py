@@ -2854,10 +2854,14 @@ def generate_sdr_playbook_touch(
         ),
     )
     # Si la ficha tenía título largo con |, sacarlo del body (dejar nombre corto).
+    from app.services.outreach_display_names import scrub_piped_product_title_in_body
+
     full_title = str((product_copy or {}).get("full_name") or "").strip()
     short_title = str((product_copy or {}).get("name") or "").strip()
     if full_title and short_title and full_title != short_title and full_title in (body or ""):
         body = (body or "").replace(full_title, short_title)
+    body = scrub_piped_product_title_in_body(body or "", product_name=short_title or full_title)
+    if short_title:
         body = enforce_product_name_limit(
             body=body,
             product_name=short_title,

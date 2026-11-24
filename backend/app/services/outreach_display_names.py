@@ -714,3 +714,35 @@ def product_outreach_display_name(raw_name: str | None) -> str:
     if len(head) > 48:
         head = head[:45].rstrip() + "…"
     return head
+
+
+def scrub_piped_product_title_in_body(body: str | None, *, product_name: str | None) -> str:
+    """
+    Saca «Contractia | Plataforma integral…» del mensaje → deja «Contractia».
+    Cubre ficha mal nombrada o IA que pegó el título completo.
+    """
+    text = (body or "").replace("\r\n", "\n")
+    raw_name = re.sub(r"\s+", " ", (product_name or "").strip())
+    short = product_outreach_display_name(raw_name) or raw_name
+    if not text or not short:
+        return text.strip() if text else ""
+    out = text
+    # Si el body trae el título completo de ficha, recortar a nombre corto.
+    if raw_name and raw_name != short and raw_name in out:
+        out = out.replace(raw_name, short)
+    # «Contractia | tagline…» hasta verbo/continuacion de la oración o puntuación.
+    clause_cont = (
+        r"sabemos|podemos|hacemos|ayudamos|ofrecemos|automatizamos|entendemos|"
+        r"creemos|vemos|tenemos|queremos|buscamos|permitimos|resolvemos|"
+        r"y\s+con\b|para\s+que\b"
+    )
+    pat = re.compile(
+        rf"(?<!\w){re.escape(short)}\s*[|•·]\s+"
+        rf".+?"
+        rf"(?=\s+(?:{clause_cont})\b|\s*[.,;:!?]|\n|$)",
+        re.I | re.DOTALL,
+    )
+    out = pat.sub(short, out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r" +\n", "\n", out)
+    return out.strip()

@@ -90,12 +90,15 @@ def _brand_label(campaign: dict[str, Any]) -> str:
 
 
 def _product_name(product: dict[str, Any] | None, *, brand: str = "") -> str:
-    name = ((product or {}).get("name") or "").strip()
-    if name:
-        from app.services.outreach_display_names import is_placeholder_name
+    from app.services.outreach_display_names import (
+        is_placeholder_name,
+        product_outreach_display_name,
+    )
 
-        if not is_placeholder_name(name):
-            return name
+    raw = ((product or {}).get("name") or "").strip()
+    name = product_outreach_display_name(raw) or raw
+    if name and not is_placeholder_name(name):
+        return name
     return brand or "nuestra solución"
 
 

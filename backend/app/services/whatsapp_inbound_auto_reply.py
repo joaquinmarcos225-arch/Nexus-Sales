@@ -801,6 +801,16 @@ def _execute_meow_auto_reply_delivery(
     from app.services.whatsapp_meow_service import set_chat_presence
 
     text = prepare_outbound_text(text, prospect=prospect, cold=False)
+    # Nombre comercial corto (nunca «Contractia | Plataforma…»).
+    try:
+        from app.services.outreach_display_names import scrub_piped_product_title_in_body
+
+        prod = getattr(getattr(prospect, "campaign", None), "product", None)
+        pname = (getattr(prod, "name", None) or "").strip()
+        if pname:
+            text = scrub_piped_product_title_in_body(text, product_name=pname)
+    except Exception:
+        pass
     # Réplicas: 2–3 burbujas con sentido (mismo split que secuencia), no un choclo.
     from app.services.whatsapp_meow_sequence import split_whatsapp_default_bubbles
 
