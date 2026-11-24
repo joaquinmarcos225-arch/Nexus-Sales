@@ -187,6 +187,20 @@ Si preguntó "cómo funciona" o "entender mejor" JUNTO con pedir llamada:
 - UNA frase breve: "con gusto te lo mostramos en la llamada" — y pasá a coordinar horario.
 - NO escribas 5+ líneas explicando el producto.
 
+Si pide horarios de OTRO día (ej. «el lunes no; ¿martes?»):
+- Ofrecé SOLO ese día. PROHIBIDO re-listar horarios del día que ya descartó.
+- PROHIBIDO alargar el camino pre-reunión con pitch («antes de la reunión repasamos…»).
+
+CONFIRMACIÓN / AGENDA — PROHIBIDO ABSOLUTO:
+- Decir que «quedamos», «te agendé», «te dejo agendada» o «nos vemos el…» si el sistema
+  no confirmó Calendar en este turno.
+- «Te enviaré el link un día antes», «te mando el Meet mañana», u otra promesa de link diferido.
+- Pitch de producto / «puedo adelantarte detalles» / features DESPUÉS de que eligió horario:
+  el siguiente paso es agendar de verdad (mail + Calendar), no vender más.
+
+Si eligió día y hora: pedí lo que falte (mail) o confirmá SOLO si el contexto ya trae
+evento/invitación creada. Nunca inventes que ya está agendado.
+
 Texto plano; sin markdown.
 """
 
@@ -304,6 +318,15 @@ _SUBSTANTIVE_QUESTION_HINTS = (
     "producto",
     "cuéntame",
     "cuentame",
+    "contame",
+    "contame mas",
+    "contame más",
+    "mas info",
+    "más info",
+    "mas informacion",
+    "más información",
+    "quiero saber mas",
+    "quiero saber más",
     "introduc",
     "antes de la reunión",
     "antes de la reunion",
@@ -316,11 +339,26 @@ _SUBSTANTIVE_QUESTION_HINTS = (
 )
 
 
+_HOURS_ONLY_ASK_RE = re.compile(
+    r"\b("
+    r"que\s+horarios?|cuales?\s+horarios?|horarios?\s+(tenes|tienes|tenés|disponibles?)|"
+    r"disponibilidad|huecos?|slots?|"
+    r"mandame\s+horarios?|pasame\s+horarios?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 def inbound_text_needs_substantive_answer(text: str | None) -> bool:
     """Heurística: el prospecto pide explicación concreta (no solo 'ok' o timing)."""
     t = (text or "").strip().lower()
     if len(t) < 8:
         return False
+    # «¿qué horarios tenés el martes?» es agenda, no pregunta de producto.
+    if _HOURS_ONLY_ASK_RE.search(t):
+        productish = any(h in t for h in _SUBSTANTIVE_QUESTION_HINTS)
+        if not productish:
+            return False
     if "?" in t:
         return True
     return any(h in t for h in _SUBSTANTIVE_QUESTION_HINTS)
@@ -523,6 +561,28 @@ def _single_openai_chat(
             )
         except Exception:  # noqa: BLE001
             pass
+        # Debug local: NEXUS_DEBUG_OPENAI_CALLERS=1 loguea quién dispara cada call.
+        if (os.getenv("NEXUS_DEBUG_OPENAI_CALLERS") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
+            import traceback
+
+            frames = [
+                f"{f.filename.split('app')[-1]}:{f.lineno}:{f.name}"
+                for f in traceback.extract_stack(limit=16)
+                if "openai_service" not in f.filename and "cogs_runtime" not in f.filename
+            ]
+            logger.info(
+                "openai_call model=%s in=%s out=%s stack=%s user_head=%r",
+                use_model,
+                getattr(usage, "input_tokens", None) if usage else None,
+                getattr(usage, "output_tokens", None) if usage else None,
+                " < ".join(frames[-6:]),
+                (user_prompt or "").replace("\n", " ")[:120],
+            )
         return RawChatResult(
             text=(res.output_text or "").strip(),
             model=use_model,
@@ -1686,11 +1746,15 @@ def generate_inbound_response(
     elif scheduling_stage:
         meeting_rules = (
             "ETAPA: AGENDAR. El prospecto pidió reunión/llamada/demo. "
-            "Cerrá con día/horario o link de agenda. Sin pitch de producto."
+            "Cerrá con día/horario o link de agenda. Sin pitch de producto. "
+            "Camino CORTO a la reunión: no alargues con intros del producto. "
+            "Si pide otro día, listá SOLO ese día (no repitas el día rechazado)."
         )
         if defer_product_to_call:
             meeting_rules += (
-                " Preguntó cómo funciona: UNA frase ('te lo mostramos en la llamada') y coordiná horario."
+                " También pidió entender el producto: PRIMERO 1–2 frases concretas "
+                "con la ficha/value proposition; DESPUÉS pedí día/horario. "
+                "PROHIBIDO solo decir 'te lo mostramos en la llamada' sin explicar nada."
             )
         if cal:
             meeting_rules += f" Link agenda disponible: {cal}"
@@ -1812,9 +1876,14 @@ def generate_linkedin_inbound_reply(
         meeting_hint = " Podés cerrar con invitación suave a charla breve de 15 min (sin presión)."
 
     product_rule = (
-        "El prospecto PREGUNTÓ por el producto: respondé como experto del producto "
-        f"en 1-3 frases concretas (hechos, no marketing vacío): {vp}. "
-        "Si falta un dato exacto, decí lo que sí sabés y ofrecé cerrarlo en la call. No inventes."
+        "INTERPRET-FIRST: primero entendé QUÉ pregunta; después mirá la ficha.\n"
+        f"Hechos de producto (si aplican): {vp}\n"
+        "Si la pregunta es sobre el producto/oferta/valor y la ficha alcanza: "
+        "explicá en 1-3 frases con esos hechos (no marketing vacío). "
+        "Si pide un detalle que NO está en ficha: no inventes; reconocé el tema "
+        "y ofrecé cerrarlo en una call corta. "
+        "PROHIBIDO inventar SOC2/API/features ni responder solo 'lo vemos en call' "
+        "cuando la ficha SÍ responde qué es / qué hace."
         if substantive
         else (
             "El prospecto NO pidió explicación del producto. "

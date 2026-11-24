@@ -4,6 +4,7 @@ from app.services.outbound_text_normalize import (
     apply_opening_greeting_policy,
     normalize_outbound_email_body,
     strip_inbound_latiguillo_opener,
+    strip_unverified_meeting_claims,
 )
 
 
@@ -212,5 +213,31 @@ def test_email_thread_envelope_three_phases():
         company_name="CostGuard",
     )
     assert start.startswith("Hola Test,")
-    assert "Saludos,\nJoaquín\nCostGuard" in start
+    assert "Saludos,\nJoaquín,\nCostGuard" in start
+
+    demo = apply_email_thread_envelope(
+        "El lunes no tengo a las 15:15.\n\nSaludos, Joaquin CostGuard Demo Client",
+        phase="thread_start",
+        prospect_name="Eduardo",
+        seller_name="Joaquin",
+        company_name="CostGuard Demo Client",
+    )
+    assert "Demo" not in demo
+    assert "Client" not in demo
+    assert "Saludos,\nJoaquin,\nCostGuard" in demo
+    assert "Saludos, Joaquin CostGuard" not in demo
+
+
+def test_strip_unverified_meeting_claims_removes_deferred_link_and_pitch():
+    raw = (
+        "Quedamos entonces para el martes a las 10. Te enviaré el link de la "
+        "reunión un día antes para que lo tengas a mano.\n\n"
+        "Mientras tanto, si querés, puedo adelantarte algunos detalles "
+        "específicos sobre cómo Contractia puede adaptarse.\n\n"
+        "Quedo atento a cualquier consulta que tengas antes del martes."
+    )
+    out = strip_unverified_meeting_claims(raw)
+    assert "enviaré el link" not in out.lower()
+    assert "adelantarte" not in out.lower()
+    assert "Quedo atento" in out
 

@@ -3,26 +3,43 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.services.conversation_intelligence import fold_accents, normalize_inbound_text_for_classification
 
+DayWindow = Literal["any", "morning", "afternoon"]
+
+
+@dataclass(frozen=True)
+class MeetingDayPreference:
+    """Día/franja preferida sin hora exacta (ej. «¿jueves?», «viernes a la tarde»)."""
+
+    around: datetime  # UTC, ancla del día pedido
+    window: DayWindow = "any"
+    same_day_only: bool = True
+    label: str = ""
+
 _REPLY_QUOTE_MARKERS = (
-    r"\n\s*el\s+.{8,220}\s+escribi[oó]:\s*",
-    r"\n\s*on\s+.{8,220}\s+wrote:\s*",
-    r"\n\s*de:\s*.+\n\s*enviado(?:\s+el)?:",
-    r"\n\s*-{3,}\s*original message",
+    r"\n\s*el\s+[^\n]{2,220}(?:\n[^\n]{0,120})?\s+escribi[oó]\s*:",
+    r"\n\s*on\s+[^\n]{2,220}(?:\n[^\n]{0,120})?\s+wrote\s*:",
+    r"\n\s*de:\s*.+\n\s*(?:enviado(?:\s+el)?|fecha):",
+    r"\n\s*-{2,}\s*(?:original message|mensaje original|forwarded message|mensaje reenviado)",
     r"\n\s*_{3,}\s*",
-    r"\n\s*from:\s*.+\n\s*sent:",
+    r"\n\s*from:\s*.+\n\s*(?:sent|date):",
 )
 
 
 def strip_email_reply_quotes(text: str | None) -> str:
     """Solo el texto nuevo del prospecto, sin el hilo citado de Gmail."""
-    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not isinstance(text, str):
+        return ""
+    raw = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not raw:
         return ""
+    raw = "\n" + raw
     cut = len(raw)
     for pattern in _REPLY_QUOTE_MARKERS:
         m = re.search(pattern, raw, flags=re.IGNORECASE)
@@ -56,19 +73,73 @@ def _next_weekday(anchor: datetime, weekday: int) -> datetime:
     return anchor + timedelta(days=days_ahead)
 
 
+_DURATION_MENTION_RE = re.compile(r"\b\d{1,3}\s*(?:min(?:utos)?|mins?)\b|\b\d{1,3}\s*'")
+_DAY_NUMBER_RE = re.compile(
+    r"\b(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\s+(?:\d{1,2})(?:/\d{1,2})?\b(?!\s*(?:[:.]\d|hs|hrs|h\b|am|pm))"
+    r"|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b"
+)
+
+
+_TIME_ANCHOR_RE = re.compile(
+    r"\ba\s+las\b"
+    r"|\b(?:[01]?\d|2[0-3])\s*(?:[:.]\d{2})\b"
+    r"|\b(?:[01]?\d|2[0-3])\s*(?:hs|hrs|h|am|pm)\b"
+    r"|\b(?:[01]?\d|2[0-3])(?:hs|hrs|h|am|pm)\b",
+    re.I,
+)
+
+
+def _has_explicit_time_anchor(norm: str) -> bool:
+    """Hora de reunión con marcador claro (no un dígito suelto tipo teléfono o CUIT)."""
+    return bool(_TIME_ANCHOR_RE.search(norm))
+
+
+def inbound_is_contact_or_data_only(text: str | None) -> bool:
+    """Teléfono, CUIT u otro dato: solo dígitos y separadores."""
+    source = strip_email_reply_quotes(text or "").strip()
+    if not source:
+        return False
+    compact = re.sub(r"[\s\-\+\.\,\;\(\)]+", "", source)
+    if not compact.isdigit():
+        return False
+    return len(compact) >= 6
+
+
+def inbound_lacks_scheduling_content(text: str | None) -> bool:
+    """Mensaje sin evidencia de coordinar reunión (números sueltos o datos de contacto)."""
+    source = strip_email_reply_quotes(text or "").strip()
+    if not source:
+        return True
+    if inbound_is_contact_or_data_only(source):
+        return True
+    folded = fold_accents(normalize_inbound_text_for_classification(source))
+    compact = re.sub(r"[\s\-\+\.\,\;\(\)]+", "", folded)
+    if compact.isdigit() and len(compact) <= 3:
+        return True
+    return False
+
+
 def _parse_hour(norm: str) -> int | None:
+    # «a 15 minutos» es una duración, no las 15:00.
+    norm = _DURATION_MENTION_RE.sub(" ", norm)
+    norm = re.sub(r"\b(\d{1,2})\s+y\s+media\b", r"\1:30", norm)
+    norm = re.sub(r"\b(\d{1,2})\s+y\s+cuarto\b", r"\1:15", norm)
+    # «el lunes 19 a las 9», «el 16/10 a las 15»: el número de día no es la hora.
+    if re.search(r"\ba las\b|\d\s*(?:hs|hrs|h)\b|\d[:.]\d{2}", norm):
+        norm = _DAY_NUMBER_RE.sub(" ", norm)
     patterns = (
-        (2, r"\b(\d{1,2})\s*(?::\s*(\d{2}))?\s*(hs|hrs|h|am|pm)\b"),
+        (2, r"\b(\d{1,2})\s*(?:[:.]\s*(\d{2}))?\s*(hs|hrs|h|am|pm)\b"),
         (2, r"\b(\d{1,2})(hs|hrs|h)\b"),
-        (1, r"\ba las\s+(\d{1,2})(?:\s*(?::\s*(\d{2}))?\s*(hs|hrs|h|am|pm)?)?\b"),
-        (1, r"\b(\d{1,2})\s*(?::\s*(\d{2}))?\s*(hs|hrs|h|am|pm)?\b"),
+        (3, r"\ba las\s+(\d{1,2})(?:\s*(?:[:.]\s*(\d{2}))?\s*(hs|hrs|h|am|pm)?)?\b"),
+        (1, r"\b(\d{1,2})\s*(?:[:.]\s*(\d{2}))\s*(?:hs|hrs|h|am|pm)?\b"),
     )
     best: tuple[int, int, re.Match[str]] | None = None
     for priority, pattern in patterns:
         for m in re.finditer(pattern, norm):
             pos = m.start()
-            if best is None or priority > best[0] or (priority == best[0] and pos < best[1]):
-                best = (priority, pos, m)
+            end = m.end()
+            if best is None or end > best[0] or (end == best[0] and priority > best[1]):
+                best = (end, priority, m)
     if best is None:
         return None
     m = best[2]
@@ -111,6 +182,24 @@ def _has_explicit_day(norm: str, text: str | None) -> bool:
     return any(re.search(rf"\b{name}\b", norm) for name in _WEEKDAYS)
 
 
+def _explicit_next_occurrence_marker(norm: str) -> bool:
+    """«martes que viene», «próximo jueves», «la semana que viene»."""
+    if "proxima semana" in norm or "semana que viene" in norm:
+        return True
+    if re.search(
+        r"\b(?:proxima|proximo|siguiente)\s+(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b",
+        norm,
+    ):
+        return True
+    if re.search(
+        r"\b(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\s+"
+        r"(?:que\s+viene|proximo|proxima|siguiente)\b",
+        norm,
+    ):
+        return True
+    return False
+
+
 def _resolve_day_anchor(norm: str, text: str | None, base: datetime) -> datetime:
     if "pasado manana" in norm or "pasado mañana" in (text or "").lower():
         return base + timedelta(days=2)
@@ -120,7 +209,11 @@ def _resolve_day_anchor(norm: str, text: str | None, base: datetime) -> datetime
         return base + timedelta(days=1)
     for name, wd in _WEEKDAYS.items():
         if re.search(rf"\b{name}\b", norm):
-            return _next_weekday(base, wd)
+            day = _next_weekday(base, wd)
+            # Hoy es martes y dice «martes que viene» → próxima semana, no hoy.
+            if day.date() == base.date() and _explicit_next_occurrence_marker(norm):
+                day = day + timedelta(days=7)
+            return day
     return base
 
 
@@ -211,6 +304,99 @@ def inbound_is_time_only_acceptance(text: str | None) -> bool:
     if not norm:
         return False
     return _inherits_context_day(norm) and not _has_explicit_day(norm, source)
+
+
+def _detect_day_window(norm: str, text: str | None) -> DayWindow | None:
+    """Franja vaga (mañana/tarde) sin clock time. None si no hay franja."""
+    raw = (text or "").lower()
+    # Evitar «buenas tardes» / «más tarde»: solo franjas de agenda explícitas.
+    if (
+        "por la tarde" in norm
+        or "a la tarde" in norm
+        or "de la tarde" in norm
+        or re.search(r"\b(esta|alguna|cualquier)\s+tarde\b", norm)
+    ):
+        return "afternoon"
+    if (
+        "por la manana" in norm
+        or "a la manana" in norm
+        or "de la manana" in norm
+        or "por la mañana" in raw
+        or "a la mañana" in raw
+        or "de la mañana" in raw
+        or re.search(r"\b(esta|alguna|cualquier)\s+manana\b", norm)
+    ):
+        return "morning"
+    return None
+
+
+def parse_meeting_day_preference(
+    text: str | None,
+    *,
+    now: datetime | None = None,
+    timezone: str = "America/Argentina/Buenos_Aires",
+) -> MeetingDayPreference | None:
+    """
+    Día o franja sin hora exacta → preferencia para ofrecer huecos reales de Calendar.
+    Si hay clock time bookable, devuelve None (eso va a auto-book).
+    """
+    source = strip_email_reply_quotes(text)
+    norm = fold_accents(normalize_inbound_text_for_classification(source))
+    if not norm:
+        return None
+    if _parse_hour(norm) is not None:
+        return None
+
+    window = _detect_day_window(norm, source) or "any"
+    has_day = _has_explicit_day(norm, source)
+    if not has_day and window == "any":
+        return None
+
+    try:
+        tz = ZoneInfo(timezone)
+    except Exception:
+        try:
+            tz = ZoneInfo("America/Argentina/Buenos_Aires")
+        except Exception:
+            return None
+
+    ref = (now or datetime.now(UTC)).astimezone(tz)
+    base = ref.replace(second=0, microsecond=0)
+
+    if has_day:
+        target = _resolve_day_anchor(norm, text, base)
+        # «próxima semana» sin weekday: mirar esa semana, no un solo día.
+        soft_week = "proxima semana" in norm or "semana que viene" in norm
+        weekday_named = any(re.search(rf"\b{name}\b", norm) for name in _WEEKDAYS)
+        same_day_only = not soft_week or weekday_named
+        if soft_week and not weekday_named:
+            target = base + timedelta(days=7)
+            same_day_only = False
+        label_local = target.astimezone(tz)
+        days = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+        label = days[label_local.weekday()]
+        if window == "afternoon":
+            label = f"{label} a la tarde"
+        elif window == "morning":
+            label = f"{label} a la mañana"
+        around = target.replace(hour=12, minute=0, second=0, microsecond=0).astimezone(UTC)
+        return MeetingDayPreference(
+            around=around,
+            window=window,
+            same_day_only=same_day_only,
+            label=label,
+        )
+
+    # Solo franja («alguna tarde»): anclar en el próximo día hábil.
+    around_local = base + timedelta(days=1)
+    around = around_local.replace(hour=12, minute=0, second=0, microsecond=0).astimezone(UTC)
+    label = "a la tarde" if window == "afternoon" else "a la mañana"
+    return MeetingDayPreference(
+        around=around,
+        window=window,
+        same_day_only=False,
+        label=label,
+    )
 
 
 def parse_meeting_duration_minutes(text: str | None, *, default: int = 30) -> int:
@@ -399,6 +585,12 @@ def parse_meeting_slot(
     if not norm:
         return None
 
+    from app.services.prospect_timezone import timezone_hint_from_text
+
+    hinted = timezone_hint_from_text(source)
+    if hinted:
+        timezone = hinted
+
     try:
         tz = ZoneInfo(timezone)
     except Exception:
@@ -414,15 +606,17 @@ def parse_meeting_slot(
 
     minutes = _parse_hour(norm)
     if minutes is None:
-        if "por la tarde" in norm or "tarde" in norm:
-            minutes = 15 * 60
-        elif "por la manana" in norm or "mañana por la" in (text or "").lower():
-            minutes = 10 * 60
-        else:
-            return None
+        # Franjas vagas («por la tarde») no inventan hora: van a day preference + freeBusy.
+        return None
 
     hour, minute = divmod(minutes, 60)
     explicit_day = _has_explicit_day(norm, text)
+    if (
+        not explicit_day
+        and not _has_explicit_time_anchor(norm)
+        and not (context_meeting_at is not None and _inherits_context_day(norm))
+    ):
+        return None
 
     if not explicit_day and context_meeting_at is not None and _inherits_context_day(norm):
         ctx = context_meeting_at.astimezone(tz)
@@ -433,11 +627,16 @@ def parse_meeting_slot(
 
     candidate = target.replace(hour=hour, minute=minute)
     min_notice = base + timedelta(hours=1)
+    weekday_named = any(re.search(rf"\b{name}\b", norm) for name in _WEEKDAYS)
     if candidate <= base:
         if "proxima semana" in norm or "semana que viene" in norm:
             candidate += timedelta(days=7)
         elif re.search(r"\bhoy\b", norm) or "dia de hoy" in norm:
+            # «Hoy a las 10» con la hora ya pasada: no inventar otro día.
             return None
+        elif target.date() == base.date() and weekday_named:
+            # «Martes a las 10» un martes a la tarde → próximo martes (no fallar en silencio).
+            candidate += timedelta(days=7)
         elif target.date() == base.date():
             return None
         else:
@@ -445,3 +644,54 @@ def parse_meeting_slot(
     elif candidate < min_notice:
         return None
     return candidate.astimezone(UTC)
+
+
+_SLOT_SPLIT_RE = re.compile(
+    r"\s+(?:o|u)\s+"
+    r"(?=el\s+|l[au]\s+|los\s+|las\s+|"
+    r"lunes|martes|miercoles|miércoles|jueves|viernes|s[aá]bado|domingo|"
+    r"mañana|manana|hoy|pasado)",
+    re.I,
+)
+
+
+def parse_meeting_slots(
+    text: str | None,
+    *,
+    now: datetime | None = None,
+    timezone: str = "America/Argentina/Buenos_Aires",
+    context_meeting_at: datetime | None = None,
+) -> list[datetime]:
+    """Todos los horarios que el prospecto ofreció (ej. 'lunes 11 o martes 15')."""
+    source = strip_email_reply_quotes(text)
+    if not source.strip():
+        return []
+    parts = [p.strip() for p in _SLOT_SPLIT_RE.split(source) if p and p.strip()]
+    if len(parts) < 2:
+        parts = [source]
+    out: list[datetime] = []
+    seen: set[str] = set()
+    for part in parts:
+        slot = parse_meeting_slot(
+            part,
+            now=now,
+            timezone=timezone,
+            context_meeting_at=context_meeting_at,
+        )
+        if slot is None:
+            continue
+        key = slot.isoformat()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(slot)
+    if not out:
+        slot = parse_meeting_slot(
+            source,
+            now=now,
+            timezone=timezone,
+            context_meeting_at=context_meeting_at,
+        )
+        if slot is not None:
+            out.append(slot)
+    return out

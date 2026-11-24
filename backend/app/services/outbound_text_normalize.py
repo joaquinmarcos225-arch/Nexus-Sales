@@ -207,6 +207,38 @@ def ensure_email_topic_paragraphs(text: str | None, *, max_paras: int = 6) -> st
     return "\n\n".join(paras)
 
 
+_UNVERIFIED_BOOKING_CLAIM_RE = re.compile(
+    r"(?i)("
+    r"te\s+enviaré\s+el\s+link|"
+    r"te\s+mando\s+el\s+link\s+(?:un\s+d[ií]a\s+antes|mañana|antes)|"
+    r"te\s+envio\s+el\s+link\s+(?:un\s+d[ií]a\s+antes|mañana|antes)|"
+    r"quedamos\s+entonces\s+para|"
+    r"te\s+agend[eé]\b|"
+    r"te\s+dejo\s+agendad|"
+    r"ya\s+(?:est[aá]|qued[oó])\s+agendad|"
+    r"reunión\s+qued[oó]\s+(?:agendada|confirmada|reservada)|"
+    r"puedo\s+adelantarte\s+(?:algunos\s+)?detalles|"
+    r"mientras\s+tanto,?\s+si\s+quer[eé]s,?\s+puedo\s+adelantar"
+    r")"
+)
+
+
+def strip_unverified_meeting_claims(text: str | None) -> str:
+    """
+    Saca párrafos que fingen agenda / link diferido / pitch post-confirm
+    cuando el turno NO creó reunión en Calendar.
+    """
+    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return ""
+    paras = [p.strip() for p in re.split(r"\n\s*\n+", raw) if p.strip()]
+    kept = [p for p in paras if not _UNVERIFIED_BOOKING_CLAIM_RE.search(p)]
+    if not kept:
+        # Si todo el mensaje era claim falso, no mandar vacío engañoso.
+        return ""
+    return "\n\n".join(kept)
+
+
 def normalize_outbound_email_body(text: str | None) -> str:
     """
     Quita saltos de línea 'blandos' dentro de un párrafo (el modelo a veces
@@ -387,9 +419,10 @@ def apply_opening_greeting_policy(
 EmailThreadPhase = Literal["thread_start", "mid_thread", "meeting_confirm"]
 
 _EMAIL_SIGN_OFF_RE = re.compile(
-    r"(?:\n\s*){1,3}"
+    r"(?:\n\s*){0,3}"
     r"(?:Saludos|Un\s+saludo|Saludo|Cordialmente|Atentamente)\s*,?\s*"
-    r"(?:\n+[^\n]+){1,2}\s*$",
+    # Misma línea («Saludos, Joaquin CostGuard…») o 1–3 renglones debajo.
+    r"(?:[^\n]+|(?:\n+[^\n]+){1,3})\s*$",
     re.IGNORECASE,
 )
 
@@ -434,10 +467,12 @@ def apply_email_thread_envelope(
 ) -> str:
     """
     Sobre de mail por fase del hilo:
-    - thread_start: Hola Name, … · Saludos,\\nSeller\\nCompany?
+    - thread_start: Hola Name, … · Saludos,\\nSeller,\\nCompany?
     - mid_thread: sin saludo (si ya hubo ida/vuelta) · Saludos,\\nSeller
     - meeting_confirm: sin Hola formal · Un saludo,\\nSeller
     """
+    from app.services.outreach_display_names import outreach_company_display
+
     body = normalize_outbound_email_body(strip_email_sign_off(text))
     if not body:
         return ""
@@ -445,16 +480,24 @@ def apply_email_thread_envelope(
     seller = (seller_name or "").strip()
     seller_first = seller.split()[0] if seller else ""
     prospect_first = _prospect_first_from_name(prospect_name)
-    company = (company_name or "").strip()
+    company = outreach_company_display(company_name) or ""
+    # Si el seller vino pegado con la empresa («Joaquin CostGuard Demo Client»),
+    # quedarnos con el primer nombre.
+    if company and seller_first and company.lower() in seller.lower():
+        seller = seller_first
 
     if phase == "thread_start":
         body = apply_opening_greeting_policy(body, allow_greeting=True)
         if not _peel_opening_greeting(body)[0] and prospect_first:
             body = normalize_outbound_email_body(f"Hola {prospect_first},\n\n{body}")
-        if seller:
-            sign = f"Saludos,\n{seller}"
-            if company and company.lower() not in seller.lower():
+        name_line = seller_first or seller
+        if name_line:
+            # Una cosa por renglón: Saludos / nombre / marca limpia.
+            sign = f"Saludos,\n{name_line},"
+            if company and company.lower() not in name_line.lower():
                 sign = f"{sign}\n{company}"
+            else:
+                sign = sign.rstrip(",")
             # Firma en renglones propios (no pasar por soft-wrap join).
             return f"{body.rstrip()}\n\n{sign}"
         return body

@@ -7,9 +7,11 @@ from unittest.mock import patch
 from app.services.inbound_turn_orchestrator import (
     build_proactive_availability_reply,
     inbound_asks_for_available_hours,
+    prefer_explicit_day_hours_over_stale_alternatives,
     resolve_inbound_scheduling_reply,
 )
 from app.services.conversation_intelligence import InboundSignals
+from app.services.openai_service import inbound_text_needs_substantive_answer
 
 
 def _sig(**kwargs):
@@ -27,10 +29,60 @@ def _sig(**kwargs):
     return InboundSignals(**base)
 
 
+def test_crm_question_does_not_reask_email():
+    campaign = SimpleNamespace(
+        id=1,
+        company_id=1,
+        seller_id=1,
+        calendar_link=None,
+        timezone="America/Argentina/Buenos_Aires",
+        available_hours="9-18",
+    )
+    prospect = SimpleNamespace(id=67, name="Odille Marcos")
+    suggested = (
+        "Nexus no reemplaza el CRM: arma y sigue la prospección outbound "
+        "y el SDR entra cuando hay interés real."
+    )
+    decision = resolve_inbound_scheduling_reply(
+        db=None,  # type: ignore[arg-type]
+        campaign=campaign,  # type: ignore[arg-type]
+        prospect=prospect,  # type: ignore[arg-type]
+        inbound_text="Perdon que siga preguntando, pero de que se diferencia de un CRM?",
+        reply_objective="agendar",
+        sig=_sig(),
+        suggested_reply=suggested,
+    )
+    assert decision.action == "normal_reply"
+    assert decision.reply_body == suggested
+    assert "mail" not in (decision.reply_body or "").lower()
+
+
 def test_asks_for_available_hours():
     assert inbound_asks_for_available_hours("¿Qué horarios tenés esta semana?")
     assert inbound_asks_for_available_hours("Pasame horarios disponibles")
     assert not inbound_asks_for_available_hours("No me interesa, gracias")
+
+
+def test_hours_question_is_not_substantive_product_ask():
+    msg = "mm no el lunes no. el martes que horarios libres tenes?"
+    assert inbound_asks_for_available_hours(msg)
+    assert not inbound_text_needs_substantive_answer(msg)
+    assert prefer_explicit_day_hours_over_stale_alternatives(
+        msg, timezone="America/Argentina/Buenos_Aires"
+    )
+
+
+def test_explicit_day_time_acceptance_skips_stale_day_alternatives():
+    msg = "Perfecto. El martes a las 10 esta bien."
+    assert prefer_explicit_day_hours_over_stale_alternatives(
+        msg, timezone="America/Argentina/Buenos_Aires"
+    )
+
+
+def test_product_question_still_substantive_with_question_mark():
+    assert inbound_text_needs_substantive_answer(
+        "Antes de la reunión, ¿cómo gestiona Contractia el ciclo documental?"
+    )
 
 
 def test_proactive_availability_reply_lists_slots():
@@ -85,6 +137,52 @@ def test_resolve_offers_hours_when_asks_availability(_slots, _ready, _book):
     assert "horarios me quedan libres" in decision.reply_body
     assert "http" not in (decision.reply_body or "").lower()
     assert "también podés agendar" not in (decision.reply_body or "").lower()
+
+
+@patch(
+    "app.services.meeting_booking.attempt_auto_book_from_message",
+    return_value=None,
+)
+@patch(
+    "app.services.meeting_booking.prospect_has_verified_calendar_meeting",
+    return_value=False,
+)
+@patch(
+    "app.services.meeting_booking.prospect_has_pending_meeting",
+    return_value=False,
+)
+@patch(
+    "app.services.meeting_booking._seller_google_calendar_ready",
+    return_value=True,
+)
+@patch(
+    "app.services.inbound_turn_orchestrator._fetch_slots_for_day_preference",
+    return_value=[datetime(2026, 11, 12, 18, 0, tzinfo=UTC)],
+)
+def test_resolve_offers_hours_for_day_preference(_day_slots, _ready, _pending, _verified, _book):
+    campaign = SimpleNamespace(
+        id=1,
+        company_id=1,
+        seller_id=1,
+        calendar_link="https://cal.test/x",
+        timezone="America/Argentina/Buenos_Aires",
+        available_hours="9-18",
+    )
+    prospect = SimpleNamespace(id=1, name="Ana López", meeting_scheduling_state={})
+    decision = resolve_inbound_scheduling_reply(
+        db=None,  # type: ignore[arg-type]
+        campaign=campaign,  # type: ignore[arg-type]
+        prospect=prospect,  # type: ignore[arg-type]
+        inbound_text="¿Te sirve el jueves?",
+        reply_objective="seguimiento",
+        sig=_sig(prospect_wants_meeting=False, explicit_meeting_commitment=False),
+        suggested_reply="",
+    )
+    assert decision.action == "offer_hours"
+    assert "jueves" in (decision.reply_body or "").lower()
+    assert "http" not in (decision.reply_body or "").lower()
+    assert decision.offered_slots
+    _day_slots.assert_called_once()
 
 
 @patch(
