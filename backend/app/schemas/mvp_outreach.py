@@ -57,6 +57,9 @@ class SdrReasoningRead(BaseModel):
         default="",
         description="Rol explícito al que apunta el mensaje (decisión ICP vs cargo real).",
     )
+    # A/B tracking (opcional): plantilla del banco + estructura asignada.
+    bank_template_id: str | None = Field(default=None, max_length=64)
+    structure_variant: str | None = Field(default=None, max_length=64)
 
 
 class RoleAlignmentRead(BaseModel):
@@ -252,6 +255,7 @@ class ProspectingLeadRowRead(BaseModel):
     phone: str | None = None
     whatsapp_number: str | None = None
     phone_source: str | None = None
+    has_phone: bool = False
     outreach_ready: bool = False
     linkedin_valid: bool = False
     missing_fields: list[str] = Field(default_factory=list)
