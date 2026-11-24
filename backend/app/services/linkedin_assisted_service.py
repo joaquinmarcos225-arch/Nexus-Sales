@@ -958,28 +958,21 @@ def _queue_ready_linkedin_draft(
 ) -> str:
     """
     Borrador para la cola YA.
-    - Si hay draft bueno → usarlo.
-    - Si no → piso CRM inmediato (Contactar/Mensajes visibles) + upgrade IA en background.
-    Nunca deja la cola vacía tras resolver el grado.
+    - Si hay draft usable (aunque interim/stale) → conservarlo.
+    - Si no → piso CRM inmediato (Contactar/Mensajes visibles).
+    Nunca dispara OpenAI desde el poll de cola (gasto fantasma).
     """
     from app.services.prospect_sequence import _is_placeholder_message
 
     text = (existing if existing is not None else (prospect.linkedin_assisted_draft or "")).strip()
     # Solo vaciar stubs/placeholders. NO borrar drafts "stale/interim": eso regeneraba
-    # OpenAI en cada poll de la cola LinkedIn (~$0.003/min por prospecto).
+    # OpenAI en cada poll de la cola LinkedIn (~$0.02–0.03/min con el front abiertos).
     if text and (_is_placeholder_message(text) or _is_generic_linkedin_stub(text)):
         prospect.linkedin_assisted_draft = None
         text = ""
 
     if text and not _is_generic_linkedin_stub(text) and not _is_placeholder_message(text):
         _set_assist_status(prospect, STATUS_SUGGESTED)
-        # Upgrade IA solo si el texto es piso corto / interim débil — no en cada poll.
-        needs_upgrade = _is_interim_linkedin_draft(text, prospect) and len(text) < 100
-        if needs_upgrade:
-            try:
-                schedule_linkedin_quality_draft(int(prospect.id))
-            except Exception:
-                logger.debug("schedule upgrade draft failed", exc_info=True)
         return text
 
     if getattr(campaign, "product", None) is None and campaign.product_id:
@@ -990,11 +983,6 @@ def _queue_ready_linkedin_draft(
     # Piso inmediato → la cola muestra Mensajes/Contactar sin esperar OpenAI.
     draft = _crm_only_linkedin_draft(prospect, campaign)
     mark_draft_suggested(db, prospect, campaign, draft, log_event=False)
-    # Un solo upgrade en background; ensure_linkedin_draft ya no re-quema si hay texto.
-    try:
-        schedule_linkedin_quality_draft(int(prospect.id))
-    except Exception:
-        logger.debug("schedule quality draft after floor failed", exc_info=True)
     return draft
 
 
@@ -1226,7 +1214,16 @@ def _simple_linkedin_outreach_draft(prospect: Prospect, campaign: Campaign | Non
 
 
 def schedule_linkedin_quality_draft(prospect_id: int) -> None:
-    """Research + compose playbook en hilo daemon (no bloquea HTTP)."""
+    """Research + compose playbook en hilo daemon (no bloquea HTTP).
+
+    Off por default: el poll de /linkedin-assisted/queue lo disparaba en loop y
+    quemaba OpenAI sin uso humano. Opt-in: NEXUS_LI_BACKGROUND_DRAFT=1.
+    """
+    import os
+
+    raw = (os.getenv("NEXUS_LI_BACKGROUND_DRAFT") or "0").strip().lower()
+    if raw not in ("1", "true", "yes", "on"):
+        return
     pid = int(prospect_id)
     with _draft_compose_lock:
         if pid in _draft_compose_inflight:
@@ -1934,18 +1931,14 @@ def build_campaign_queue(db: Session, campaign_id: int, viewer=None) -> LinkedIn
             continue
         conn = read_connection_status(p)
         action, _is_reply = _task_action(db, p)
-        # Borrador listo YA en cola (piso CRM + upgrade IA en background). Nunca dejar vacío horas.
+        # Borrador listo YA en cola (piso CRM). Nunca borrar interim/stale ni
+        # regenerar OpenAI en cada poll — eso era el gasto fantasma.
+        from app.services.prospect_sequence import _is_placeholder_message as _li_ph
+
         if action in ("message", "reply"):
             draft = (getattr(p, "linkedin_assisted_draft", None) or "").strip()
-            needs_draft = (
-                not draft
-                or _is_generic_linkedin_stub(draft)
-                or _is_interim_linkedin_draft(draft, p)
-            )
-            if needs_draft:
-                if draft and (
-                    _is_generic_linkedin_stub(draft) or _is_interim_linkedin_draft(draft, p)
-                ):
+            if not draft or _li_ph(draft) or _is_generic_linkedin_stub(draft):
+                if draft and (_li_ph(draft) or _is_generic_linkedin_stub(draft)):
                     p.linkedin_assisted_draft = None
                 if campaign is not None:
                     if getattr(campaign, "product", None) is None and campaign.product_id:
@@ -1961,12 +1954,8 @@ def build_campaign_queue(db: Session, campaign_id: int, viewer=None) -> LinkedIn
             and _has_pending_linkedin_sequence_touch(db, p)
         ):
             draft = (getattr(p, "linkedin_assisted_draft", None) or "").strip()
-            if not draft or _is_generic_linkedin_stub(draft) or _is_interim_linkedin_draft(
-                draft, p
-            ):
-                if draft and (
-                    _is_generic_linkedin_stub(draft) or _is_interim_linkedin_draft(draft, p)
-                ):
+            if not draft or _li_ph(draft) or _is_generic_linkedin_stub(draft):
+                if draft and (_li_ph(draft) or _is_generic_linkedin_stub(draft)):
                     p.linkedin_assisted_draft = None
                 if campaign is not None:
                     if getattr(campaign, "product", None) is None and campaign.product_id:
