@@ -18,7 +18,11 @@ logger = logging.getLogger(__name__)
 
 OFFERED_TTL_DAYS = 7
 
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+# Local part con unicode (Joaquín.test@gmail.com); no cortar en la tilde.
+_EMAIL_RE = re.compile(
+    r"[\w.%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+    re.UNICODE,
+)
 
 _ORDINALS: tuple[tuple[re.Pattern[str], int], ...] = (
     (re.compile(r"\b(?:el|la)\s+(?:primer[oa]?|1(?:ro|ra|°|º))(?:\s+(?:opcion|horario))?\b"), 0),
@@ -132,16 +136,64 @@ def recover_offered_slots_from_thread(
         ).all()
     except Exception:
         return []
-    for row in rows:
-        plain = (getattr(row, "message", None) or "").strip()
+    def _looks_like_offer(low: str) -> bool:
+        if "te queda bien" in low or "llamada breve" in low:
+            if " o " in low or " u " in low:
+                return True
+        if "cual preferis" in low:
+            return True
+        if "horarios si estan disponibles" in low or "estan disponibles" in low:
+            return True
+        if re.search(
+            r"(?m)^\s*[\*\-•]?\s*(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\s+\d{1,2}",
+            low,
+        ):
+            return True
+        return False
+
+    plains: list[str] = [(getattr(r, "message", None) or "").strip() for r in rows]
+    # Meow: a veces la oferta llegó al teléfono pero no quedó en outreach_messages.
+    try:
+        from sqlalchemy import select as _select
+
+        from app.models.whatsapp_meow import WhatsappMeowMessage
+        from app.services.whatsapp_assisted_service import prospect_whatsapp_digits
+
+        digits = (prospect_whatsapp_digits(prospect) or "").strip()
+        tail = digits[-10:] if len(digits) >= 10 else digits
+        if tail:
+            meow_rows = db.scalars(
+                _select(WhatsappMeowMessage)
+                .where(
+                    WhatsappMeowMessage.direction == "out",
+                    WhatsappMeowMessage.peer.contains(tail),
+                )
+                .order_by(WhatsappMeowMessage.id.desc())
+                .limit(20)
+            ).all()
+            plains.extend((getattr(r, "body", None) or "").strip() for r in meow_rows)
+    except Exception:
+        logger.debug("recover offered from meow failed", exc_info=True)
+
+    for plain in plains:
         if not plain:
             continue
         low = fold_accents(plain.lower())
-        if "te queda bien" not in low and "llamada breve" not in low:
-            continue
-        if " o " not in low and " u " not in low:
+        if not _looks_like_offer(low):
             continue
         slots = parse_meeting_slots(plain, timezone=timezone)
+        for line in plain.splitlines():
+            line = line.strip().lstrip("*-• ").strip()
+            if not line:
+                continue
+            if not re.search(
+                r"(?i)\b(lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo)\b",
+                line,
+            ):
+                continue
+            for s in parse_meeting_slots(line, timezone=timezone):
+                if s not in slots:
+                    slots.append(s)
         future = [s for s in slots if s > datetime.now(UTC)]
         if len(future) >= 1:
             remember_offered_slots(prospect, future)
@@ -199,8 +251,23 @@ def pick_offered_slot(text: str | None, offered: list[datetime], *, timezone: st
 
 
 def extract_email(text: str | None) -> str | None:
-    m = _EMAIL_RE.search(text or "")
-    return m.group(0).strip(".").lower() if m else None
+    """Extrae mail del chat. Acepta tildes en el local (Joaquín → joaquin)."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    m = _EMAIL_RE.search(raw)
+    if not m:
+        return None
+    em = m.group(0).strip(".").lower()
+    if "@" not in em:
+        return None
+    local, _, domain = em.partition("@")
+    # Gmail/Calendar van mejor con ASCII en el local.
+    local_ascii = fold_accents(local).replace(" ", "")
+    domain_ascii = fold_accents(domain).replace(" ", "")
+    if not local_ascii or "@" in local_ascii or not domain_ascii or "." not in domain_ascii:
+        return None
+    return f"{local_ascii}@{domain_ascii}"
 
 
 def inbound_cancels_meeting(text: str | None) -> bool:
@@ -436,7 +503,12 @@ def _localize(text: str) -> str:
 
 
 def build_ask_email_reply(
-    *, prospect_name: str | None, slot: datetime, timezone: str, known_email: str | None = None
+    *,
+    prospect_name: str | None,
+    slot: datetime,
+    timezone: str,
+    known_email: str | None = None,
+    already_asked: bool = False,
 ) -> str:
     from app.services.meeting_booking import _format_slot_for_confirmation
 
@@ -447,6 +519,12 @@ def build_ask_email_reply(
         return _localize(
             f"{head}\n\n"
             f"¿Te mando la invitación a {em} o preferís otro mail?"
+        )
+    # Ya pedimos el mail en este hilo: confirmar horario nuevo sin repetir la misma pregunta.
+    if already_asked:
+        return _localize(
+            f"{head}\n\n"
+            "Cuando me pases el mail te mando la invitación."
         )
     return _localize(
         f"{head}\n\n"
@@ -491,6 +569,41 @@ def close_chat_after_booking(prospect: Any) -> None:
         prospect.whatsapp_assisted_draft = None
 
 
+def clear_post_meeting_silence_for_new_sequence(prospect: Any) -> None:
+    """
+    Al iniciar una tanda nueva: no heredar silencio de una reunión previa.
+    No toca Google Calendar ni borra meetings — solo desbloquea inbound/auto-reply.
+    """
+    from app.models.enums import PipelineStage, ProspectStatus
+    from app.services import prospect_commercial_state as pcs
+
+    cs = (getattr(prospect, "commercial_state", None) or "").strip()
+    if cs in (pcs.COMMERCIAL_REUNION_AGENDADA, pcs.COMMERCIAL_REUNION_PENDIENTE):
+        prospect.commercial_state = pcs.COMMERCIAL_PROSPECCION
+    status = (getattr(prospect, "status", None) or "").strip().lower()
+    if status == ProspectStatus.meeting_booked.value:
+        prospect.status = ProspectStatus.compatible.value
+        prospect.pipeline_stage = PipelineStage.nuevo.value
+    data = _state(prospect)
+    commercial = data.get("commercial") if isinstance(data.get("commercial"), dict) else None
+    if isinstance(commercial, dict) and (
+        commercial.get("auto_reply_closed")
+        or commercial.get("status") == "booked"
+        or commercial.get("closed_at")
+    ):
+        commercial = dict(commercial)
+        commercial.pop("auto_reply_closed", None)
+        commercial.pop("closed_at", None)
+        if commercial.get("status") == "booked":
+            commercial.pop("status", None)
+        data = dict(data)
+        if commercial:
+            data["commercial"] = commercial
+        else:
+            data.pop("commercial", None)
+        _save(prospect, data)
+
+
 def finalize_meeting_after_confirmation_sent(
     db: Any,
     *,
@@ -519,7 +632,7 @@ def finalize_meeting_after_confirmation_sent(
     prospect.status = ProspectStatus.meeting_booked.value
     prospect.pipeline_stage = PipelineStage.reunion_agendada.value
     prospect.commercial_state = pcs.COMMERCIAL_REUNION_AGENDADA
-    mseq.enforce_meeting_priority_over_sequence(db, prospect, campaign, silence_chat=False)
+    mseq.enforce_meeting_priority_over_sequence(db, prospect, campaign)
     pipeline_sync.sync_pipeline_from_status(prospect)
     close_chat_after_booking(prospect)
     if getattr(prospect, "id", None) is not None:
@@ -542,22 +655,15 @@ def should_ignore_inbound_after_meeting(prospect: Any) -> str | None:
     Gmail/WA no scanean inbound; Brain/Policy no levantan agent; cero auto-reply.
     Reagenda / follow-up = humano por ahora.
 
-    `status=meeting_booked`, commercial `reunion_agendada`, grupo `reuniones`
-    y cierre post-confirmación cuentan. No usa `reunion_pendiente`
-    (todavía puede mandar el Te agendé / pedir mail).
+    Cuenta: cierre post-confirmación, `status=meeting_booked`, grupo `reuniones`.
+    NO basta `commercial_state=reunion_agendada` solo: tras reiniciar secuencia ese
+    campo puede quedar pegado y mataba inbound (Mia) sin status/grupo de reunión.
     """
     if chat_closed_after_booking(prospect):
         return "meeting_booked"
     status = (getattr(prospect, "status", None) or "").strip().lower()
     if status == "meeting_booked":
         return "meeting_booked"
-    try:
-        from app.services.prospect_commercial_state import COMMERCIAL_REUNION_AGENDADA
-
-        if (getattr(prospect, "commercial_state", None) or "").strip() == COMMERCIAL_REUNION_AGENDADA:
-            return "meeting_booked"
-    except Exception:
-        pass
     if (getattr(prospect, "sequence_group", None) or "").strip().lower() == "reuniones":
         return "meeting_booked"
     return None
@@ -568,9 +674,11 @@ def auto_reply_silenced(prospect: Any) -> str | None:
     Motivo por el que Nexus NO debe mirar ni auto-contestar este chat.
     None = puede seguir (p. ej. pausa automática por inbound, la IA conversa).
 
-    Post-agendar (status meeting_booked / commercial reunion_agendada /
-    chat cerrado tras «invite enviado / nos vemos» / grupo reuniones):
-    sacar foco — Gmail no scanea, Policy corta el Brain, cero agent.
+    Post-agendar (status meeting_booked / grupo reuniones / chat cerrado
+    tras «invite enviado / nos vemos»): sacar foco — Gmail no scanea,
+    Policy corta el Brain, cero agent.
+    `commercial_state=reunion_agendada` solo NO silencia (puede quedar pegado
+    tras reiniciar secuencia).
 
     También: Pausar / Handoff del SDR (manual_pause), ai_paused.
     """

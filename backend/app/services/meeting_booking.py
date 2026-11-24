@@ -27,6 +27,39 @@ CREATION_MANUAL = "manual"
 CREATION_SYNC = "calendar_sync"
 
 
+def _company_label_key(name: str | None) -> str:
+    """Normaliza para comparar marcas (Costguard ≈ CostGuard)."""
+    return re.sub(r"[^a-z0-9]", "", (name or "").strip().lower())
+
+
+def _is_unreliable_invite_email(email: str | None) -> bool:
+    """Mails de prueba / placeholder del CRM: no invitar a ciegas.
+
+    NO marcar `joaquin.test@gmail.com` como basura: `.test@` era demasiado agresivo
+    y bloqueaba el agendado cuando el prospecto tipeaba un mail real de prueba.
+    """
+    em = (email or "").strip().lower()
+    if not em or "@" not in em or " " in em:
+        return True
+    local, _, domain = em.partition("@")
+    if domain in {
+        "example.com",
+        "example.org",
+        "example.net",
+        "test.com",
+        "email.com",
+        "mailinator.com",
+    }:
+        return True
+    if "+nexus@" in em:
+        return True
+    if local in {"test", "testing", "fake", "noreply", "donotreply", "no-reply"}:
+        return True
+    if local.startswith(("test+", "fake+", "wa.qa.")):
+        return True
+    return False
+
+
 def default_meeting_title(
     db: Session,
     *,
@@ -34,9 +67,10 @@ def default_meeting_title(
     campaign: Campaign,
 ) -> str:
     """Título canónico Calendar: «Empresa prospecto & Empresa usuario»."""
-    prospect_co = (getattr(prospect, "company_name", None) or "").strip()
-    if not prospect_co:
-        prospect_co = (prospect.name or "Prospecto").strip() or "Prospecto"
+    from app.services.outreach_display_names import (
+        prospect_company_display,
+        resolve_prospect_company_name,
+    )
 
     seller_co = ""
     company_id = getattr(campaign, "company_id", None)
@@ -48,8 +82,31 @@ def default_meeting_title(
             seller_co = (row.name or "").strip()
     if not seller_co:
         seller_co = (getattr(campaign, "name", None) or "").strip() or "Nexus"
+    seller_key = _company_label_key(seller_co)
+
+    prospect_co = prospect_company_display(getattr(prospect, "company_name", None))
+    if prospect_co and seller_key and _company_label_key(prospect_co) == seller_key:
+        prospect_co = ""
+    if not prospect_co:
+        resolved = resolve_prospect_company_name(
+            company_name=getattr(prospect, "company_name", None),
+            email=getattr(prospect, "email", None),
+            website=getattr(prospect, "company_website", None),
+            domain=getattr(prospect, "company_domain", None),
+        ).strip()
+        if resolved and _company_label_key(resolved) != seller_key:
+            prospect_co = resolved
+    # Nunca «Costguard & CostGuard»: si no hay empresa real del prospecto, usá su nombre.
+    if not prospect_co:
+        prospect_co = (prospect.name or "Prospecto").strip() or "Prospecto"
 
     return f"{prospect_co} & {seller_co}"[:255]
+
+
+MEETING_BLOCKS_NEW_SEQUENCE_MSG = (
+    "Nexus ya agendó una reunión con este prospecto. "
+    "No se inicia ni se reinicia una secuencia sobre ese contacto."
+)
 
 
 def prospect_has_calendar_confirmed_meeting(db: Session, prospect: Prospect) -> bool:
@@ -67,6 +124,36 @@ def prospect_has_calendar_confirmed_meeting(db: Session, prospect: Prospect) -> 
         .limit(1)
     ).first()
     return row is not None
+
+
+def prospect_meeting_blocks_new_sequence(
+    prospect: Prospect,
+    db: Session | None = None,
+) -> str | None:
+    """
+    Si ya hay reunión agendada (estado / chat cerrado / Calendar), no se vuelve a prospectar.
+    Devuelve el mensaje para la UI, o None si se puede iniciar.
+    """
+    status = (getattr(prospect, "status", None) or "").strip().lower()
+    if status == ProspectStatus.meeting_booked.value:
+        return MEETING_BLOCKS_NEW_SEQUENCE_MSG
+    group = (getattr(prospect, "sequence_group", None) or "").strip().lower()
+    if group == "reuniones":
+        return MEETING_BLOCKS_NEW_SEQUENCE_MSG
+    try:
+        from app.services.meeting_scheduling_extras import chat_closed_after_booking
+
+        if chat_closed_after_booking(prospect):
+            return MEETING_BLOCKS_NEW_SEQUENCE_MSG
+    except Exception:
+        pass
+    if db is not None:
+        try:
+            if prospect_has_calendar_confirmed_meeting(db, prospect):
+                return MEETING_BLOCKS_NEW_SEQUENCE_MSG
+        except Exception:
+            pass
+    return None
 
 
 def prospect_has_pending_meeting(db: Session, prospect: Prospect) -> bool:
@@ -105,7 +192,10 @@ def build_meeting_confirmation_reply(
     html_link: str | None,
     timezone: str,
     is_reschedule: bool = False,
+    attendee_email: str | None = None,
+    meet_link: str | None = None,
 ) -> str:
+    """Cierre post-agenda: invite enviado + gracias. Luego Nexus deja el chat."""
     slot = _format_slot_for_confirmation(scheduled_for, timezone)
     first = _first_name(prospect_name)
     if is_reschedule:
@@ -114,14 +204,26 @@ def build_meeting_confirmation_reply(
         ]
     else:
         lines = [
-            "Perfecto.",
-            f"Te agendé para {slot}.",
+            f"Listo {first}, te agendé para {slot}.",
         ]
-    if html_link:
-        lines.append(f"Acá tenés la invitación:\n{html_link}")
-        lines.append("Nos vemos ahí.")
+    from app.services.meeting_scheduling_extras import build_invite_email_line
+
+    email_line = build_invite_email_line(attendee_email)
+    meet = (meet_link or "").strip()
+    if meet and "meet.google.com" not in meet.lower() and "calendar.google.com" in meet.lower():
+        meet = ""
+    link = (meet or html_link or "").strip()
+    if email_line:
+        lines.append(email_line)
+        if meet:
+            lines.append(f"Meet: {meet}")
+    elif link:
+        lines.append(f"Entrá con este link:\n{link}")
     else:
-        lines.append("Te comparto la invitación en cuanto esté disponible.")
+        # Sin mail ni Meet: no inventar que «ya está» — el caller no debería llegar acá.
+        lines.append("Te confirmo la invitación en cuanto esté lista.")
+        return "\n\n".join(lines)
+    lines.append(f"Gracias {first}, nos vemos ahí.")
     return "\n\n".join(lines)
 
 
@@ -139,7 +241,61 @@ def _format_slot_for_confirmation(scheduled_for: datetime, timezone: str) -> str
         return f"hoy a las {time_str}"
     if delta_days == 1:
         return f"mañana a las {time_str}"
-    return format_slot_local(scheduled_for, timezone)
+    day = format_slot_local(scheduled_for, timezone).split(" ", 1)[0].lower()
+    return f"el {day} {local.day}/{local.month} a las {time_str}"
+
+
+_ZONE_PLACE_LABEL = {
+    "America/Santiago": "hora Chile",
+    "America/Mexico_City": "hora México",
+    "America/Bogota": "hora Colombia",
+    "America/Lima": "hora Perú",
+    "America/Montevideo": "hora Uruguay",
+    "America/Argentina/Buenos_Aires": "hora Argentina",
+    "America/Sao_Paulo": "hora Brasil",
+    "America/New_York": "hora del Este",
+    "Europe/Madrid": "hora España",
+}
+
+
+def build_pending_invite_ack(
+    *,
+    prospect_name: str | None,
+    scheduled_for: datetime | None,
+    timezone: str,
+    email: str | None,
+    operator_timezone: str | None = None,
+) -> str:
+    """Sigue la charla aunque Calendar no esté conectado: mail + horario, invitación por el mismo canal."""
+    first = _first_name(prospect_name)
+    mail = (email or "").strip()
+    when = _format_slot_for_confirmation(scheduled_for, timezone) if scheduled_for else ""
+    place = _ZONE_PLACE_LABEL.get((timezone or "").strip(), "")
+    if when and place:
+        when = f"{when} ({place})"
+    if (
+        scheduled_for
+        and operator_timezone
+        and operator_timezone != timezone
+    ):
+        mine = _format_slot_for_confirmation(scheduled_for, operator_timezone)
+        if mine and mine.split(" a las ")[-1] != when.split(" a las ")[-1]:
+            when = f"{when} — {mine} acá"
+    if mail and when:
+        return (
+            f"Genial {first}.\n\n"
+            f"Anoté {mail} para {when}.\n\n"
+            "Te mando la invitación de Calendar (con Meet) por este chat en cuanto esté lista."
+        )
+    if mail:
+        return (
+            f"Genial {first}.\n\n"
+            f"Anoté {mail}. Te mando la invitación por este chat en cuanto Calendar esté listo."
+        )
+    return (
+        f"Genial {first}.\n\n"
+        "Anoté el horario. Te mando la invitación por este chat en cuanto esté lista."
+    )
 
 
 def calendar_error_needs_reconnect(calendar_error: str | None) -> bool:
@@ -193,8 +349,9 @@ def _attach_booking_reply(
     timezone: str,
     calendar_link: str | None,
     is_reschedule: bool = False,
+    attendee_email: str | None = None,
 ) -> dict[str, Any]:
-    """Solo confirma agendamiento si calendar_created y hay event_id."""
+    """Solo confirma agendamiento si hay evento Calendar real (event_id)."""
     booking.pop("confirmation_reply", None)
     booking.pop("booking_failed_reply", None)
     booking.pop("requires_calendar_reconnect", None)
@@ -206,6 +363,8 @@ def _attach_booking_reply(
             html_link=booking.get("google_calendar_html_link"),
             timezone=timezone,
             is_reschedule=is_reschedule,
+            attendee_email=attendee_email,
+            meet_link=booking.get("meet_link"),
         )
     elif calendar_error_needs_reconnect(booking.get("calendar_error")):
         booking["requires_calendar_reconnect"] = True
@@ -371,28 +530,43 @@ def resolve_campaign_calendar_user_id(db: Session, campaign: Campaign) -> int | 
     """
     from app.models.user import User
     from app.services.gmail_drafts import get_valid_google_calendar_connection
-    from app.services.manual_sequence_kickoff import try_find_gmail_operator
 
-    preferred = db.get(User, int(campaign.seller_id)) if campaign.seller_id else None
-    operator = try_find_gmail_operator(
-        db, company_id=int(campaign.company_id), preferred=preferred
+    def _has_calendar(uid: int) -> bool:
+        try:
+            get_valid_google_calendar_connection(
+                db,
+                company_id=int(campaign.company_id),
+                user_id=int(uid),
+            )
+            return True
+        except Exception:
+            return False
+
+    if campaign.seller_id and _has_calendar(int(campaign.seller_id)):
+        return int(campaign.seller_id)
+    users = db.scalars(
+        select(User).where(
+            User.company_id == int(campaign.company_id),
+            User.is_active.is_(True),
+        )
+    ).all()
+    for user in users:
+        if campaign.seller_id and int(user.id) == int(campaign.seller_id):
+            continue
+        if _has_calendar(int(user.id)):
+            logger.info(
+                "campaign calendar fallback seller_id=%s using user_id=%s campaign_id=%s",
+                campaign.seller_id,
+                user.id,
+                campaign.id,
+            )
+            return int(user.id)
+    logger.warning(
+        "campaign calendar operator has no valid Calendar OAuth campaign_id=%s seller_id=%s",
+        campaign.id,
+        campaign.seller_id,
     )
-    if operator is None:
-        return None
-    try:
-        get_valid_google_calendar_connection(
-            db,
-            company_id=int(campaign.company_id),
-            user_id=int(operator.id),
-        )
-        return int(operator.id)
-    except Exception:
-        logger.warning(
-            "campaign calendar operator has no valid Calendar OAuth campaign_id=%s user_id=%s",
-            campaign.id,
-            operator.id,
-        )
-        return None
+    return None
 
 
 def _seller_google_calendar_ready(db: Session, campaign: Campaign) -> bool:
@@ -405,6 +579,8 @@ def usable_calendar_booking_link(url: str | None) -> str | None:
     Link de agenda usable para que el prospecto reserve.
     La UI genérica de Google Calendar (/calendar/u/0/r) NO sirve para agendar.
     """
+    if url is not None and not isinstance(url, str):
+        url = getattr(url, "calendar_link", None)
     link = (url or "").strip()
     if not link or "://" not in link:
         return None
@@ -492,6 +668,8 @@ def book_prospect_meeting(
     created_by_user_id: int | None = None,
     require_scheduled_for: bool = False,
     check_availability: bool = True,
+    invite_attendee: bool = True,
+    attendee_email: str | None = None,
 ) -> dict[str, Any]:
     """
     Crea reunión en Nexus y (si corresponde) evento en Google Calendar.
@@ -531,9 +709,68 @@ def book_prospect_meeting(
 
     google_event_id: str | None = None
     google_html_link: str | None = None
+    meet_link: str | None = None
     calendar_error: str | None = None
     calendar_uid = resolve_campaign_calendar_user_id(db, campaign)
     seller_id = created_by_user_id or calendar_uid or campaign.seller_id
+
+    # Evita doble agenda en paralelo (10:30 + 11) sobre el mismo prospecto.
+    try:
+        locked = db.execute(
+            select(Prospect).where(Prospect.id == prospect.id).with_for_update()
+        ).scalar_one_or_none()
+        if locked is not None:
+            prospect = locked
+    except Exception:
+        logger.warning(
+            "book_prospect_meeting lock_failed prospect_id=%s",
+            prospect.id,
+        )
+
+    # Reusar reunión activa del mismo slot (no crear otro evento Calendar).
+    if scheduled_for is not None:
+        for existing in db.scalars(
+            select(Meeting).where(
+                Meeting.prospect_id == prospect.id,
+                Meeting.meeting_status != MeetingStatus.canceled.value,
+            )
+        ).all():
+            if (
+                existing.scheduled_for
+                and existing.google_calendar_event_id
+                and _slot_matches_meeting(existing.scheduled_for, anchor)
+            ):
+                slot_iso = (
+                    existing.scheduled_for
+                    if existing.scheduled_for.tzinfo
+                    else existing.scheduled_for.replace(tzinfo=UTC)
+                ).isoformat()
+                return {
+                    "meeting_id": existing.id,
+                    "scheduled_for": slot_iso,
+                    "google_calendar_event_id": existing.google_calendar_event_id,
+                    "google_calendar_html_link": existing.google_calendar_html_link,
+                    "meet_link": existing.google_calendar_html_link,
+                    "calendar_created": True,
+                    "calendar_error": None,
+                    "creation_method": existing.creation_method or creation_method,
+                    "created_by_user_id": existing.created_by_user_id or seller_id,
+                    "reused_existing": True,
+                    "commercial_state": prospect.commercial_state,
+                    "commercial_state_label": pcs.commercial_state_label(
+                        prospect.commercial_state
+                    ),
+                }
+
+    # Cancelar TODAS las activas antes de crear (incluye mismo slot sin evento vivo).
+    _cancel_superseded_meetings(
+        db,
+        campaign=campaign,
+        prospect=prospect,
+        keep_slot=None,
+        seller_id=int(seller_id) if seller_id else None,
+    )
+    db.flush()
 
     if (
         check_availability
@@ -576,12 +813,17 @@ def book_prospect_meeting(
                 "created_by_user_id": seller_id,
             }
         try:
+            from zoneinfo import ZoneInfo as _ZoneInfo
+
+            local_day = anchor.astimezone(_ZoneInfo(tz)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
             busy = fetch_busy_intervals(
                 db,
                 company_id=campaign.company_id,
                 seller_user_id=int(seller_id),
-                time_min=anchor - timedelta(hours=2),
-                time_max=anchor + timedelta(hours=4),
+                time_min=local_day.astimezone(UTC),
+                time_max=(local_day + timedelta(days=1)).astimezone(UTC),
             )
             end = anchor + timedelta(minutes=duration)
             if not slot_is_free(busy, start=anchor, end=end):
@@ -618,18 +860,33 @@ def book_prospect_meeting(
                 str(exc)[:200],
             )
 
-    _cancel_superseded_meetings(
-        db,
-        campaign=campaign,
-        prospect=prospect,
-        keep_slot=anchor,
-        seller_id=int(seller_id) if seller_id else None,
-    )
-
     if create_google_event and seller_id:
         try:
-            from app.services.google_calendar_create import create_calendar_event
+            from app.services.google_calendar_create import (
+                create_calendar_event,
+                delete_day_events_matching_title,
+            )
 
+            # Reglas duras Calendar: 1) Meet  2) mail del prospecto en Invitados.
+            # Nunca tirar un mail tipado/confirmado en chat por “unreliable” (ej. test@gmail.com).
+            guest = (attendee_email or "").strip() or None
+            guest_from_explicit = bool(guest)
+            if invite_attendee and not guest:
+                # Solo CRM en canal email. En WA/LI nunca inventar invitado.
+                from app.services import meeting_scheduling_extras as extras
+
+                if not extras.chat_channel_active():
+                    guest = (getattr(prospect, "email", None) or "").strip() or None
+                    if guest and _is_unreliable_invite_email(guest):
+                        guest = None
+            if guest and "@" not in guest:
+                guest = None
+            elif guest and (not guest_from_explicit) and _is_unreliable_invite_email(guest):
+                guest = None
+            if invite_attendee and guest_from_explicit and not guest:
+                raise RuntimeError(
+                    "No se puede crear el evento sin el mail del prospecto en Invitados."
+                )
             created = create_calendar_event(
                 db,
                 company_id=campaign.company_id,
@@ -638,11 +895,33 @@ def book_prospect_meeting(
                 description=meeting_desc,
                 start_at=anchor,
                 duration_minutes=duration,
-                attendee_email=prospect.email,
+                attendee_email=guest,
+                attendee_name=(getattr(prospect, "name", None) or None),
                 timezone=tz,
+                require_guest=bool(invite_attendee and guest),
+                require_meet=True,
             )
             google_event_id = created.get("event_id")
-            google_html_link = created.get("html_link")
+            meet_link = (created.get("meet_link") or "").strip() or None
+            cal_html = (created.get("html_link") or "").strip() or None
+            google_html_link = meet_link or cal_html
+            if google_event_id:
+                try:
+                    delete_day_events_matching_title(
+                        db,
+                        company_id=campaign.company_id,
+                        seller_user_id=int(seller_id),
+                        title=meeting_title,
+                        around=anchor,
+                        timezone=tz,
+                        keep_event_id=str(google_event_id),
+                    )
+                except Exception as sweep_exc:
+                    logger.warning(
+                        "book_prospect_meeting orphan_sweep_failed prospect_id=%s err=%s",
+                        prospect.id,
+                        str(sweep_exc)[:200],
+                    )
         except Exception as exc:
             calendar_error = str(exc)[:300]
             logger.warning(
@@ -658,6 +937,7 @@ def book_prospect_meeting(
             "scheduled_for": anchor.isoformat(),
             "google_calendar_event_id": None,
             "google_calendar_html_link": None,
+            "meet_link": None,
             "calendar_created": False,
             "calendar_error": calendar_error
             or "No se pudo crear el evento en Google Calendar. Reconectá Calendar en Integraciones.",
@@ -671,6 +951,7 @@ def book_prospect_meeting(
             "scheduled_for": anchor.isoformat(),
             "google_calendar_event_id": None,
             "google_calendar_html_link": None,
+            "meet_link": None,
             "calendar_created": False,
             "calendar_error": calendar_error
             or "Google Calendar no está conectado. Reconectá en Integraciones.",
@@ -678,81 +959,110 @@ def book_prospect_meeting(
             "created_by_user_id": seller_id,
         }
 
-    row = Meeting(
-        company_id=campaign.company_id,
-        campaign_id=campaign.id,
-        prospect_id=prospect.id,
-        title=meeting_title,
-        description=meeting_desc,
-        scheduled_for=anchor,
-        meeting_status=MeetingStatus.pending.value,
-        timezone=tz,
-        suggested_slots=[s["start"] for s in slots],
-        duration_minutes=duration,
-        google_calendar_event_id=google_event_id,
-        google_calendar_html_link=google_html_link,
-        creation_method=creation_method,
-        created_by_user_id=int(seller_id) if seller_id else None,
-    )
-    db.add(row)
-    db.flush()
+    try:
+        row = Meeting(
+            company_id=campaign.company_id,
+            campaign_id=campaign.id,
+            prospect_id=prospect.id,
+            title=meeting_title,
+            description=meeting_desc,
+            scheduled_for=anchor,
+            meeting_status=MeetingStatus.pending.value,
+            timezone=tz,
+            suggested_slots=[s["start"] for s in slots],
+            duration_minutes=duration,
+            google_calendar_event_id=google_event_id,
+            google_calendar_html_link=google_html_link,
+            creation_method=creation_method,
+            created_by_user_id=int(seller_id) if seller_id else None,
+        )
+        db.add(row)
+        db.flush()
 
-    prospect.meeting_suggestion_pending = False
-    if google_event_id:
-        prospect.status = ProspectStatus.meeting_booked.value
-        prospect.pipeline_stage = PipelineStage.reunion_agendada.value
-        mseq.enforce_meeting_priority_over_sequence(db, prospect, campaign)
-        prospect.commercial_state = pcs.COMMERCIAL_REUNION_AGENDADA
-    else:
-        if prospect.status not in (
-            ProspectStatus.meeting_booked.value,
-            ProspectStatus.failed.value,
-        ):
-            prospect.status = ProspectStatus.interested.value
-        if prospect.pipeline_stage != PipelineStage.reunion_agendada.value:
-            prospect.pipeline_stage = PipelineStage.interesado.value
-        prospect.commercial_state = pcs.COMMERCIAL_REUNION_PENDIENTE
+        prospect.meeting_suggestion_pending = False
+        if google_event_id:
+            prospect.status = ProspectStatus.meeting_booked.value
+            prospect.pipeline_stage = PipelineStage.reunion_agendada.value
+            mseq.enforce_meeting_priority_over_sequence(db, prospect, campaign)
+            prospect.commercial_state = pcs.COMMERCIAL_REUNION_AGENDADA
+            # NO cerrar el chat acá: primero tiene que salir el aviso
+            # («invite enviado / nos vemos»). close_chat_after_booking corre
+            # recién después de mandar esa réplica.
+        else:
+            if prospect.status not in (
+                ProspectStatus.meeting_booked.value,
+                ProspectStatus.failed.value,
+            ):
+                prospect.status = ProspectStatus.interested.value
+            if prospect.pipeline_stage != PipelineStage.reunion_agendada.value:
+                prospect.pipeline_stage = PipelineStage.interesado.value
+            prospect.commercial_state = pcs.COMMERCIAL_REUNION_PENDIENTE
 
-    pipeline_sync.sync_pipeline_from_status(prospect)
-    pcs.apply_commercial_state(
-        prospect,
-        response_class="interesado",
-        reply_objective="agendar",
-        db=db,
-        testing=testing,
-    )
-    if google_event_id:
-        prospect.commercial_state = pcs.COMMERCIAL_REUNION_AGENDADA
-    else:
-        prospect.commercial_state = pcs.COMMERCIAL_REUNION_PENDIENTE
-    prospect.commercial_state_is_testing = bool(testing)
+        pipeline_sync.sync_pipeline_from_status(prospect)
+        pcs.apply_commercial_state(
+            prospect,
+            response_class="interesado",
+            reply_objective="agendar",
+            db=db,
+            testing=testing,
+        )
+        if google_event_id:
+            prospect.commercial_state = pcs.COMMERCIAL_REUNION_AGENDADA
+        else:
+            prospect.commercial_state = pcs.COMMERCIAL_REUNION_PENDIENTE
+        if testing:
+            prospect.commercial_state_is_testing = True
 
-    db.flush()
-    if google_event_id:
-        try:
-            from app.services.crm import sync as crm_sync
+        db.flush()
+        if google_event_id:
+            try:
+                from app.services.crm import sync as crm_sync
 
-            crm_sync.sync_meeting_booked(
-                db,
-                prospect=prospect,
-                meeting_id=int(row.id),
-                scheduled_for=anchor,
-                title=meeting_title,
-            )
-        except Exception:
-            logger.exception("crm meeting sync failed prospect_id=%s meeting_id=%s", prospect.id, row.id)
-    return {
-        "meeting_id": row.id,
-        "scheduled_for": anchor.isoformat(),
-        "google_calendar_event_id": google_event_id,
-        "google_calendar_html_link": google_html_link,
-        "calendar_created": bool(google_event_id),
-        "calendar_error": calendar_error,
-        "creation_method": creation_method,
-        "created_by_user_id": seller_id,
-        "commercial_state": prospect.commercial_state,
-        "commercial_state_label": pcs.commercial_state_label(prospect.commercial_state),
-    }
+                crm_sync.sync_meeting_booked(
+                    db,
+                    prospect=prospect,
+                    meeting_id=int(row.id),
+                    scheduled_for=anchor,
+                    title=meeting_title,
+                )
+            except Exception:
+                logger.exception(
+                    "crm meeting sync failed prospect_id=%s meeting_id=%s",
+                    prospect.id,
+                    row.id,
+                )
+        return {
+            "meeting_id": row.id,
+            "scheduled_for": anchor.isoformat(),
+            "google_calendar_event_id": google_event_id,
+            "google_calendar_html_link": google_html_link,
+            "meet_link": meet_link,
+            "calendar_created": bool(google_event_id),
+            "calendar_error": calendar_error,
+            "creation_method": creation_method,
+            "created_by_user_id": seller_id,
+            "commercial_state": prospect.commercial_state,
+            "commercial_state_label": pcs.commercial_state_label(prospect.commercial_state),
+        }
+    except Exception:
+        if google_event_id and seller_id:
+            try:
+                from app.services.google_calendar_create import delete_calendar_event
+
+                delete_calendar_event(
+                    db,
+                    company_id=campaign.company_id,
+                    seller_user_id=int(seller_id),
+                    event_id=str(google_event_id),
+                )
+            except Exception as cleanup_exc:
+                logger.warning(
+                    "book_prospect_meeting orphan_cleanup_failed event_id=%s err=%s",
+                    str(google_event_id)[:24],
+                    str(cleanup_exc)[:200],
+                )
+        raise
+
 
 
 def resolve_meeting_slot_from_prospect_thread(
@@ -892,6 +1202,15 @@ def attempt_fulfill_from_conversation_context(
                     or changed.get("booking_failed_reply")
                 ):
                     return changed
+            pending = _pending_invite_booking(
+                prospect,
+                meeting,
+                {"calendar_created": bool(meeting.google_calendar_event_id), "meeting_id": meeting.id,
+                 "from_conversation_context": True},
+                tz,
+            )
+            if pending is not None:
+                return pending
             html = (meeting.google_calendar_html_link or "").strip() or None
             return {
                 "calendar_created": bool(meeting.google_calendar_event_id),
@@ -992,6 +1311,25 @@ def _slot_matches_meeting(scheduled_for: datetime, slot: datetime, *, tolerance_
     return abs((a - b).total_seconds()) <= tolerance_sec
 
 
+def _pending_invite_booking(
+    prospect: Prospect, row: Meeting, booking: dict[str, Any], tz: str
+) -> dict[str, Any] | None:
+    """Reunión reservada sin invitado todavía: volver a pedir/confirmar el mail, nunca «te agendé»."""
+    from app.services import meeting_scheduling_extras as extras
+
+    if extras.invite_pending_meeting_id(prospect) != row.id or row.scheduled_for is None:
+        return None
+    slot = row.scheduled_for if row.scheduled_for.tzinfo else row.scheduled_for.replace(tzinfo=UTC)
+    known = (prospect.email or "").strip() or None
+    return {
+        **booking,
+        "needs_email": True,
+        "ask_email_reply": extras.build_ask_email_reply(
+            prospect_name=prospect.name, slot=slot, timezone=tz, known_email=known
+        ),
+    }
+
+
 def _existing_booking_result_for_slot(
     db: Session,
     *,
@@ -1031,6 +1369,9 @@ def _existing_booking_result_for_slot(
             "creation_method": row.creation_method,
             "reused_existing": True,
         }
+        pending = _pending_invite_booking(prospect, row, booking, tz)
+        if pending is not None:
+            return pending
         if row.google_calendar_event_id:
             return _attach_booking_reply(
                 booking,
@@ -1038,9 +1379,64 @@ def _existing_booking_result_for_slot(
                 scheduled_for=existing if existing.tzinfo else existing.replace(tzinfo=UTC),
                 timezone=tz,
                 calendar_link=cal_link,
-                is_reschedule=is_reschedule,
+                is_reschedule=False,
             )
     return None
+
+
+def _invite_attendee_email(prospect: Prospect, *, invite_just_given: bool) -> str | None:
+    """En WhatsApp/LinkedIn el invitado es el mail que acaba de pasar o confirmar, nunca el del CRM a ciegas."""
+    from app.services import meeting_scheduling_extras as extras
+    from app.services.commercial_conversation_state import prospect_booking_email
+
+    # Preferí el mail dicho en el chat (commercial / email_source=prospect), no un CRM viejo.
+    known = prospect_booking_email(prospect) or (getattr(prospect, "email", None) or "").strip() or None
+    if known and "@" not in known:
+        known = None
+    typed_or_confirmed = bool(
+        invite_just_given or extras.chat_email_confirmed(prospect)
+    )
+    if known and _is_unreliable_invite_email(known) and not typed_or_confirmed:
+        # Placeholder del CRM a ciegas: no. Si lo tipeó/confirmó en el chat: sí.
+        known = None
+    if not extras.chat_channel_active():
+        return known
+    # WhatsApp / LinkedIn: solo mail pasado o confirmado en el hilo.
+    if known and typed_or_confirmed:
+        return known
+    return None
+
+
+def _alternatives_booking_result(
+    prospect: Prospect,
+    *,
+    slot: datetime,
+    alts: list[datetime],
+    tz: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Horario ocupado: se olvidan pending/mail propuesto para no agendar el viejo con un «dale»."""
+    from app.services import meeting_scheduling_extras as extras
+
+    extras.clear_pending_slot(prospect)
+    extras.clear_proposed_invite_email(prospect)
+    if alts:
+        extras.remember_offered_slots(prospect, alts)
+    out: dict[str, Any] = {
+        "calendar_created": False,
+        "slot_busy": True,
+        "requested_slot": slot.isoformat(),
+        "alternatives_reply": build_slot_alternatives_reply(
+            prospect_name=prospect.name,
+            alternatives=alts,
+            timezone=tz,
+            requested_slot=slot,
+        ),
+        "alternative_slots": [a.isoformat() for a in alts],
+    }
+    if extra:
+        out.update(extra)
+    return out
 
 
 def _book_with_calendar_availability(
@@ -1054,6 +1450,8 @@ def _book_with_calendar_availability(
     testing: bool,
     is_reschedule: bool = False,
     duration_minutes: int = 30,
+    invite_just_given: bool = False,
+    allow_without_email: bool = False,
 ) -> dict[str, Any]:
     duration = max(15, min(int(duration_minutes), 240))
     end = slot + timedelta(minutes=duration)
@@ -1066,13 +1464,96 @@ def _book_with_calendar_availability(
     hours_text = getattr(campaign, "available_hours", None)
     calendar_uid = resolve_campaign_calendar_user_id(db, campaign) or int(campaign.seller_id or 0)
     if not calendar_uid:
+        from app.services.commercial_conversation_state import prospect_booking_email
+
         return {
             "calendar_created": False,
             "slot_busy": False,
             "requested_slot": slot.isoformat(),
             "requires_calendar_reconnect": True,
             "operator_alert": CALENDAR_RECONNECT_OPERATOR_ALERT,
+            "pending_ack_reply": build_pending_invite_ack(
+                prospect_name=prospect.name,
+                scheduled_for=slot,
+                timezone=tz,
+                email=prospect_booking_email(prospect),
+            ),
         }
+    if testing:
+        from app.services import meeting_scheduling_extras as extras
+
+        attendee = _invite_attendee_email(prospect, invite_just_given=invite_just_given)
+        if attendee is None and not allow_without_email:
+            extras.remember_pending_slot(prospect, slot, duration=duration, is_reschedule=is_reschedule)
+            try:
+                from app.services import commercial_conversation_state as ccs
+
+                block = ccs._commercial(prospect)
+                block["slot_at"] = slot.isoformat()
+                block["meeting_intent"] = True
+                if not block.get("email"):
+                    block["status"] = "collecting_email"
+                ccs._save_commercial(prospect, block)
+                db.flush()
+            except Exception:
+                logger.debug("testing mirror_slot_at_for_ask_email failed", exc_info=True)
+            return {
+                "calendar_created": False,
+                "slot_busy": False,
+                "requested_slot": slot.isoformat(),
+                "needs_email": True,
+                "ask_email_reply": extras.build_ask_email_reply(
+                    prospect_name=prospect.name,
+                    slot=slot,
+                    timezone=tz,
+                    known_email=(prospect.email or "").strip() or None,
+                ),
+            }
+        booking = book_prospect_meeting(
+            db,
+            campaign=campaign,
+            prospect=prospect,
+            scheduled_for=slot,
+            create_google_event=False,
+            testing=True,
+            creation_method=CREATION_AUTO_NEXUS,
+            created_by_user_id=calendar_uid,
+            duration_minutes=duration,
+            check_availability=False,
+            invite_attendee=bool(attendee),
+            attendee_email=attendee,
+        )
+        if booking.get("meeting_id"):
+            booking["calendar_created"] = True
+            if not booking.get("google_calendar_event_id"):
+                booking["google_calendar_event_id"] = f"testing-meeting-{booking['meeting_id']}"
+            from app.models.meeting import Meeting
+
+            mrow = db.get(Meeting, int(booking["meeting_id"]))
+            if mrow is not None and not mrow.google_calendar_event_id:
+                mrow.google_calendar_event_id = str(booking["google_calendar_event_id"])
+                db.flush()
+        extras.clear_pending_slot(prospect)
+        extras.clear_proposed_invite_email(prospect)
+        if invite_just_given and attendee and booking.get("calendar_created"):
+            booking["confirmation_reply"] = extras.build_invite_sent_reply(
+                prospect_name=prospect.name,
+                slot=slot,
+                timezone=tz,
+                email=attendee,
+                meet_link=(booking.get("meet_link") or booking.get("google_calendar_html_link")),
+                via_chat=extras.chat_channel_active(),
+            )
+            return booking
+        return _attach_booking_reply(
+            booking,
+            prospect_name=prospect.name,
+            scheduled_for=slot,
+            timezone=tz,
+            calendar_link=cal_link,
+            is_reschedule=is_reschedule,
+            attendee_email=attendee,
+        )
     if not slot_within_available_hours(slot, timezone=tz, available_hours=hours_text):
         alts = find_real_alternative_slots(
             db,
@@ -1081,28 +1562,117 @@ def _book_with_calendar_availability(
             around=slot,
             duration_minutes=duration,
         )
-        return {
-            "calendar_created": False,
-            "slot_busy": True,
-            "requested_slot": slot.isoformat(),
-            "alternatives_reply": build_slot_alternatives_reply(
-                prospect_name=prospect.name,
-                alternatives=alts,
-                timezone=tz,
-                requested_slot=slot,
-            ),
-            "alternative_slots": [a.isoformat() for a in alts],
-            "outside_available_hours": True,
-        }
+        return _alternatives_booking_result(
+            prospect, slot=slot, alts=alts, tz=tz, extra={"outside_available_hours": True}
+        )
 
-    busy = fetch_busy_intervals(
-        db,
-        company_id=campaign.company_id,
-        seller_user_id=int(calendar_uid),
-        time_min=slot - timedelta(hours=2),
-        time_max=slot + timedelta(hours=4),
+    try:
+        from zoneinfo import ZoneInfo as _ZoneInfo
+
+        local_day = slot.astimezone(_ZoneInfo(tz)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        busy = fetch_busy_intervals(
+            db,
+            company_id=campaign.company_id,
+            seller_user_id=int(calendar_uid),
+            time_min=local_day.astimezone(UTC),
+            time_max=(local_day + timedelta(days=1)).astimezone(UTC),
+        )
+    except Exception as exc:
+        err = str(exc)
+        if calendar_error_needs_reconnect(err) or isinstance(exc, ValueError):
+            from app.services.commercial_conversation_state import prospect_booking_email
+
+            return {
+                "calendar_created": False,
+                "slot_busy": False,
+                "requested_slot": slot.isoformat(),
+                "requires_calendar_reconnect": True,
+                "operator_alert": CALENDAR_RECONNECT_OPERATOR_ALERT,
+                "pending_ack_reply": build_pending_invite_ack(
+                    prospect_name=prospect.name,
+                    scheduled_for=slot,
+                    timezone=tz,
+                    email=prospect_booking_email(prospect),
+                ),
+            }
+        logger.warning(
+            "book_with_calendar freebusy_failed prospect_id=%s err=%s",
+            getattr(prospect, "id", None),
+            err[:200],
+        )
+        alts: list[datetime] = []
+        try:
+            alts = find_real_alternative_slots(
+                db,
+                campaign=campaign,
+                calendar_user_id=int(calendar_uid),
+                around=slot,
+                duration_minutes=duration,
+            )
+        except Exception:
+            alts = []
+        return _alternatives_booking_result(
+            prospect,
+            slot=slot,
+            alts=alts,
+            tz=tz,
+            extra={"calendar_error": "No pude confirmar ese horario en Google Calendar."},
+        )
+    free = slot_is_free(busy, start=slot, end=end)
+    logger.info(
+        "book_slot_check prospect_id=%s slot=%s duration=%s busy_blocks=%s free=%s calendar_uid=%s",
+        getattr(prospect, "id", None),
+        slot.isoformat(),
+        duration,
+        len(busy),
+        free,
+        calendar_uid,
     )
-    if slot_is_free(busy, start=slot, end=end):
+    if free:
+        from app.services import meeting_scheduling_extras as extras
+
+        known_email = (prospect.email or "").strip() or None
+        # En chats (WA/LI): el mail lo tiene que pasar/confirmar el prospecto en este turno.
+        # Excepción: allow_without_email (dijo que no pasa mail) → Meet + link por el chat.
+        attendee = _invite_attendee_email(prospect, invite_just_given=invite_just_given)
+        if attendee is None and not allow_without_email:
+            extras.clear_offered_slots(prospect)
+            extras.remember_pending_slot(prospect, slot, duration=duration, is_reschedule=is_reschedule)
+            # Espejo en commercial: si pending_slot se pierde entre turns, el mail igual retoma el horario.
+            try:
+                from app.services import commercial_conversation_state as ccs
+
+                block = ccs._commercial(prospect)
+                block["slot_at"] = slot.isoformat()
+                block["meeting_intent"] = True
+                if not block.get("email"):
+                    block["status"] = "collecting_email"
+                ccs._save_commercial(prospect, block)
+            except Exception:
+                logger.debug("mirror_slot_at_for_ask_email failed", exc_info=True)
+            try:
+                db.flush()
+            except Exception:
+                logger.debug("flush after remember_pending_slot failed", exc_info=True)
+            known_for_ask = known_email if extras.chat_channel_active() else None
+            if known_for_ask and _is_unreliable_invite_email(known_for_ask):
+                known_for_ask = None
+            if known_for_ask:
+                extras.mark_proposed_invite_email(prospect, known_for_ask)
+            return {
+                "calendar_created": False,
+                "slot_busy": False,
+                "requested_slot": slot.isoformat(),
+                "needs_email": True,
+                "ask_email_reply": extras.build_ask_email_reply(
+                    prospect_name=prospect.name,
+                    slot=slot,
+                    timezone=tz,
+                    known_email=known_for_ask,
+                ),
+            }
         booking = book_prospect_meeting(
             db,
             campaign=campaign,
@@ -1114,7 +1684,37 @@ def _book_with_calendar_availability(
             created_by_user_id=calendar_uid,
             duration_minutes=duration,
             check_availability=False,
+            invite_attendee=bool(attendee),
+            attendee_email=attendee,
         )
+        if booking.get("calendar_created"):
+            extras.clear_offered_slots(prospect)
+            extras.clear_pending_slot(prospect)
+            extras.clear_invite_pending(prospect)
+            extras.clear_proposed_invite_email(prospect)
+            if allow_without_email and not attendee:
+                link = (
+                    (booking.get("meet_link") or "").strip()
+                    or (booking.get("google_calendar_html_link") or "").strip()
+                )
+                if link:
+                    booking["confirmation_reply"] = extras.build_meet_link_only_reply(
+                        prospect_name=prospect.name,
+                        slot=slot,
+                        timezone=tz,
+                        meet_link=link,
+                    )
+                    return booking
+            if invite_just_given and attendee and booking.get("google_calendar_event_id"):
+                booking["confirmation_reply"] = extras.build_invite_sent_reply(
+                    prospect_name=prospect.name,
+                    slot=slot,
+                    timezone=tz,
+                    email=attendee,
+                    meet_link=(booking.get("meet_link") or booking.get("google_calendar_html_link")),
+                    via_chat=extras.chat_channel_active(),
+                )
+                return booking
         return _attach_booking_reply(
             booking,
             prospect_name=prospect.name,
@@ -1122,6 +1722,7 @@ def _book_with_calendar_availability(
             timezone=tz,
             calendar_link=cal_link,
             is_reschedule=is_reschedule,
+            attendee_email=attendee,
         )
 
     alts = find_real_alternative_slots(
@@ -1131,18 +1732,7 @@ def _book_with_calendar_availability(
         around=slot,
         duration_minutes=duration,
     )
-    return {
-        "calendar_created": False,
-        "slot_busy": True,
-        "requested_slot": slot.isoformat(),
-        "alternatives_reply": build_slot_alternatives_reply(
-            prospect_name=prospect.name,
-            alternatives=alts,
-            timezone=tz,
-            requested_slot=slot,
-        ),
-        "alternative_slots": [a.isoformat() for a in alts],
-    }
+    return _alternatives_booking_result(prospect, slot=slot, alts=alts, tz=tz)
 
 
 def _active_meeting_scheduled_for(db: Session, prospect: Prospect) -> datetime | None:
@@ -1446,6 +2036,7 @@ def attempt_auto_book_from_message(
         inbound_has_explicit_day_anchor,
         parse_meeting_duration_minutes,
         parse_meeting_slot,
+        parse_meeting_slots,
     )
 
     tz = (getattr(campaign, "timezone", None) or "America/Argentina/Buenos_Aires").strip()
@@ -1462,92 +2053,109 @@ def attempt_auto_book_from_message(
         day_ctx = None
     else:
         day_ctx = conv_ctx if conv_ctx is not None else (meeting_ctx if is_reschedule else None)
-    slot = parse_meeting_slot(
+    proposed = parse_meeting_slots(
         inbound_text,
         timezone=tz,
         context_meeting_at=day_ctx,
     )
-    if slot is None:
+    if not proposed:
+        slot = parse_meeting_slot(
+            inbound_text,
+            timezone=tz,
+            context_meeting_at=day_ctx,
+        )
+        proposed = [slot] if slot is not None else []
+    if not proposed:
         return None
 
     duration_minutes = parse_meeting_duration_minutes(inbound_text)
-
-    existing = _existing_booking_result_for_slot(
-        db,
-        campaign=campaign,
-        prospect=prospect,
-        slot=slot,
-        tz=tz,
-        cal_link=(getattr(campaign, "calendar_link", None) or "").strip() or None,
-        is_reschedule=is_reschedule,
-        duration_minutes=duration_minutes,
-    )
-    if (
-        existing is not None
-        and is_reschedule
-        and meeting_ctx is not None
-        and not _slot_matches_meeting(meeting_ctx, slot)
-    ):
-        existing = None
-    if existing is not None:
-        logger.info(
-            "attempt_auto_book_from_message reused existing meeting prospect_id=%s slot=%s",
-            prospect.id,
-            slot.isoformat(),
-        )
-        return existing
-
     cal_link = (getattr(campaign, "calendar_link", None) or "").strip() or None
     live_calendar = _seller_google_calendar_ready(db, campaign)
+    last_busy: dict[str, Any] | None = None
 
-    logger.info(
-        "attempt_auto_book_from_message prospect_id=%s slot=%s duration_min=%s testing=%s live_calendar=%s",
-        prospect.id,
-        slot.isoformat(),
-        duration_minutes,
-        testing,
-        live_calendar,
-    )
-
-    if live_calendar:
-        try:
-            return _book_with_calendar_availability(
-                db,
-                campaign=campaign,
-                prospect=prospect,
-                slot=slot,
-                tz=tz,
-                cal_link=cal_link,
-                testing=testing,
-                is_reschedule=is_reschedule,
-                duration_minutes=duration_minutes,
-            )
-        except Exception as exc:
-            logger.warning(
-                "attempt_auto_book_from_message failed prospect_id=%s err=%s",
+    for slot in proposed:
+        existing = _existing_booking_result_for_slot(
+            db,
+            campaign=campaign,
+            prospect=prospect,
+            slot=slot,
+            tz=tz,
+            cal_link=cal_link,
+            is_reschedule=is_reschedule,
+            duration_minutes=duration_minutes,
+        )
+        if (
+            existing is not None
+            and is_reschedule
+            and meeting_ctx is not None
+            and not _slot_matches_meeting(meeting_ctx, slot)
+        ):
+            existing = None
+        if existing is not None:
+            logger.info(
+                "attempt_auto_book_from_message reused existing meeting prospect_id=%s slot=%s",
                 prospect.id,
-                str(exc)[:200],
+                slot.isoformat(),
             )
-            err = str(exc)[:300]
-            if calendar_error_needs_reconnect(err):
-                return {
+            return existing
+
+        logger.info(
+            "attempt_auto_book_from_message prospect_id=%s slot=%s duration_min=%s testing=%s live_calendar=%s",
+            prospect.id,
+            slot.isoformat(),
+            duration_minutes,
+            testing,
+            live_calendar,
+        )
+
+        if live_calendar:
+            try:
+                booking = _book_with_calendar_availability(
+                    db,
+                    campaign=campaign,
+                    prospect=prospect,
+                    slot=slot,
+                    tz=tz,
+                    cal_link=cal_link,
+                    testing=testing,
+                    is_reschedule=is_reschedule,
+                    duration_minutes=duration_minutes,
+                    allow_without_email=False,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "attempt_auto_book_from_message failed prospect_id=%s err=%s",
+                    prospect.id,
+                    str(exc)[:200],
+                )
+                err = str(exc)[:300]
+                if calendar_error_needs_reconnect(err):
+                    return {
+                        "calendar_created": False,
+                        "calendar_error": err,
+                        "requires_calendar_reconnect": True,
+                        "operator_alert": CALENDAR_RECONNECT_OPERATOR_ALERT,
+                    }
+                failed = build_meeting_not_created_reply(
+                    prospect_name=prospect.name,
+                    calendar_link=cal_link,
+                    calendar_error=err,
+                )
+                out: dict[str, Any] = {
                     "calendar_created": False,
                     "calendar_error": err,
-                    "requires_calendar_reconnect": True,
-                    "operator_alert": CALENDAR_RECONNECT_OPERATOR_ALERT,
                 }
-            failed = build_meeting_not_created_reply(
-                prospect_name=prospect.name,
-                calendar_link=cal_link,
-                calendar_error=err,
-            )
-            out: dict[str, Any] = {
-                "calendar_created": False,
-                "calendar_error": err,
-            }
-            if failed.strip():
-                out["booking_failed_reply"] = failed
-            return out
+                if failed.strip():
+                    out["booking_failed_reply"] = failed
+                last_busy = out
+                continue
+            if booking.get("slot_busy") or booking.get("outside_available_hours"):
+                last_busy = booking
+                continue
+            return booking
+
+    if last_busy is not None:
+        return last_busy
 
     if not live_calendar:
         # Sin Calendar conectado: no crear Meeting fantasma; bloquear para el operador.

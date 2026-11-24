@@ -152,7 +152,7 @@ def _build_day1_sections(
 def _build_day1_internal(sections: dict[str, str]) -> dict[str, str]:
     return {
         "probable_problem": sections.get("problem")
-        or "reducir tiempo manual de prospección y agendar más reuniones",
+        or "resolver el problema que planteamos según el producto de la campaña",
         "why_it_matters": sections["presentation"],
         "hypothesis": sections["solution"],
         "response_question": sections["cta"],
@@ -220,25 +220,86 @@ def build_sdr_playbook_fallback_json(
         first_touch=first_on_ch,
         step_day=step_day,
     )
+    safe_subject = rendered.subject
+    safe_body = rendered.body
+    safe_template_id = rendered.template_id
+    safe_reasoning = rendered.reasoning
+    # Candado: si el banco deja pitch Nexus sobre producto ajeno, rearmar.
+    try:
+        from app.schemas.mvp_outreach import SdrReasoningRead
+        from app.services.lead_sourcing.sdr_playbook_outreach import (
+            _guard_campaign_product_isolation,
+        )
+
+        safe_subject, safe_body, safe_reasoning = _guard_campaign_product_isolation(
+            rendered.subject,
+            rendered.body,
+            rendered.reasoning
+            if isinstance(rendered.reasoning, SdrReasoningRead)
+            else SdrReasoningRead(
+                probable_problem=getattr(rendered.reasoning, "probable_problem", "") or "",
+                why_it_matters=getattr(rendered.reasoning, "why_it_matters", "") or "",
+                hypothesis=getattr(rendered.reasoning, "hypothesis", "") or "",
+                response_question=getattr(rendered.reasoning, "response_question", "") or "",
+                bank_template_id=getattr(rendered, "template_id", None),
+            ),
+            channel=str(channel or "email"),
+            prospect=prospect,
+            campaign=campaign,
+            product=product or {},
+            prior_touches=prior,
+            step_day=step_day,
+            sequence_first_touch=bool(first_on_ch),
+        )
+        if getattr(safe_reasoning, "bank_template_id", None):
+            safe_template_id = str(safe_reasoning.bank_template_id)
+    except Exception:
+        pass
     role = resolve_selling_to_role(prospect)
     internal = {
-        "probable_problem": (rendered.reasoning.probable_problem or "")[:400],
-        "why_it_matters": (rendered.reasoning.why_it_matters or step_objective or "")[:400],
-        "hypothesis": (rendered.reasoning.hypothesis or "")[:400],
-        "response_question": (rendered.reasoning.response_question or "")[:300],
+        "probable_problem": (getattr(safe_reasoning, "probable_problem", None) or "")[:400],
+        "why_it_matters": (
+            getattr(safe_reasoning, "why_it_matters", None) or step_objective or ""
+        )[:400],
+        "hypothesis": (getattr(safe_reasoning, "hypothesis", None) or "")[:400],
+        "response_question": (getattr(safe_reasoning, "response_question", None) or "")[:300],
         "selling_to_role": role,
     }
     if not first_on_ch:
         internal = normalize_follow_up_internal(
             internal,
-            body=rendered.body,
+            body=safe_body,
             prospect=prospect,
             step_day=step_day,
             step_objective=step_objective,
         )
-    payload: dict[str, Any] = {"internal": internal, "body": rendered.body}
+    payload: dict[str, Any] = {
+        "internal": internal,
+        "body": safe_body,
+        "bank_template_id": safe_template_id,
+    }
     if channel == "email":
-        payload["subject"] = rendered.subject or "Seguimiento"
+        payload["subject"] = safe_subject or "Seguimiento"
+    try:
+        from app.services.message_structure_variants import (
+            pick_first_touch_variant,
+            pick_follow_up_variant,
+        )
+
+        if first_on_ch:
+            payload["structure_variant"] = pick_first_touch_variant(
+                channel=channel,
+                prospect_id=prospect.get("id"),
+                campaign_id=campaign.get("id"),
+            )
+        else:
+            payload["structure_variant"] = pick_follow_up_variant(
+                channel=channel,
+                prospect_id=prospect.get("id"),
+                campaign_id=campaign.get("id"),
+            )
+    except Exception:
+        pass
     return json.dumps(payload, ensure_ascii=False)
 
 

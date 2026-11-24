@@ -17,7 +17,7 @@ import uuid
 from datetime import UTC, datetime
 from urllib.parse import quote, urlparse
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.campaign import Campaign
@@ -215,9 +215,13 @@ def mark_draft_suggested(
     draft: str,
     *,
     log_event: bool = True,
+    first_touch: bool = False,
 ) -> None:
     """Secuencia o prepare: Nexus sugirió contacto LinkedIn."""
-    prospect.linkedin_assisted_draft = draft
+    text = (draft or "").strip()
+    # Guardar el borrador íntegro: Enviar mensaje copia/pega TODO (no burbujas parciales).
+    stored = text
+    prospect.linkedin_assisted_draft = stored
     # Reabrir cola tras mark-sent (réplica inbound): sent + marked_sent_at ocultan el item.
     prospect.linkedin_sdr_marked_sent_at = None
     _set_assist_status(prospect, STATUS_SUGGESTED)
@@ -838,10 +842,91 @@ def _is_generic_linkedin_stub(text: str | None) -> bool:
     return False
 
 
+def _is_stale_linkedin_crm_floor(text: str | None) -> bool:
+    """Detecta el piso CRM viejo: ficha pegada, sin cómo estás / rol / empresa del prospecto."""
+    if not isinstance(text, str):
+        return False
+    t = text.strip().lower()
+    if not t:
+        return False
+    if "lo hacemos mediante" in t:
+        return True
+    if "esto les permite reducir el trabajo manual de prospección" in t:
+        return True
+    if "plataforma multicanal de outreach" in t:
+        return True
+    if "con entrenada" in t or "una entrenada" in t:
+        return True
+    if "te escribo por tu rol" in t:
+        return True
+    if "me pareció oportuno" in t or "me parecio oportuno" in t:
+        return True
+    if re.search(r"te contacto desde .+\.\s*soy ", t):
+        return True
+    if any(
+        bad in t
+        for bad in (
+            "sin ir directo al pitch",
+            "sin ir directo",
+            "no te vengo a vender",
+            "antes de proponerte nada",
+            "no te escribo solo",
+            "sin forzar un encaje",
+            "conocer un poco el contexto",
+            "conocer un poco tu contexto",
+        )
+    ):
+        return True
+    # Primer contacto estilo "Soy X" + pitch, pero sin ancla humana.
+    if "soy " in t and ("te escribo porque" in t or "con nexus" in t):
+        has_how = any(
+            x in t for x in ("cómo estás", "como estas", "cómo va", "como va")
+        )
+        has_anchor = any(
+            x in t
+            for x in (
+                "te escribo por tu rol",
+                "te escribo por tu trabajo",
+                "por tu rol como",
+            )
+        )
+        from app.services.outreach_human_anchor import has_outreach_human_anchor
+
+        has_anchor = has_anchor or has_outreach_human_anchor(t)
+        if not has_how or not has_anchor:
+            return True
+    if len(t) > 520:
+        return True
+    return False
+
+
+def _draft_mentions_unverified_company(text: str | None, prospect: Prospect | None) -> bool:
+    """Borrador cita empresa CRM/Prospeo que no pasó verificación de empleo actual."""
+    if prospect is None:
+        return False
+    from app.services.outreach_display_names import (
+        prospect_company_display,
+        prospect_company_for_outreach,
+    )
+
+    raw = prospect_company_display(getattr(prospect, "company_name", None))
+    if not raw:
+        return False
+    verified = prospect_company_for_outreach(
+        company_name=prospect.company_name,
+        email=getattr(prospect, "email", None),
+        website=getattr(prospect, "company_website", None),
+        source_provider=getattr(prospect, "source_provider", None),
+    )
+    if verified:
+        return False
+    return raw.lower() in (text or "").lower()
+
+
 def _is_interim_linkedin_draft(
     text: str | None, prospect: Prospect | None = None
 ) -> bool:
-    """Borrador no listo para Enviar: vacío, placeholder o stub genérico."""
+    """Borrador no listo para Enviar: vacío, placeholder, stub o piso CRM obsoleto."""
     from app.services.prospect_sequence import _is_placeholder_message
 
     if not (text or "").strip():
@@ -850,46 +935,120 @@ def _is_interim_linkedin_draft(
         return True
     if _is_generic_linkedin_stub(text):
         return True
-    # CRM floor con research o estructura completa ya es aceptable (no bloquear envío).
-    _ = prospect  # reserved for future quality signals
+    if _is_stale_linkedin_crm_floor(text):
+        return True
+    if _draft_mentions_unverified_company(text, prospect):
+        return True
+    if prospect is not None:
+        from app.services.linkedin_copy_quality import linkedin_copy_is_repetitive
+        from app.services.outreach_display_names import prospect_company_display
+
+        company = prospect_company_display(getattr(prospect, "company_name", None))
+        if linkedin_copy_is_repetitive(text, company=company or ""):
+            return True
     return False
 
 
-def _meeting_cta_variants(prospect: Prospect) -> str:
-    """CTA siempre orientado a agendar llamada; wording leve variación."""
+def _queue_ready_linkedin_draft(
+    db: Session,
+    prospect: Prospect,
+    campaign: Campaign,
+    *,
+    existing: str | None,
+) -> str:
+    """
+    Borrador para la cola YA.
+    - Si hay draft bueno → usarlo.
+    - Si no → piso CRM inmediato (Contactar/Mensajes visibles) + upgrade IA en background.
+    Nunca deja la cola vacía tras resolver el grado.
+    """
+    from app.services.prospect_sequence import _is_placeholder_message
+
+    text = (existing if existing is not None else (prospect.linkedin_assisted_draft or "")).strip()
+    # Solo vaciar stubs/placeholders. NO borrar drafts "stale/interim": eso regeneraba
+    # OpenAI en cada poll de la cola LinkedIn (~$0.003/min por prospecto).
+    if text and (_is_placeholder_message(text) or _is_generic_linkedin_stub(text)):
+        prospect.linkedin_assisted_draft = None
+        text = ""
+
+    if text and not _is_generic_linkedin_stub(text) and not _is_placeholder_message(text):
+        _set_assist_status(prospect, STATUS_SUGGESTED)
+        # Upgrade IA solo si el texto es piso corto / interim débil — no en cada poll.
+        needs_upgrade = _is_interim_linkedin_draft(text, prospect) and len(text) < 100
+        if needs_upgrade:
+            try:
+                schedule_linkedin_quality_draft(int(prospect.id))
+            except Exception:
+                logger.debug("schedule upgrade draft failed", exc_info=True)
+        return text
+
+    if getattr(campaign, "product", None) is None and campaign.product_id:
+        from app.models.product import Product
+
+        campaign.product = db.get(Product, int(campaign.product_id))
+
+    # Piso inmediato → la cola muestra Mensajes/Contactar sin esperar OpenAI.
+    draft = _crm_only_linkedin_draft(prospect, campaign)
+    mark_draft_suggested(db, prospect, campaign, draft, log_event=False)
+    # Un solo upgrade en background; ensure_linkedin_draft ya no re-quema si hay texto.
+    try:
+        schedule_linkedin_quality_draft(int(prospect.id))
+    except Exception:
+        logger.debug("schedule quality draft after floor failed", exc_info=True)
+    return draft
+
+
+def _seeded_pick(variants: tuple[str, ...] | list[str], seed: str) -> str:
+    """Elige variante estable por seed (inicio / desarrollo / cierre distintos)."""
+    if not variants:
+        return ""
+    digest = 0
+    for ch_i in (seed or "0").encode("utf-8"):
+        digest = (digest * 31 + ch_i) & 0xFFFFFFFF
+    return variants[digest % len(variants)]
+
+
+def _meeting_cta_variants(prospect: Prospect, *, campaign_id: int | None = None) -> str:
+    """CTA siempre orientado a agendar llamada; vos/tu, no plural genérico."""
     variants = (
-        "¿Te queda bien una llamada corta esta semana para ver si aplica a tu equipo?",
-        "¿Coordinamos una videollamada breve para ver cómo lo implementarían ustedes?",
-        "¿Tiene sentido agendar unos minutos para ver si encaja con lo que están haciendo?",
-        "¿Podemos coordinar una llamada corta para ver si les suma?",
+        "¿Te parece bien si coordinamos una videollamada breve para ver si aplica?",
+        "¿Te queda bien una llamada corta esta semana para ver si aplica?",
+        "¿Coordinamos una videollamada breve para ver si encaja para vos?",
+        "¿Podemos coordinar una llamada corta para ver si te suma?",
+        "¿Tendrás 10–15 minutos esta semana para ver si les sirve?",
+        "Si te parece, ¿agendamos una charla corta y lo vemos juntos?",
+        "¿Te calza una llamada breve para chequear si encaja?",
+        "¿Podemos vernos un ratito en una videollamada corta?",
     )
-    idx = int(getattr(prospect, "id", 0) or 0) % len(variants)
-    return variants[idx]
+    pid = int(getattr(prospect, "id", 0) or 0)
+    cid = int(campaign_id or 0)
+    return _seeded_pick(variants, f"{pid}|{cid}|cta")
 
 
 def _crm_only_linkedin_draft(prospect: Prospect, campaign: Campaign) -> str:
     """
-    Estructura aprobada (primer contacto LinkedIn):
+    Estructura LinkedIn primer contacto (estilo SDR):
 
-    Hola {Nombre},
-    Soy {Sender} de {Empresa}.
+    Hola {Nombre}, ¿cómo estás?
+    Soy {Sender} de {Brand}.
 
-    Te escribo porque ayudamos a equipos comerciales a {beneficio}.
+    Vi {Empresa} y tu perfil como {rol} (ancla humana corta; empresa una vez).
 
-    Lo hacemos mediante {Producto}, que {cómo}.
+    Con {Producto}… (una oración, producto una vez).
 
-    Esto les permite {resultado}.
-
-    ¿Te interesaría coordinar una reunión breve para mostrarte cómo funciona?
+    ¿CTA reunión?
     """
     from app.services.campaign_outreach_context import company_brand_name
-    from app.services.openai_fallback import (
-        _build_problem_line,
-        _product_name,
-    )
+    from app.services.message_structure_variants import _conversational_value_blurb
+    from app.services.openai_fallback import _product_name
     from app.services.outreach_display_names import (
+        company_label_for_outreach,
         first_real_name_token,
         outreach_company_display,
+        prospect_company_display,
+        prospect_company_for_outreach,
+        prospect_role_for_outreach,
+        scrub_generic_empresa_in_copy,
         sender_first_name,
     )
 
@@ -914,43 +1073,125 @@ def _crm_only_linkedin_draft(prospect: Prospect, campaign: Campaign) -> str:
         ),
     }
     product_name = _product_name(product_dict, brand=brand)
-    how = re.sub(r"\s+", " ", (product_dict.get("description") or "").strip()).rstrip(".")
-    if not how or len(how) < 20:
-        how = (
-            "automatiza la búsqueda y el contacto por Mail, WhatsApp y LinkedIn "
-            "desde un solo lugar"
+    prospect_company = prospect_company_for_outreach(
+        company_name=getattr(prospect, "company_name", None),
+        email=getattr(prospect, "email", None),
+        website=getattr(prospect, "company_website", None),
+        source_provider=getattr(prospect, "source_provider", None),
+    )
+    prospect_company = company_label_for_outreach(prospect_company) or prospect_company
+    role = prospect_role_for_outreach(
+        getattr(prospect, "role", None),
+        prospect.name,
+        company_name=prospect_company,
+    )
+
+    seed_base = f"{getattr(prospect, 'id', 0)}|{getattr(campaign, 'id', 0)}"
+    if role and prospect_company:
+        anchor = _seeded_pick(
+            (
+                f"Vi que sos {role} de {prospect_company}.",
+                f"Te escribo por tu rol como {role} en {prospect_company}.",
+                f"Me cruzé con tu perfil: {role} en {prospect_company}.",
+                f"Vi tu lugar como {role} en {prospect_company}.",
+            ),
+            f"{seed_base}|anchor",
+        )
+    elif role:
+        anchor = _seeded_pick(
+            (
+                f"Vi que sos {role}.",
+                f"Te escribo por tu rol como {role}.",
+                f"Vi tu perfil como {role}.",
+            ),
+            f"{seed_base}|anchor",
+        )
+    elif prospect_company:
+        anchor = _seeded_pick(
+            (
+                f"Vi que estás en {prospect_company}.",
+                f"Te escribo porque vi {prospect_company}.",
+                f"Me llamó la atención {prospect_company}.",
+            ),
+            f"{seed_base}|anchor",
         )
     else:
-        # "X automatiza…" → "automatiza…" para encajar tras «que»
-        how_l = how[0].lower() + how[1:] if how else how
-        if how_l.lower().startswith(product_name.lower()):
-            how_l = how_l[len(product_name) :].lstrip(" ,.-")
-        how = how_l
+        from app.services.outreach_human_anchor import pick_outreach_context_anchor_short
 
-    greeting = f"Hola {first}," if first else "Hola,"
-    presentation = f"Soy {sender} de {brand}."
-    problem = _build_problem_line(product_dict)
-    solution = f"Lo hacemos mediante {product_name}, que {how}."
-    if not solution.endswith("."):
-        solution = f"{solution}."
-    outcome = (
-        "Esto les permite reducir el trabajo manual de prospección "
-        "y dedicar más tiempo a conversaciones reales."
+        anchor = pick_outreach_context_anchor_short(
+            empresa=prospect_company or None,
+            rol=role or None,
+            seed=seed_base,
+            channel="linkedin",
+        )
+
+    # Valor: misma oferta posible, formulación distinta por prospecto.
+    from app.services.message_structure_variants import connect_prospect_anchor_to_value
+
+    value = _conversational_value_blurb(
+        product_dict,
+        product_name=product_name,
+        channel="linkedin",
+        seed=f"{seed_base}|valor",
     )
-    cta = "¿Te interesaría coordinar una reunión breve para mostrarte cómo funciona?"
+    if not value.endswith((".", "?", "!")):
+        value = f"{value}."
+    # A veces el ancla se conecta al valor («Vi que sos…, y con Producto…»).
+    mid = connect_prospect_anchor_to_value(
+        anchor,
+        value,
+        seed=f"{seed_base}|bridge",
+        separate_paragraphs=True,
+    )
 
-    from app.services.outreach_display_names import scrub_generic_empresa_in_copy
+    if first:
+        greeting = _seeded_pick(
+            (
+                f"Hola {first}, ¿cómo estás?",
+                f"Hola {first}, ¿cómo va?",
+                f"Hola {first}, ¿todo bien?",
+                f"Hola {first}, ¿cómo andás?",
+            ),
+            f"{seed_base}|greet",
+        )
+    else:
+        greeting = _seeded_pick(
+            (
+                "Hola, ¿cómo estás?",
+                "Hola, ¿cómo va?",
+                "Hola, ¿todo bien?",
+            ),
+            f"{seed_base}|greet",
+        )
+    # Presentación simple: «Soy X de Y.» (nada de «Me presento» / «te escribo yo»).
+    presentation = (
+        f"Soy {sender} de {brand}."
+        if brand
+        else f"Soy {sender}."
+    )
+    cta = _meeting_cta_variants(prospect, campaign_id=getattr(campaign, "id", None))
 
     draft = (
         f"{greeting}\n"
         f"{presentation}\n\n"
-        f"{problem}\n\n"
-        f"{solution}\n\n"
-        f"{outcome}\n\n"
+        f"{mid}\n\n"
         f"{cta}"
     )
-    return scrub_generic_empresa_in_copy(
-        draft, prospect_company=getattr(prospect, "company_name", None), brand=brand
+    draft = scrub_generic_empresa_in_copy(
+        draft, prospect_company=prospect_company or None, brand=brand
+    )
+    # Red de seguridad: nunca dejar el company_name CRM si no está verificado.
+    raw_company = prospect_company_display(getattr(prospect, "company_name", None))
+    if raw_company and not prospect_company:
+        draft = re.sub(re.escape(raw_company), "", draft, flags=re.I)
+        draft = re.sub(r"\s{2,}", " ", draft)
+        draft = re.sub(r"\s+\.", ".", draft)
+        draft = re.sub(r" en \.", ".", draft)
+        draft = re.sub(r"\n{3,}", "\n\n", draft).strip()
+    from app.services.linkedin_copy_quality import polish_linkedin_outbound
+
+    return polish_linkedin_outbound(
+        draft, company=prospect_company or "", product=product_name
     )
 
 
@@ -958,15 +1199,27 @@ def _simple_linkedin_outreach_draft(prospect: Prospect, campaign: Campaign | Non
     """No usar stub corto. Delega a borrador estructurado CRM."""
     if campaign is None:
         first = (prospect.name or "").strip().split()[0] if (prospect.name or "").strip() else ""
-        from app.services.outreach_display_names import prospect_company_display
+        from app.services.outreach_display_names import prospect_company_for_outreach
 
-        company = prospect_company_display(prospect.company_name) or "tu equipo"
+        from app.services.outreach_human_anchor import pick_outreach_context_anchor_short
+
+        company = prospect_company_for_outreach(
+            company_name=prospect.company_name,
+            email=getattr(prospect, "email", None),
+            website=getattr(prospect, "company_website", None),
+            source_provider=getattr(prospect, "source_provider", None),
+        ) or "tu equipo"
         greet = f"Hola {first}," if first else "Hola,"
+        anchor = pick_outreach_context_anchor_short(
+            empresa=company if company != "tu equipo" else None,
+            seed=str(getattr(prospect, "id", 0)),
+            channel="linkedin",
+        )
         return (
             f"{greet}\n\n"
-            f"Te escribo por tu trabajo en {company}.\n\n"
-            "Habitualmente los equipos comerciales pierden horas en prospección manual. "
-            "Ayudamos a agendar más reuniones sin ese desgaste.\n\n"
+            f"{anchor}\n\n"
+            "Te escribo para ver si tiene sentido una charla corta "
+            "sobre cómo podemos ayudar a tu equipo.\n\n"
             "¿Te queda bien una llamada corta esta semana para ver si aplica?"
         )
     return _crm_only_linkedin_draft(prospect, campaign)
@@ -1020,53 +1273,6 @@ def schedule_linkedin_quality_draft(prospect_id: int) -> None:
     threading.Thread(target=_run, daemon=True, name=f"li-draft-{pid}").start()
 
 
-def _queue_ready_linkedin_draft(
-    db: Session,
-    prospect: Prospect,
-    campaign: Campaign,
-    *,
-    existing: str | None,
-) -> str:
-    """
-    Borrador para la cola YA.
-    - Si hay draft bueno → usarlo.
-    - Si no → piso CRM inmediato (Contactar/Mensajes visibles) + upgrade IA en background.
-    Nunca deja la cola vacía tras resolver el grado.
-    """
-    from app.services.prospect_sequence import _is_placeholder_message
-
-    text = (existing or "").strip()
-    if text and (
-        _is_placeholder_message(text)
-        or _is_generic_linkedin_stub(text)
-    ):
-        prospect.linkedin_assisted_draft = None
-        text = ""
-
-    if text and not _is_generic_linkedin_stub(text) and not _is_placeholder_message(text):
-        _set_assist_status(prospect, STATUS_SUGGESTED)
-        # Mejorar en background si aún no hubo research.
-        try:
-            schedule_linkedin_quality_draft(int(prospect.id))
-        except Exception:
-            logger.debug("schedule upgrade draft failed", exc_info=True)
-        return text
-
-    if getattr(campaign, "product", None) is None and campaign.product_id:
-        from app.models.product import Product
-
-        campaign.product = db.get(Product, int(campaign.product_id))
-
-    # Piso inmediato → la cola muestra Mensajes/Contactar sin esperar OpenAI.
-    draft = _crm_only_linkedin_draft(prospect, campaign)
-    mark_draft_suggested(db, prospect, campaign, draft, log_event=False)
-    try:
-        schedule_linkedin_quality_draft(int(prospect.id))
-    except Exception:
-        logger.debug("schedule quality draft after floor failed", exc_info=True)
-    return draft
-
-
 def linkedin_reply_fallback_draft(
     prospect: Prospect,
     campaign: Campaign,
@@ -1083,17 +1289,12 @@ def ensure_linkedin_draft(db: Session, prospect: Prospect, campaign: Campaign) -
     draft = (prospect.linkedin_assisted_draft or "").strip()
     from app.services.prospect_sequence import _is_placeholder_message
 
-    if (
-        draft
-        and not _is_placeholder_message(draft)
-        and not _is_interim_linkedin_draft(draft, prospect)
-        and not _is_generic_linkedin_stub(draft)
-    ):
+    # Cualquier borrador usable se conserva. Heurísticas "stale/interim" NO deben
+    # disparar regeneración OpenAI en loop (poll de cola cada ~60s).
+    if draft and not _is_placeholder_message(draft) and not _is_generic_linkedin_stub(draft):
         return draft
-    # Limpiar stub/interim para forzar compose con research.
-    if draft and (
-        _is_interim_linkedin_draft(draft, prospect) or _is_generic_linkedin_stub(draft)
-    ):
+    # Solo stubs/placeholders se limpian para forzar compose.
+    if draft and _is_generic_linkedin_stub(draft):
         prospect.linkedin_assisted_draft = None
     history = _conversation_for_prospect(db, prospect.id)
     last_inbound = next(
@@ -1104,19 +1305,20 @@ def ensure_linkedin_draft(db: Session, prospect: Prospect, campaign: Campaign) -
     last_text = (last_inbound.message if last_inbound else "") or ""
     if last_text.startswith("[LinkedIn · respuesta real]"):
         last_text = last_text.split("\n", 1)[-1].strip()
-    blob = campaign_education_blob(db, campaign)
+    blob = campaign_education_blob(db, campaign, channel="linkedin")
+    first_touch = False
     if is_reply and last_text.strip():
         from app.services.linkedin_reply_compose import compose_linkedin_inbound_reply
+        from app.services.commercial_conversation_state import (
+            inbound_requires_orchestrator,
+            sync_commercial_facts,
+        )
         from app.services.inbound_turn_orchestrator import resolve_inbound_scheduling_reply
         from app.services import conversation_intelligence as ci
 
-        draft = compose_linkedin_inbound_reply(
-            db,
-            prospect=prospect,
-            campaign=campaign,
-            inbound_text=last_text,
-            history=history,
-        )
+        tz = (getattr(campaign, "timezone", None) or "America/Argentina/Buenos_Aires").strip()
+        sync_commercial_facts(prospect, last_text, timezone=tz)
+
         prior = (prospect.interest_level or "low").strip() or "low"
         try:
             sig = ci.build_signals_from_keywords(
@@ -1134,20 +1336,61 @@ def ensure_linkedin_draft(db: Session, prospect: Prospect, campaign: Campaign) -
                 sig=sig,
                 response_class=response_class,
             )
-        decision = resolve_inbound_scheduling_reply(
-            db,
-            campaign=campaign,
-            prospect=prospect,
-            inbound_text=last_text,
-            reply_objective=reply_objective,
-            sig=sig,
-            suggested_reply=draft or "",
-            testing=False,
-        )
-        if decision.action != "skip_autoresponder" and decision.reply_body:
-            draft = decision.reply_body
+
+        scheduling_turn = inbound_requires_orchestrator(prospect, last_text)
+        if scheduling_turn:
+            decision = resolve_inbound_scheduling_reply(
+                db,
+                campaign=campaign,
+                prospect=prospect,
+                inbound_text=last_text,
+                reply_objective=reply_objective,
+                sig=sig,
+                suggested_reply="",
+                testing=False,
+                channel="linkedin",
+            )
+            if decision.action != "skip_autoresponder" and (decision.reply_body or "").strip():
+                draft = decision.reply_body.strip()
+            else:
+                draft = compose_linkedin_inbound_reply(
+                    db,
+                    prospect=prospect,
+                    campaign=campaign,
+                    inbound_text=last_text,
+                    history=history,
+                )
+        else:
+            draft = compose_linkedin_inbound_reply(
+                db,
+                prospect=prospect,
+                campaign=campaign,
+                inbound_text=last_text,
+                history=history,
+            )
+            decision = resolve_inbound_scheduling_reply(
+                db,
+                campaign=campaign,
+                prospect=prospect,
+                inbound_text=last_text,
+                reply_objective=reply_objective,
+                sig=sig,
+                suggested_reply=draft or "",
+                testing=False,
+                channel="linkedin",
+            )
+            if (
+                decision.action not in ("skip_autoresponder", "normal_reply")
+                and (decision.reply_body or "").strip()
+            ):
+                draft = decision.reply_body.strip()
+        if decision.action == "normal_reply":
+            from app.services.defer_timing import defer_ack_if_postergado
+
+            draft = defer_ack_if_postergado(prospect, last_text) or draft
     else:
         prior = prior_touches_from_history(history)
+        first_touch = not prior
         _subj, draft = generate_playbook_touch_for_prospect(
             db,
             campaign=campaign,
@@ -1167,7 +1410,7 @@ def ensure_linkedin_draft(db: Session, prospect: Prospect, campaign: Campaign) -
 
             campaign.product = db.get(Product, int(campaign.product_id))
         draft = _crm_only_linkedin_draft(prospect, campaign)
-    mark_draft_suggested(db, prospect, campaign, draft, log_event=True)
+    mark_draft_suggested(db, prospect, campaign, draft, log_event=True, first_touch=first_touch)
     return draft
 
 
@@ -1236,9 +1479,13 @@ def begin_assist_session(
     Inicia sesión asistida. Retorna (draft, session_id).
     NO marca enviado — solo prepara + abre + copia (logs separados).
     """
+    from app.services.linkedin_message_bubbles import linkedin_full_clipboard_text
+
     require_real_linkedin(prospect)
     had_draft = bool((prospect.linkedin_assisted_draft or "").strip())
     draft = ensure_linkedin_draft(db, prospect, campaign)
+    # Siempre devolver el mensaje completo (legacy con ⏵ también se junta).
+    draft = linkedin_full_clipboard_text(draft)
     name = prospect.name or f"Prospecto #{prospect.id}"
     now = datetime.now(UTC)
 
@@ -1283,11 +1530,36 @@ def abandon_assist_session(db: Session, prospect: Prospect, campaign: Campaign) 
 
 
 def confirm_linkedin_sent(db: Session, prospect: Prospect) -> str:
+    locked = db.scalars(
+        select(Prospect).where(Prospect.id == prospect.id).with_for_update()
+    ).one_or_none()
+    if locked is None:
+        raise ValueError("Prospecto no encontrado.")
+    prospect = locked
+
     require_real_linkedin(prospect)
     campaign = _load_campaign(db, prospect)
     draft = (prospect.linkedin_assisted_draft or "").strip()
     if not draft:
+        if getattr(prospect, "linkedin_sdr_marked_sent_at", None):
+            raise ValueError("El envío LinkedIn ya fue confirmado.")
         raise ValueError("No hay borrador LinkedIn pendiente para este prospecto.")
+
+    # Reclamar borrador en DB: una sola confirmación gana (SQLite + Postgres).
+    claimed = db.execute(
+        update(Prospect)
+        .where(
+            Prospect.id == prospect.id,
+            func.trim(func.coalesce(Prospect.linkedin_assisted_draft, "")) == draft,
+        )
+        .values(linkedin_assisted_draft=None)
+    )
+    if claimed.rowcount != 1:
+        db.refresh(prospect)
+        if getattr(prospect, "linkedin_sdr_marked_sent_at", None):
+            raise ValueError("El envío LinkedIn ya fue confirmado.")
+        raise ValueError("No hay borrador LinkedIn pendiente para este prospecto.")
+    prospect.linkedin_assisted_draft = None
 
     name = prospect.name or f"Prospecto #{prospect.id}"
     body = f"[LinkedIn · enviado por SDR]\n{draft}"
@@ -1308,6 +1580,7 @@ def confirm_linkedin_sent(db: Session, prospect: Prospect) -> str:
         prospect,
         campaign_calendar_link=campaign.calendar_link or "",
         outbound_text=draft,
+        closes_inbound_review=followup_engine.should_close_inbound_review_on_outbound(prospect),
     )
 
     if prospect.status in {
@@ -1327,7 +1600,6 @@ def confirm_linkedin_sent(db: Session, prospect: Prospect) -> str:
         prospect.linkedin_connected_at = datetime.now(UTC)
 
     prospect.linkedin_sdr_marked_sent_at = datetime.now(UTC)
-    prospect.linkedin_assisted_draft = None
     prospect.linkedin_last_assisted_at = None
     prospect.linkedin_assist_session_id = None
     prospect.linkedin_reply_available_at = None
@@ -1362,6 +1634,13 @@ def confirm_linkedin_sent(db: Session, prospect: Prospect) -> str:
 def is_queue_eligible(prospect: Prospect, db: Session | None = None) -> bool:
     if not is_real_linkedin_profile_url(prospect.linkedin_url):
         return False
+    try:
+        from app.services.prospect_opt_out import is_suppressed
+
+        if is_suppressed(prospect):
+            return False
+    except Exception:  # noqa: BLE001
+        pass
     if getattr(prospect, "linkedin_sdr_marked_sent_at", None):
         return False
     if read_assist_status(prospect) == STATUS_SENT:
@@ -1375,6 +1654,13 @@ def is_queue_eligible(prospect: Prospect, db: Session | None = None) -> bool:
     except Exception:  # noqa: BLE001
         held = bool(getattr(prospect, "sequence_paused", False))
 
+    conn = read_connection_status(prospect)
+    # Flujo de conexión / post-Contactar: visible aunque el día de secuencia no sea LinkedIn.
+    if conn in (CONN_CHECKING, CONN_CHECK_QUEUED, CONN_CHECK_FAILED, CONN_INVITE_PENDING):
+        return True
+    if conn in (CONN_CONNECTED, CONN_INVITE_SENT):
+        return reply_visible_in_queue(prospect)
+
     campaign = None
     if db is not None:
         try:
@@ -1387,23 +1673,15 @@ def is_queue_eligible(prospect: Prospect, db: Session | None = None) -> bool:
     if not held:
         # Solo mostrar LI si el proximo toque ejecutable es LinkedIn.
         try:
-            from app.services.prospect_sequence import next_executable_channel
+            from app.services.prospect_sequence import next_touch_due_for_channel
 
-            ch = next_executable_channel(prospect, campaign)
-            if ch != "linkedin":
+            if not next_touch_due_for_channel(prospect, "linkedin", campaign):
                 if db is not None and _prospect_has_pending_linkedin_inbound(db, prospect.id):
                     return reply_visible_in_queue(prospect)
                 return False
         except Exception:  # noqa: BLE001
             pass
 
-    conn = read_connection_status(prospect)
-    # Verificando / falló verificación: cuentan en pending_verify, NO como Contactar/Mensaje.
-    if conn in (CONN_CHECKING, CONN_CHECK_QUEUED, CONN_CHECK_FAILED):
-        return True
-    # Tarea de conexión: solo tras not_connected verificado.
-    if conn == CONN_INVITE_PENDING:
-        return True
     started = getattr(prospect, "sequence_started_at", None)
     if isinstance(started, datetime) and not _has_pending_linkedin_sequence_touch(db, prospect):
         if db is not None and _prospect_has_pending_linkedin_inbound(db, prospect.id):
@@ -1493,10 +1771,12 @@ def save_linkedin_profile_urn(
 
 
 def build_task_read(db: Session, prospect: Prospect) -> LinkedInAssistTaskRead:
+    from app.services.linkedin_message_bubbles import linkedin_full_clipboard_text
+
     status = read_assist_status(prospect)
     action, is_reply = _task_action(db, prospect)
     conn = read_connection_status(prospect)
-    draft = (prospect.linkedin_assisted_draft or "").strip()
+    draft = linkedin_full_clipboard_text(prospect.linkedin_assisted_draft or "")
     if action == "connect":
         # Conectar: no mostrar el DM (se envía cuando acepten / ya conectados).
         message = ""
@@ -1650,9 +1930,31 @@ def build_campaign_queue(db: Session, campaign_id: int, viewer=None) -> LinkedIn
                 state_changed = True
         except Exception:  # noqa: BLE001
             pass
+        if not is_queue_eligible(p, db):
+            continue
         conn = read_connection_status(p)
-        # Connected / invite_sent sin borrador de calidad → compose en background.
-        if (
+        action, _is_reply = _task_action(db, p)
+        # Borrador listo YA en cola (piso CRM + upgrade IA en background). Nunca dejar vacío horas.
+        if action in ("message", "reply"):
+            draft = (getattr(p, "linkedin_assisted_draft", None) or "").strip()
+            needs_draft = (
+                not draft
+                or _is_generic_linkedin_stub(draft)
+                or _is_interim_linkedin_draft(draft, p)
+            )
+            if needs_draft:
+                if draft and (
+                    _is_generic_linkedin_stub(draft) or _is_interim_linkedin_draft(draft, p)
+                ):
+                    p.linkedin_assisted_draft = None
+                if campaign is not None:
+                    if getattr(campaign, "product", None) is None and campaign.product_id:
+                        from app.models.product import Product
+
+                        campaign.product = db.get(Product, int(campaign.product_id))
+                    _queue_ready_linkedin_draft(db, p, campaign, existing=None)
+                    state_changed = True
+        elif (
             conn in (CONN_CONNECTED, CONN_INVITE_SENT)
             and not getattr(p, "linkedin_sdr_marked_sent_at", None)
             and read_assist_status(p) != STATUS_SENT
@@ -1662,23 +1964,17 @@ def build_campaign_queue(db: Session, campaign_id: int, viewer=None) -> LinkedIn
             if not draft or _is_generic_linkedin_stub(draft) or _is_interim_linkedin_draft(
                 draft, p
             ):
-                if draft and _is_generic_linkedin_stub(draft):
+                if draft and (
+                    _is_generic_linkedin_stub(draft) or _is_interim_linkedin_draft(draft, p)
+                ):
                     p.linkedin_assisted_draft = None
+                if campaign is not None:
+                    if getattr(campaign, "product", None) is None and campaign.product_id:
+                        from app.models.product import Product
+
+                        campaign.product = db.get(Product, int(campaign.product_id))
+                    _queue_ready_linkedin_draft(db, p, campaign, existing=None)
                     state_changed = True
-                schedule_linkedin_quality_draft(int(p.id))
-        if not is_queue_eligible(p, db):
-            continue
-        action, _is_reply = _task_action(db, p)
-        # Mensajes: no mostrar stubs; vacío sí (grado ya resuelto; copy después).
-        if action in ("message", "reply"):
-            draft = (getattr(p, "linkedin_assisted_draft", None) or "").strip()
-            if draft and (
-                _is_generic_linkedin_stub(draft) or _is_interim_linkedin_draft(draft, p)
-            ):
-                schedule_linkedin_quality_draft(int(p.id))
-                continue
-            if not draft:
-                schedule_linkedin_quality_draft(int(p.id))
         tasks.append(build_task_read(db, p))
 
     if state_changed:
@@ -1703,12 +1999,17 @@ def build_campaign_queue(db: Session, campaign_id: int, viewer=None) -> LinkedIn
     invites_remaining = dsl.remaining(db, seller_id, dsl.KIND_LINKEDIN_INVITE) if seller_id else invites_limit
     dms_remaining = dsl.remaining(db, seller_id, dsl.KIND_LINKEDIN_DM) if seller_id else dms_limit
 
+    reply_tasks: list[LinkedInAssistTaskRead] = []
     schedulable: list[LinkedInAssistTaskRead] = []
     pending_verify = 0
     for t in tasks:
         if t.action == "verify_connect":
             if not LI_SAFE_NO_PROFILE_PROBE:
                 pending_verify += 1
+            continue
+        # Responder (inbound): siempre hoy, fuera del cupo Contactar/DM.
+        if t.is_reply or t.action == "reply":
+            reply_tasks.append(t)
             continue
         schedulable.append(t)
 
@@ -1754,12 +2055,37 @@ def build_campaign_queue(db: Session, campaign_id: int, viewer=None) -> LinkedIn
                 t.prospect_name,
             )
         )
+
+    # Pegar inbound (Respondieron) → card Responder; no es Handoff.
+    if reply_tasks:
+        reply_tasks.sort(
+            key=lambda t: (
+                priority_order.get(t.priority, 9),
+                t.prospect_name,
+            )
+        )
+        if day_buckets:
+            day_buckets[0].tasks = reply_tasks + list(day_buckets[0].tasks)
+        else:
+            day_buckets.append(
+                LinkedInAssistDayBucket(
+                    day_offset=0,
+                    label=qds.day_label(0),
+                    actionable=True,
+                    invites_limit=invites_limit,
+                    invites_scheduled=0,
+                    dms_limit=dms_limit,
+                    dms_scheduled=0,
+                    tasks=list(reply_tasks),
+                )
+            )
+
     visible = day_buckets[0].tasks if day_buckets else []
 
     return LinkedInAssistQueueRead(
         campaign_id=campaign_id,
         tasks=visible,
-        total_pending=len(schedulable),
+        total_pending=len(schedulable) + len(reply_tasks),
         invites_remaining=invites_remaining,
         invites_limit=invites_limit,
         dms_remaining=dms_remaining,
