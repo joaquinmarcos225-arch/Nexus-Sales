@@ -36,8 +36,10 @@ def sequence_email_touch_uses_gmail(*, day: int, channel: str) -> bool:
 
 
 def _campaign_wants_auto_send(campaign: Campaign) -> bool:
+    from app.services.operational_safety import auto_send_operations_allowed
+
     mode = (getattr(campaign, "outreach_email_mode", None) or OutreachEmailMode.draft_only.value).strip()
-    return mode == OutreachEmailMode.auto_send.value and _truthy_env("NEXUS_AUTO_SEND_ENABLED")
+    return mode == OutreachEmailMode.auto_send.value and auto_send_operations_allowed()
 
 
 def deliver_sequence_email_touch_via_gmail(
@@ -103,9 +105,60 @@ def deliver_sequence_email_touch_via_gmail(
     subj = (subject or "").strip()
     text = (body or "").strip()
     if not subj or not text:
-        raise HTTPException(status_code=502, detail="Falta asunto o cuerpo para el email.")
+        # Nunca frenar el arranque por un compose vacío: armar un mail mínimo usable.
+        company = (getattr(prospect, "company_name", None) or "").strip()
+        first = (getattr(prospect, "name", None) or "").strip().split()
+        greet = first[0] if first else ""
+        prod = ""
+        try:
+            prod_obj = getattr(campaign, "product", None)
+            prod = (getattr(prod_obj, "name", None) or "").strip() if prod_obj else ""
+        except Exception:
+            prod = ""
+        if not subj:
+            subj = (
+                f"Una idea para {company}"
+                if company
+                else (f"{prod}: ¿hablamos 15 minutos?" if prod else "¿Tenés 15 minutos esta semana?")
+            )
+        if not text:
+            hello = f"Hola {greet}," if greet else "Hola,"
+            pitch = prod or "nuestra solución"
+            text = (
+                f"{hello}\n\n"
+                f"Te escribo por {pitch}. "
+                f"¿Te viene bien una charla corta esta semana?\n\n"
+                f"Saludos"
+            )
+        logger.warning(
+            "sequence email empty compose patched prospect_id=%s day=%s",
+            getattr(prospect, "id", None),
+            day,
+        )
 
     cid = int(campaign.company_id)
+    if _campaign_wants_auto_send(campaign):
+        from app.services.operational_safety import (
+            assert_live_email_send_allowed,
+            find_confirmed_sequence_gmail_message,
+        )
+
+        assert_live_email_send_allowed(db, company_id=cid)
+        if isinstance(getattr(prospect, "id", None), int) and isinstance(getattr(campaign, "id", None), int):
+            existing = find_confirmed_sequence_gmail_message(
+                db, prospect_id=int(prospect.id), campaign_id=int(campaign.id), day=int(day)
+            )
+            if existing is not None:
+                gid = (existing.gmail_message_id or "").strip()
+                return {
+                    "message_id": existing.id,
+                    "gmail_draft_id": None,
+                    "gmail_message_id": gid,
+                    "thread_id": (prospect.gmail_thread_id or None),
+                    "gmail_web_link": f"https://mail.google.com/mail/u/0/#all/{gid}" if gid else None,
+                    "sent": True,
+                    "already_sent": True,
+                }
     sender_id: int | None = None
     row = None
     last_exc: Exception | None = None
@@ -126,12 +179,18 @@ def deliver_sequence_email_touch_via_gmail(
             ),
         ) from last_exc
 
+    if dsl.email_address_bounced(db, to_addr):
+        raise HTTPException(
+            status_code=400,
+            detail="Este email rebotó antes (la dirección no existe). No lo volvemos a intentar.",
+        )
     if not dsl.can_send(db, sender_id, dsl.KIND_EMAIL):
+        cap = int(dsl.email_cap_today(db, sender_id)["cap"])
         raise HTTPException(
             status_code=429,
             detail=(
-                f"Límite diario de emails alcanzado ({dsl.limit_for(dsl.KIND_EMAIL)}/día por SDR). "
-                "Se retoma mañana para cuidar la reputación de tu cuenta."
+                f"Límite de emails alcanzado ({cap} en 24 h para esta casilla). "
+                "Se retoma cuando se libere cupo, para cuidar la reputación de tu cuenta."
             ),
         )
 
@@ -159,7 +218,17 @@ def deliver_sequence_email_touch_via_gmail(
             gid = (out.get("gmail_message_id") or out.get("message_id") or "").strip() or None
             tid = (out.get("thread_id") or "").strip() or None
             web_link = out.get("gmail_web_link")
-            hist_prefix = f"[Gmail enviado · secuencia Día {day}]"
+            if not gid:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Gmail no devolvió ID de mensaje. No se marca como enviado. "
+                        "Revisá la casilla e intentá de nuevo."
+                    ),
+                )
+            from app.services.operational_safety import sequence_gmail_sent_prefix
+
+            hist_prefix = sequence_gmail_sent_prefix(day)
             log_event = "sequence_touch_gmail_sent"
         else:
             out = create_draft_for_user(
@@ -169,6 +238,7 @@ def deliver_sequence_email_touch_via_gmail(
                 to_addr=to_addr,
                 subject=subj,
                 body=text,
+                thread_id=(prospect.gmail_thread_id or None),
             )
             draft_id = (out.get("draft_id") or "").strip() or None
             gid = (out.get("message_id") or "").strip() or None
@@ -198,6 +268,11 @@ def deliver_sequence_email_touch_via_gmail(
     )
     db.add(msg)
     db.flush()
+    if auto_send and gid:
+        # Sobrevive un rollback posterior: si no, el retry vuelve a llamar a Gmail.
+        db.commit()
+        db.refresh(msg)
+        db.refresh(prospect)
 
     logger.info(
         "%s prospect_id=%s day=%s draft_id=%s message_id=%s",

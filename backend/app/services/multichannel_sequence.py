@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -67,15 +68,79 @@ def _set_fired(p: Prospect, days: list[int]) -> None:
     p.sequence_fired_milestones = json.dumps(sorted(set(days)))
 
 
-def _append_log(campaign: Campaign, line: str, *, kind: str = "info") -> None:
+# Un solo aviso live por prospecto/acción (re-generar borrador no debe spamear el feed).
+_SINGLETON_LIVE_KINDS = frozenset(
+    {
+        "linkedin_suggested",
+        "linkedin_connect_suggested",
+        "whatsapp_draft",
+        "whatsapp_suggested",
+    }
+)
+
+
+def _live_singleton_key(kind: str, message: str) -> str | None:
+    k = (kind or "").strip().lower()
+    if k not in _SINGLETON_LIVE_KINDS:
+        return None
+    msg = re.sub(r"\s+", " ", (message or "").strip().lower())
+    if not msg:
+        return None
+    return f"{k}|{msg}"
+
+
+def dedupe_outreach_activity_log(log: list | None) -> list | None:
+    """Deja un solo aviso sugerido/listo por prospecto (el más reciente)."""
+    if log is None:
+        return None
+    if not isinstance(log, list):
+        return None
+    seen: set[str] = set()
+    out: list = []
+    for row in reversed(log):
+        if not isinstance(row, dict):
+            out.append(row)
+            continue
+        key = _live_singleton_key(str(row.get("kind") or ""), str(row.get("message") or ""))
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(row)
+    out.reverse()
+    return out
+
+
+def _append_log(
+    campaign: Campaign,
+    line: str,
+    *,
+    kind: str = "info",
+    channel: str | None = None,
+) -> None:
     log = getattr(campaign, "outreach_activity_log", None)
     if not isinstance(log, list):
         log = []
-    entry = {
+    entry: dict[str, Any] = {
         "at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "kind": kind,
         "message": line,
     }
+    ch = (channel or "").strip().lower()
+    if ch:
+        entry["channel"] = ch
+    singleton = _live_singleton_key(kind, line)
+    if singleton:
+        kept: list = []
+        for row in log:
+            if not isinstance(row, dict):
+                kept.append(row)
+                continue
+            prev = _live_singleton_key(str(row.get("kind") or ""), str(row.get("message") or ""))
+            if prev == singleton:
+                continue
+            kept.append(row)
+        log = kept
     log = [*log[-199:], entry]
     campaign.outreach_activity_log = log
 
@@ -106,7 +171,7 @@ def _campaign_payload(campaign: Campaign) -> dict[str, str]:
 
 
 def _product_payload(campaign: Campaign) -> dict[str, str]:
-    p = campaign.product
+    p = getattr(campaign, "product", None)
     return {
         "name": (p.name if p else "") or "",
         "value_proposition": p.value_proposition if p and p.value_proposition else "",

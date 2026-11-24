@@ -105,6 +105,40 @@ def seller_channel_block(
         }
 
     if ch == "whatsapp":
+        # Meow (QR nativo): si la última sesión del vendedor está caída, hold.
+        try:
+            from app.models.whatsapp_meow import WhatsappMeowSession
+
+            meow = db.scalars(
+                select(WhatsappMeowSession)
+                .where(
+                    WhatsappMeowSession.company_id == company_id,
+                    WhatsappMeowSession.user_id == seller_id,
+                )
+                .order_by(WhatsappMeowSession.id.desc())
+            ).first()
+            meow_status = (meow.status if meow else "") or ""
+            meow_status = meow_status.strip().lower()
+            if meow is not None and meow_status in (
+                "disconnected",
+                "error",
+                "cancelled",
+            ):
+                return {
+                    "channel": "whatsapp",
+                    "code": "extension_disconnected",
+                    "error": (
+                        (meow.last_error or "").strip()
+                        or (
+                            "WhatsApp necesita reconexión. "
+                            "Andá a Integraciones → WhatsApp y escaneá el QR."
+                        )
+                    ),
+                    "action": "reconnect_extension",
+                    "status": meow_status,
+                }
+        except Exception:  # noqa: BLE001
+            pass
         row = _seller_account(
             db,
             company_id=company_id,
@@ -126,7 +160,7 @@ def seller_channel_block(
             )
         else:
             error = (
-                "WhatsApp (extensión Nexus) necesita reconexión. "
+                "WhatsApp (número QR) necesita reconexión. "
                 f"Estado: {status}. Reconectá WhatsApp en Integraciones."
             )
         return {
@@ -143,22 +177,31 @@ def seller_channel_block(
 
         get_valid_gmail_connection(db, company_id=company_id, user_id=seller_id)
         return None
-    except Exception as exc:  # noqa: BLE001
-        detail = str(getattr(exc, "detail", None) or exc).strip() or str(exc)
+    except Exception:  # noqa: BLE001
+        # Mensaje para la UI: práctico, sin jerga OAuth (invalid_grant, etc.).
         return {
             "channel": "email",
             "code": "gmail_disconnected",
-            "error": (
-                detail
-                if "Gmail" in detail or "Google" in detail or "reconect" in detail.lower()
-                else (
-                    "Gmail del vendedor no está conectado o el token venció. "
-                    "Reconectá Google en Integraciones."
-                )
-            ),
+            "error": "Google está desconectado. Conectalo de nuevo en Integraciones.",
             "action": "reconnect_gmail",
             "status": IntegrationStatus.error.value,
         }
+
+
+def _humanize_integration_block_error(*, channel: str, code: str, error: str) -> str:
+    """Copy práctica para la UI (sin jerga OAuth)."""
+    ch = (channel or "").strip().lower()
+    cd = (code or "").strip().lower()
+    low = (error or "").lower()
+    if (
+        ch == "email"
+        or cd == "gmail_disconnected"
+        or "invalid_grant" in low
+        or ("google" in low and ("revoc" in low or "desconect" in low or "conect" in low))
+        or ("gmail" in low and ("conect" in low or "token" in low or "oauth" in low))
+    ):
+        return "Google está desconectado. Conectalo de nuevo en Integraciones."
+    return (error or "").strip()
 
 
 def read_campaign_integration_block(campaign: Campaign) -> dict[str, Any] | None:
@@ -176,10 +219,13 @@ def read_campaign_integration_block(campaign: Campaign) -> dict[str, Any] | None
             error = str(entry.get("error") or entry.get("message") or "").strip()
             if not channel or not error:
                 continue
+            code = str(entry.get("code") or "extension_disconnected")
             return {
                 "channel": channel,
-                "code": str(entry.get("code") or "extension_disconnected"),
-                "error": error,
+                "code": code,
+                "error": _humanize_integration_block_error(
+                    channel=channel, code=code, error=error
+                ),
                 "action": str(entry.get("action") or "reconnect_extension"),
                 "at": entry.get("at"),
                 "blocked_prospects": int(entry.get("blocked_prospects") or 0),

@@ -99,13 +99,10 @@ def _keyword_probe(text: str) -> tuple[str | None, bool, bool]:
             "trimestre que viene",
             "próximo trimestre",
             "por ahora no",
-            "porfa",
-            "por favor",
-            "hablame",
-            "hableme",
             "hablame dentro",
             "hableme dentro",
-            "dentro de",
+            "hablame en",
+            "hableme en",
             "en 2 dias",
             "en dos dias",
             "un par de dias",
@@ -151,6 +148,15 @@ def _keyword_probe(text: str) -> tuple[str | None, bool, bool]:
             re.I,
         )
     )
+    # "estoy en reunión" / "escribime más tarde" = ocupado, no pide agendar.
+    if wants_meeting and re.search(
+        r"\bestoy en (una )?reuni[oó]n\b|\ben una reuni[oó]n\b", t, re.I
+    ):
+        wants_meeting = False
+    if wants_meeting and objection == "timing" and any(
+        x in t for x in ("mas tarde", "más tarde", "luego", "despues", "después", "escribime")
+    ):
+        wants_meeting = False
     return objection, brushoff, wants_meeting
 
 
@@ -184,12 +190,14 @@ def _timing_hold_probe(text: str, objection: str | None) -> bool:
         "volvé el",
         "recién el",
         "coordinamos en otro",
-        "hablame",
-        "hableme",
-        "dentro de",
+        "hablame dentro",
+        "hableme dentro",
+        "hablame en",
+        "hableme en",
+        "dentro de unos",
+        "dentro de un",
         "par de dias",
         "par de días",
-        "porfa",
     )
     return any(n in t for n in needles)
 
@@ -220,6 +228,20 @@ def inbound_wants_immediate_booking(text: str | None) -> bool:
     ):
         return False
     if re.search(r"\bahora no\b|\bno ahora\b|ahora no tengo", t):
+        return False
+    # Ocupado ahora ≠ quiere agendar ya (anula el match de "ahora"+"reunión").
+    if re.search(r"\bestoy en (una )?reunion\b|\ben una reunion\b", t):
+        return False
+    if any(
+        x in t
+        for x in (
+            "escribime mas tarde",
+            "escribime luego",
+            "hablamos mas tarde",
+            "hablamos luego",
+            "despues te escribo",
+        )
+    ):
         return False
     if _explicit_meeting_commitment_heuristic(base):
         return True
@@ -566,6 +588,7 @@ def classify_inbound_full(
     prior_interest: str | None,
     conversation_digest: str,
     education: str,
+    outreach_language: str | None = None,
 ) -> InboundSignals:
     """Keywords primero; OpenAI solo si el mensaje es ambiguo."""
     from app.services import openai_service
@@ -580,6 +603,7 @@ def classify_inbound_full(
                 inbound_text=text,
                 conversation_digest=conversation_digest,
                 education=education,
+                outreach_language=outreach_language,
             )
             llm = parse_classifier_json(raw)
             merged = merge_llm_signals(kw, llm, prior_interest)
@@ -882,8 +906,10 @@ def build_professional_closure_reply(
     *,
     prospect_name: str | None,
     closure_kind: str,
+    inbound_text: str | None = None,
 ) -> str:
     """Cierre SDR experimentado — sin pitch, sin re-explicar producto."""
+    _ = inbound_text  # aceptado por callers; el cierre no depende del cuerpo
     first = _prospect_first_name(prospect_name)
     if closure_kind == CLOSURE_KIND_REJECTION:
         return (
@@ -1041,8 +1067,9 @@ def inbound_requests_meeting_or_demo(text: str | None) -> bool:
 
 def product_explanation_deferred_to_meeting(text: str | None) -> bool:
     """
-    Pregunta exploratoria ('cómo funciona') junto con pedido de reunión —
-    el SDR experimentado responde en la llamada, no repite el pitch por email.
+    Exploratoria ('cómo funciona' / 'contame más') + pedido de reunión.
+    Ya NO significa 'no explicar': el caller debe contestar con ficha y después agendar.
+    Flag útil para priorizar etapa agendar *después* de informar.
     """
     norm = fold_accents(normalize_inbound_text_for_classification(text or ""))
     if not inbound_requests_meeting_or_demo(text):
@@ -1099,8 +1126,50 @@ def resolve_reply_objective(
     return "seguimiento"
 
 
+def looks_like_calendar_system_email(text: str | None) -> bool:
+    """
+    Invitaciones / updates de Google Calendar (u similares) que llegan al inbox
+    y NO son el prospecto escribiendo. No auto-contestar ni renegociar agenda.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    t = fold_accents(raw)
+    strong = (
+        r"join with google meet|"
+        r"unirse con google meet|"
+        r"meet\.google\.com/|"
+        r"calendar-notification@google\.com|"
+        r"invitation:\s*|"
+        r"asunto:\s*invitation:|"
+        r"updated invitation:|"
+        r"canceled event:|"
+        r"cancelled event:|"
+        r"evento cancelado:|"
+        r"when:\s*.+\d{1,2}:\d{2}.+where:|"
+        r"\bview event\b|"
+        r"\byes\s*\|\s*no\s*\|\s*maybe\b|"
+        r"aceptar\s*\|\s*rechazar"
+    )
+    if re.search(strong, t, re.I):
+        return True
+    if re.search(
+        r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+        r"lunes|martes|miercoles|jueves|viernes|sabado|domingo",
+        t,
+        re.I,
+    ) and re.search(
+        r"\d{1,2}(?::\d{2})?\s*(?:am|pm|hs|hrs)?\s*[–\-−]\s*\d{1,2}", t, re.I
+    ) and re.search(r"standard time|horario estandar|time zone|zona horaria|gmt[+-]|utc", t, re.I):
+        if re.search(r"google meet|meet\.google|join (?:by|with)|unirse", t, re.I):
+            return True
+    return False
+
+
 def _auto_reply_probe(text: str) -> bool:
     t = fold_accents(text)
+    if looks_like_calendar_system_email(t):
+        return True
     return bool(
         re.search(
             r"(fuera de (?:la )?oficina|out of office|respuesta automatica|auto[\s-]?reply|"
@@ -1116,9 +1185,12 @@ def _referral_probe(text: str) -> bool:
     t = fold_accents(text)
     return bool(
         re.search(
-            r"(no soy (?:la )?persona|no es mi area|habla con|hablá con|contacta(?:r)? a|"
+            r"(no soy (?:la )?persona|no es mi area|hablar? con|hablá con|contacta(?:r)? a|"
             r"contactá a|escribile a|el responsable es|deriv|redirig|otra persona|"
-            r"no manejo|no me corresponde|te paso con|habla con mi)",
+            r"no manejo|no me corresponde|te paso con|habla con mi|"
+            # Derivación: «lo maneja Martín» / «lo ve el gerente» — no «cómo lo maneja el sistema».
+            r"lo maneja (?!el sistema|la gente|el producto|esto)|"
+            r"lo ve (?:el|la|mi)\b)",
             t,
             re.I,
         )

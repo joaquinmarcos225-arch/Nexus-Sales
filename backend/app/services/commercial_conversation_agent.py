@@ -297,31 +297,41 @@ def process_inbound_turn(
                 prospect,
                 campaign,
                 defer_resume_at=resume,
+                inbound_snippet=inbound_text[:480],
+                move_to_postergados=not testing,
             )
 
-    from app.services.meeting_booking import (
-        attempt_auto_book_from_message,
-        prepare_agendar_reply_with_calendar_link,
-    )
+    from app.services.inbound_turn_orchestrator import resolve_inbound_scheduling_reply
+    from app.services.meeting_booking import prepare_agendar_reply_with_calendar_link
 
-    meeting_booking: dict[str, Any] | None = attempt_auto_book_from_message(
+    decision = resolve_inbound_scheduling_reply(
         db,
         campaign=campaign,
         prospect=prospect,
         inbound_text=inbound_text,
         reply_objective=reply_objective,
         sig=sig,
+        suggested_reply=suggested_reply or "",
         testing=testing,
+        channel=(channel or "email"),
     )
-
+    meeting_booking: dict[str, Any] | None = decision.meeting_booking
     reply_body = (suggested_reply or "").strip()
-    if meeting_booking and meeting_booking.get("confirmation_reply"):
-        reply_body = str(meeting_booking["confirmation_reply"])
-    elif meeting_booking and meeting_booking.get("booking_failed_reply"):
-        reply_body = str(meeting_booking["booking_failed_reply"])
-    elif meeting_booking and meeting_booking.get("alternatives_reply"):
-        reply_body = str(meeting_booking["alternatives_reply"])
-    else:
+    if decision.action != "skip_autoresponder" and (decision.reply_body or "").strip():
+        if decision.action in (
+            "booked",
+            "alternatives",
+            "ask_email",
+            "ask_slot",
+            "offer_hours",
+            "calendar_link",
+            "booking_failed",
+            "canceled",
+        ):
+            reply_body = str(decision.reply_body)
+        elif decision.action == "normal_reply" and decision.reply_body:
+            reply_body = str(decision.reply_body)
+    if not reply_body:
         reply_body = prepare_agendar_reply_with_calendar_link(
             prospect=prospect,
             campaign=campaign,
@@ -357,6 +367,7 @@ def process_inbound_turn(
             prospect,
             campaign_calendar_link=getattr(campaign, "calendar_link", None),
             outbound_text=reply_body,
+            closes_inbound_review=True,
         )
         delivery_mode = "auto_sent"
         auto_sent = True
@@ -386,6 +397,12 @@ def process_inbound_turn(
     if meeting_booking and meeting_booking.get("calendar_created"):
         conv_state = CONV_MEETING
     prospect.conversation_state = conv_state
+    try:
+        from app.services.conversation_summary import refresh_conversation_summary
+
+        refresh_conversation_summary(db, prospect)
+    except Exception:
+        pass
 
     return {
         "delivery_mode": delivery_mode,

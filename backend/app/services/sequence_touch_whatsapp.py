@@ -56,13 +56,27 @@ def friendly_whatsapp_api_error(raw: str) -> str:
 
 
 def sequence_whatsapp_touch_uses_api(*, day: int, channel: str) -> bool:
-    """True solo con Cloud API opt-in. Default del producto: cola WhatsApp Web asistida."""
-    _ = day
-    if channel != "whatsapp" or not om.is_real_mode():
-        return False
-    from app.services.whatsapp_cloud_service import is_whatsapp_cloud_api_enabled
+    """True → envío server-side (Gupshup / Cloud API / dry-run), como Gmail auto_send.
 
-    return is_whatsapp_cloud_api_enabled()
+    Default del producto: cola WhatsApp Web asistida.
+    WHATSAPP_PROVIDER=gupshup → Gupshup (dry-run o api_key+source).
+    WHATSAPP_USE_CLOUD_API=1 → Meta Graph (legado).
+    """
+    _ = day
+    if str(channel or "").strip().lower() != "whatsapp" or not om.is_real_mode():
+        return False
+    from app.services.gupshup_whatsapp_service import is_gupshup_ready
+
+    if is_gupshup_ready():
+        return True
+    from app.services.whatsapp_cloud_service import whatsapp_config
+
+    cfg = whatsapp_config()
+    if not cfg.get("use_cloud_api"):
+        return False
+    if cfg.get("dry_run"):
+        return True
+    return bool(cfg.get("access_token") and cfg.get("phone_number_id"))
 
 
 def deliver_sequence_whatsapp_touch(
@@ -110,15 +124,22 @@ def deliver_sequence_whatsapp_touch(
                 "Se pospone el toque de WhatsApp hasta que haya interacción previa."
             ),
         )
-    if not dsl.can_send(db, actor_id, dsl.KIND_WHATSAPP):
-        effective = dsl.whatsapp_effective_limit_today(db, actor_id)
-        bonus = dsl.whatsapp_inbounds_today(db, actor_id)
-        bonus_note = f" (+{bonus} por respuestas hoy)" if bonus else ""
+    if dsl.whatsapp_monthly_cap_reached(db, actor_id):
         raise HTTPException(
             status_code=429,
             detail=(
-                f"Límite diario de WhatsApp alcanzado ({effective}/día{bonus_note}). "
-                "Se retoma mañana para no bloquear tu cuenta."
+                f"Tope mensual de WhatsApp alcanzado ({dsl.monthly_whatsapp_unanswered_limit()} mensajes "
+                "a personas que todavía no respondieron). WhatsApp bloquea por encima de eso; "
+                "se retoma el mes que viene o cuando respondan."
+            ),
+        )
+    if not dsl.can_send(db, actor_id, dsl.KIND_WHATSAPP):
+        effective = dsl.whatsapp_effective_limit_today(db, actor_id)
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Tope de contacto en frío WhatsApp ({effective} personas/día). "
+                "Las charlas que ya respondieron no cuentan. Se retoma mañana."
             ),
         )
 
@@ -133,14 +154,47 @@ def deliver_sequence_whatsapp_touch(
     if not text:
         raise HTTPException(status_code=502, detail="Falta cuerpo para enviar por WhatsApp.")
 
+    from app.services.gupshup_whatsapp_service import (
+        gupshup_config,
+        is_gupshup_ready,
+        send_sequence_whatsapp_via_gupshup,
+    )
+    from app.services.whatsapp_cloud_service import whatsapp_config
+    from app.services.whatsapp_commercial import WhatsAppCommercialError, assert_can_send_whatsapp
+    from app.models.company import Company
+    from app.models.whatsapp_dispatch import WhatsAppDispatch
+
+    gupshup = is_gupshup_ready()
+    dry_run = bool(gupshup_config()["dry_run"] if gupshup else whatsapp_config().get("dry_run"))
+    company = db.get(Company, int(campaign.company_id))
+    if company is None:
+        raise HTTPException(status_code=400, detail="La campaña no tiene empresa.")
+
+    gate: dict[str, Any] = {}
+    if not dry_run:
+        try:
+            gate = assert_can_send_whatsapp(db, company, digits=to_digits)
+        except WhatsAppCommercialError as exc:
+            db.commit()
+            raise HTTPException(status_code=exc.http_status, detail=exc.detail) from exc
+
     try:
-        out = send_sequence_whatsapp_message(
-            to_digits=to_digits,
-            body=text,
-            day=day,
-            prospect_name=prospect.name,
-            company_name=prospect.company_name,
-        )
+        if gupshup:
+            out = send_sequence_whatsapp_via_gupshup(
+                to_digits=to_digits,
+                body=text,
+                day=day,
+                prospect_name=prospect.name,
+                company_name=prospect.company_name,
+            )
+        else:
+            out = send_sequence_whatsapp_message(
+                to_digits=to_digits,
+                body=text,
+                day=day,
+                prospect_name=prospect.name,
+                company_name=prospect.company_name,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -150,13 +204,13 @@ def deliver_sequence_whatsapp_touch(
         ) from exc
 
     wamid = (out.get("whatsapp_message_id") or "").strip() or None
-    if not wamid and not out.get("dry_run"):
+    gs_id = (out.get("gupshup_message_id") or "").strip() or None
+    if not wamid and not gs_id and not out.get("dry_run"):
         raise HTTPException(
             status_code=503,
             detail=(
-                "Meta aceptó la solicitud pero no devolvió ID de mensaje. "
-                "Revisá que el número esté en la lista permitida y que hayas escrito "
-                "al número comercial de prueba en las últimas 24 h."
+                "El proveedor aceptó la solicitud pero no devolvió ID de mensaje. "
+                "Revisá Gupshup/Meta y reintentá."
             ),
         )
 
@@ -168,9 +222,30 @@ def deliver_sequence_whatsapp_touch(
         message=hist_text,
         channel="whatsapp",
         direction="outbound",
-        whatsapp_message_id=wamid,
+        whatsapp_message_id=wamid or gs_id,
     )
     db.add(msg)
+    db.flush()
+
+    dispatch = WhatsAppDispatch(
+        company_id=int(company.id),
+        prospect_id=int(prospect.id),
+        campaign_id=int(campaign.id),
+        outreach_message_id=int(msg.id),
+        destination_digits=to_digits,
+        dest_country=str(gate.get("country") or "")[:2] or None,
+        category="marketing",
+        provider="gupshup" if gupshup else "meta",
+        gupshup_message_id=gs_id,
+        whatsapp_message_id=wamid,
+        submit_status="submitted",
+        last_event="submitted",
+        billed_units=0,
+        reserved_units=0 if out.get("dry_run") else 1,
+        estimated_cost_usd=float(gate.get("estimated_cost_usd") or 0),
+        dry_run=bool(out.get("dry_run")),
+    )
+    db.add(dispatch)
     db.flush()
 
     followup_engine.record_ai_outbound(
@@ -197,6 +272,8 @@ def deliver_sequence_whatsapp_touch(
     )
     return {
         "message_id": msg.id,
-        "whatsapp_message_id": wamid,
+        "whatsapp_message_id": wamid or gs_id,
+        "gupshup_message_id": gs_id,
         "whatsapp_dry_run": bool(out.get("dry_run")),
+        "dispatch_id": dispatch.id,
     }

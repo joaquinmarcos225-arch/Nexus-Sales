@@ -22,6 +22,14 @@ from app.services import followup_engine
 from app.services import multichannel_sequence as mseq
 from app.services import pipeline_sync
 from app.services.ai_instruction_context import campaign_education_blob
+from app.services.gmail_api_quota import (
+    GmailQuotaContext,
+    GmailQuotaExhausted,
+    GmailRateLimitError,
+    draft_reconcile_min_units,
+    inbound_prospects_per_campaign,
+    is_google_invalid_grant,
+)
 from app.services.gmail_automation_flags import gmail_automation_enabled, log_gmail_automation_skipped
 from app.services.gmail_drafts import get_valid_gmail_connection
 from app.services.sequence_gmail_draft_sent import (
@@ -49,6 +57,40 @@ from app.services.inbound_auto_reply import (
 from app.services.outreach_simulation import make_message
 
 logger = logging.getLogger(__name__)
+
+_SEARCH_MIN_QUOTA_UNITS = 15
+
+
+def _inbound_prospect_sort_key(prospect: Prospect) -> tuple:
+    has_tid = 0 if (prospect.gmail_thread_id or "").strip() else 1
+    lob = prospect.last_outbound_at
+    ts = lob.timestamp() if lob is not None else 0.0
+    return (has_tid, -ts, prospect.id)
+
+
+def _resolve_thread_cached(
+    client: httpx.Client,
+    access: str,
+    *,
+    prospect: Prospect,
+    user_email: str,
+    quota_ctx: GmailQuotaContext | None,
+) -> str | None:
+    if quota_ctx is not None and prospect.id in quota_ctx.thread_resolve_cache:
+        return quota_ctx.thread_resolve_cache[prospect.id]
+    pe = _norm_email(prospect.email)
+    if not pe:
+        return None
+    tid = resolve_thread_id_for_prospect(
+        client,
+        access,
+        user_email=user_email,
+        prospect_email=pe,
+        quota_ctx=quota_ctx,
+    )
+    if quota_ctx is not None:
+        quota_ctx.thread_resolve_cache[prospect.id] = tid
+    return tid
 
 
 def _b64url_decode(data: str) -> str:
@@ -175,6 +217,74 @@ def _is_gmail_delivery_bounce(*, subject: str, body: str, from_header: str = "")
     return False
 
 
+def _dsn_skip_inbound(
+    db: Session,
+    *,
+    campaign: Campaign,
+    prospect: Prospect,
+    gmail_message_id: str,
+    subject: str,
+    body: str,
+    from_header: str = "",
+    trace: list[str] | None = None,
+) -> bool:
+    """True si es aviso de Gmail (no respuesta). Solo graba rebote si es definitivo."""
+    if not _is_gmail_delivery_bounce(subject=subject, body=body, from_header=from_header):
+        return False
+    from app.services.mailbox_health import is_temporary_delay
+
+    mid = (gmail_message_id or "").strip()
+    if is_temporary_delay(subject, body):
+        if trace is not None:
+            trace.append(f"delay_skipped prospect={prospect.id} mid={mid}")
+        return True
+    _record_delivery_bounce_for_prospect(
+        db,
+        campaign=campaign,
+        prospect=prospect,
+        gmail_message_id=mid,
+        body=body,
+    )
+    if trace is not None:
+        trace.append(f"bounce_skipped prospect={prospect.id} mid={mid}")
+    return True
+
+
+def _record_delivery_bounce_for_prospect(
+    db: Session,
+    *,
+    campaign: Campaign,
+    prospect: Prospect,
+    gmail_message_id: str,
+    body: str = "",
+) -> None:
+    """Marca el bounce al instante (no esperar al scan horario de mailbox health)."""
+    mid = (gmail_message_id or "").strip()
+    if not mid:
+        return
+    try:
+        from app.services.mailbox_health import bounced_recipients, record_bounce
+
+        recipients = bounced_recipients({}, body or "")
+        pe = (prospect.email or "").strip().lower()
+        if pe and pe not in recipients:
+            recipients = [pe, *recipients]
+        record_bounce(
+            db,
+            seller_id=int(campaign.seller_id),
+            company_id=int(campaign.company_id) if campaign.company_id else None,
+            gmail_message_id=mid,
+            recipients=recipients,
+        )
+    except Exception:
+        logger.debug(
+            "record bounce failed prospect_id=%s mid=%s",
+            getattr(prospect, "id", None),
+            mid,
+            exc_info=True,
+        )
+
+
 def _is_prospect_reply_message(
     headers: dict[str, str],
     *,
@@ -207,19 +317,39 @@ def prospect_has_outbound_touch(db: Session, prospect_id: int) -> bool:
     return int(n or 0) > 0
 
 
+def prospect_has_email_outbound(db: Session, prospect_id: int) -> bool:
+    """True si Nexus ya mandó (o borró/envió) mail a este prospecto.
+
+    Sin eso, un `from:email` abierto puede atribuir mails ajenos/del tester
+    cuando el contacto pasó su correo por WhatsApp.
+    """
+    n = db.scalar(
+        select(func.count(OutreachMessage.id)).where(
+            OutreachMessage.prospect_id == prospect_id,
+            OutreachMessage.direction == "outbound",
+            OutreachMessage.channel == "email",
+        )
+    )
+    return int(n or 0) > 0
+
+
+def gmail_inbound_scan_skip_reason(db: Session, prospect: Prospect) -> str | None:
+    """
+    Gate duro Gmail:
+    1) Sin «Iniciar secuencia» → no escuchar.
+    2) Sin outbound email Nexus → no hay hilo Nexus (no mails ajenos / Calendar spam).
+    """
+    if getattr(prospect, "sequence_started_at", None) is None:
+        return "sin_secuencia"
+    if not prospect_has_email_outbound(db, int(prospect.id)):
+        return "sin_outbound_email_nexus"
+    return None
+
+
 def _conversation_digest_rows(db: Session, prospect_id: int, limit: int = 18) -> str:
-    rows = db.scalars(
-        select(OutreachMessage)
-        .where(OutreachMessage.prospect_id == prospect_id)
-        .order_by(OutreachMessage.created_at.asc(), OutreachMessage.id.asc())
-    ).all()
-    lines: list[str] = []
-    for m in rows[-limit:]:
-        msg = (m.message or "").strip().replace("\n", " ")
-        if not msg:
-            continue
-        lines.append(f"- {m.sender_type}/{m.direction}: {msg[:360]}")
-    return "\n".join(lines) if lines else "(vacío)"
+    from app.services.conversation_history import conversation_digest
+
+    return conversation_digest(db, prospect_id, limit=limit)
 
 
 def _has_pending_review_inbound(db: Session, prospect_id: int) -> bool:
@@ -261,6 +391,12 @@ def process_gmail_inbound_for_prospect(
     Persiste un mensaje inbound real (dedupe por gmail_message_id) y dispara clasificación + reglas.
     Devuelve True si insertó un mensaje nuevo.
     """
+    from app.services.meeting_scheduling_extras import should_ignore_inbound_after_meeting
+
+    # Reunión confirmada: no persistir ni clasificar (cuesta OpenAI / ruido en live).
+    if should_ignore_inbound_after_meeting(prospect):
+        return False
+
     exists = db.scalar(
         select(func.count(OutreachMessage.id)).where(
             OutreachMessage.prospect_id == prospect.id,
@@ -270,12 +406,26 @@ def process_gmail_inbound_for_prospect(
     if int(exists or 0) > 0:
         return False
 
-    body = (inbound_plain or "").strip()
+    from app.services.meeting_slot_parser import strip_email_reply_quotes
+
+    raw_body = (inbound_plain or "").strip()
+    body = strip_email_reply_quotes(raw_body) or raw_body
     if len(body) < 2:
         return False
 
+    # Invites/updates de Calendar: no son el prospecto escribiendo en el hilo Nexus.
+    if ci.looks_like_calendar_system_email(f"{subject or ''}\n{body}"):
+        return False
+
+    # Sin mail nuestro previo no hay conversación Nexus que escuchar.
+    if gmail_inbound_scan_skip_reason(db, prospect):
+        return False
+
+    from app.services import out_of_office
+
+    away = out_of_office.is_out_of_office(subject, body)
     display = (
-        "[Gmail · respuesta real]\n"
+        f"[Gmail · {'respuesta automática' if away else 'respuesta real'}]\n"
         f"Asunto: {(subject or '').strip() or '—'}\n\n"
         f"{body}"
     )
@@ -285,22 +435,36 @@ def process_gmail_inbound_for_prospect(
         sender_type="prospect",
         message=display,
         channel="email",
-        direction="inbound",
+        direction=out_of_office.DIRECTION if away else "inbound",
         gmail_message_id=gmail_message_id,
     )
     db.add(msg)
     db.flush()
 
+    if away:
+        out_of_office.apply_out_of_office(db, prospect=prospect, campaign=campaign, body=body)
+        return True
+
     followup_engine.record_prospect_inbound(db, prospect)
+    from app.services import prospect_opt_out
+
+    if prospect_opt_out.should_suppress_inbound(prospect, body):
+        prospect_opt_out.apply_opt_out(
+            db, campaign=campaign, prospect=prospect, channel="email", inbound_text=body
+        )
+        return True
     mseq.on_inbound_pause_sequence(db, prospect)
 
     education = campaign_education_blob(db, campaign)
     digest = _conversation_digest_rows(db, prospect.id)
+    from app.services.outreach_language import language_from_campaign_model
+
     sig = ci.classify_inbound_full(
         inbound_text=body,
         prior_interest=getattr(prospect, "interest_level", None),
         conversation_digest=digest,
         education=education,
+        outreach_language=language_from_campaign_model(campaign),
     )
     followup_engine.apply_inbound_signals(
         db,
@@ -346,6 +510,7 @@ def process_gmail_inbound_for_prospect(
             campaign,
             f"Nexus detectó respuesta por email · {prospect.name or prospect.email} (prioridad reunión)",
             kind="inbound",
+            channel="email",
         )
         logger.info(
             "inbound processed (meeting priority) prospect_id=%s gmail_message_id=%s",
@@ -399,6 +564,7 @@ def process_gmail_inbound_for_prospect(
         campaign,
         f"Nexus detectó respuesta por email · {prospect.name or prospect.email}",
         kind="inbound",
+        channel="email",
     )
 
     logger.info(
@@ -437,12 +603,24 @@ def _handle_inbound_message(
     Importa inbound si es nuevo y dispara auto-respuesta (idempotente).
     Devuelve (imported 0|1, outcome de auto-reply).
     """
+    from app.services.meeting_scheduling_extras import should_ignore_inbound_after_meeting
+
     imported_flag = 0
     reply_outcome = "skipped"
     prior_status = (prospect.status or "").strip()
     mid = (gmail_message_id or "").strip()
-    if _is_gmail_delivery_bounce(subject=subject, body=inbound_plain):
-        trace.append(f"bounce_skipped prospect={prospect.id} mid={mid}")
+    if should_ignore_inbound_after_meeting(prospect):
+        trace.append(f"inbound_ignore_meeting prospect={prospect.id} mid={mid or '—'}")
+        return 0, "skipped_closed"
+    if _dsn_skip_inbound(
+        db,
+        campaign=campaign,
+        prospect=prospect,
+        gmail_message_id=mid,
+        subject=subject,
+        body=inbound_plain,
+        trace=trace,
+    ):
         return 0, "skipped"
     try:
         if process_gmail_inbound_for_prospect(
@@ -461,6 +639,13 @@ def _handle_inbound_message(
         trace.append(f"import_error prospect={prospect.id}: {exc}")
         logger.exception("inbound import failed prospect_id=%s", prospect.id)
         return 0, "skipped"
+
+    from app.services.meeting_slot_parser import strip_email_reply_quotes
+    from app.services.out_of_office import is_out_of_office
+
+    if is_out_of_office(subject, strip_email_reply_quotes(inbound_plain or "") or inbound_plain):
+        trace.append(f"out_of_office prospect={prospect.id} mid={mid}")
+        return imported_flag, "skipped_out_of_office"
 
     if auto_reply_is_finished(db, prospect.id, mid):
         trace.append(f"auto_reply_done prospect={prospect.id} mid={mid}")
@@ -515,6 +700,7 @@ def _sync_prospect_via_gmail_search(
     campaign: Campaign,
     user_email: str,
     trace: list[str],
+    quota_ctx: GmailQuotaContext | None = None,
 ) -> tuple[int, int, int, str]:
     """
     Busca mensajes `from:prospect` en Gmail (sin depender solo del thread guardado).
@@ -522,6 +708,17 @@ def _sync_prospect_via_gmail_search(
     """
     pe = _norm_email(prospect.email)
     if not pe:
+        return 0, 0, 0, "skipped"
+    ue = _norm_email(user_email)
+    if ue and pe == ue:
+        trace.append(f"search_skip prospect={prospect.id}: email=cuenta Gmail conectada")
+        return 0, 0, 0, "skipped"
+
+    # Solo buscar from:email si Nexus ya mandó mail a este prospecto.
+    # Thread suelto NO alcanza: resolve podía enganchar invites de Calendar.
+    skip = gmail_inbound_scan_skip_reason(db, prospect)
+    if skip:
+        trace.append(f"search_skip prospect={prospect.id}: {skip}")
         return 0, 0, 0, "skipped"
 
     contacted_statuses = {
@@ -531,9 +728,7 @@ def _sync_prospect_via_gmail_search(
         ProspectStatus.meeting_booked.value,
     }
     status = (prospect.status or "").strip()
-    has_touch = prospect_has_outbound_touch(db, prospect.id) or bool(
-        (prospect.gmail_thread_id or "").strip()
-    )
+    has_touch = prospect_has_outbound_touch(db, prospect.id)
     if not has_touch and status not in contacted_statuses:
         trace.append(f"search_skip prospect={prospect.id}: sin outbound previo")
         return 0, 0, 0, "skipped"
@@ -545,9 +740,29 @@ def _sync_prospect_via_gmail_search(
         f"from:{pe} newer_than:30d",
         f"from:{pe} newer_than:7d in:inbox",
     ]
+    budget = quota_ctx.budget if quota_ctx else None
+    retry = quota_ctx.retry if quota_ctx else None
 
     for q in queries:
-        data = gmail_get(client, access, "/messages", params={"q": q, "maxResults": "15"})
+        try:
+            data = gmail_get(
+                client,
+                access,
+                "/messages",
+                params={"q": q, "maxResults": "15"},
+                budget=budget,
+                retry=retry,
+            )
+        except GmailRateLimitError:
+            if quota_ctx:
+                quota_ctx.mark_rate_limited()
+            trace.append(f"rate_limited search prospect={prospect.id}")
+            raise
+        except GmailQuotaExhausted:
+            if quota_ctx:
+                quota_ctx.mark_quota_exhausted()
+            trace.append(f"quota_deferred search prospect={prospect.id}")
+            raise
         if data.get("_unauthorized"):
             trace.append(f"search_unauthorized prospect={prospect.id}")
             break
@@ -557,7 +772,7 @@ def _sync_prospect_via_gmail_search(
                 continue
             seen_mids.add(mid)
             fetched += 1
-            full = fetch_message_full(client, access, str(mid))
+            full = fetch_message_full(client, access, str(mid), quota_ctx=quota_ctx)
             if not full:
                 continue
             headers = _header_map(full.get("payload") or {})
@@ -572,12 +787,16 @@ def _sync_prospect_via_gmail_search(
                 db.flush()
             subj = headers.get("subject", "")
             plain = plain_body_from_gmail_message(full)
-            if _is_gmail_delivery_bounce(
+            if _dsn_skip_inbound(
+                db,
+                campaign=campaign,
+                prospect=prospect,
+                gmail_message_id=str(mid),
                 subject=subj,
                 body=plain,
                 from_header=headers.get("from", ""),
+                trace=trace,
             ):
-                trace.append(f"bounce_skipped prospect={prospect.id} mid={mid}")
                 continue
             imp, auto_out = _handle_inbound_message(
                 db,
@@ -603,6 +822,7 @@ def _sync_prospect_via_thread(
     campaign: Campaign,
     user_email: str,
     trace: list[str],
+    quota_ctx: GmailQuotaContext | None = None,
 ) -> tuple[int, int, int, int, str]:
     """
     Lee hilo completo. Devuelve (imported, threads_examined, messages_in_thread, replies_detected, last_auto_outcome).
@@ -611,10 +831,24 @@ def _sync_prospect_via_thread(
     if not pe:
         return 0, 0, 0, 0, "skipped"
 
+    skip = gmail_inbound_scan_skip_reason(db, prospect)
+    if skip:
+        # Thread huérfano (p. ej. invite Calendar) no debe seguir escaneándose.
+        if (prospect.gmail_thread_id or "").strip() and skip == "sin_outbound_email_nexus":
+            prospect.gmail_thread_id = None
+            db.flush()
+            trace.append(f"thread_cleared_no_nexus_outbound prospect={prospect.id}")
+        trace.append(f"thread_skip prospect={prospect.id}: {skip}")
+        return 0, 0, 0, 0, "skipped"
+
     tid = (prospect.gmail_thread_id or "").strip()
     if not tid:
-        tid = resolve_thread_id_for_prospect(
-            client, access, user_email=user_email, prospect_email=pe
+        tid = _resolve_thread_cached(
+            client,
+            access,
+            prospect=prospect,
+            user_email=user_email,
+            quota_ctx=quota_ctx,
         )
         if tid:
             prospect.gmail_thread_id = tid
@@ -624,7 +858,22 @@ def _sync_prospect_via_thread(
         trace.append(f"thread_missing prospect={prospect.id}")
         return 0, 0, 0, 0, "skipped"
 
-    thread = fetch_thread_full(client, access, tid)
+    try:
+        thread = fetch_thread_full(client, access, tid, quota_ctx=quota_ctx)
+    except GmailRateLimitError:
+        if quota_ctx:
+            quota_ctx.mark_rate_limited()
+        trace.append(f"rate_limited thread prospect={prospect.id}")
+        raise
+    except GmailQuotaExhausted:
+        if quota_ctx:
+            quota_ctx.mark_quota_exhausted()
+        trace.append(f"quota_deferred thread prospect={prospect.id}")
+        raise
+    except httpx.HTTPStatusError as exc:
+        if exc.response is None or exc.response.status_code not in (403, 404):
+            raise
+        thread = None
     if thread is None:
         trace.append(f"thread_fetch_failed prospect={prospect.id}")
         return 0, 0, 0, 0, "skipped"
@@ -680,12 +929,16 @@ def _sync_prospect_via_thread(
         headers = _header_map(gm.get("payload") or {})
         subj = headers.get("subject", "")
         plain = plain_body_from_gmail_message(gm)
-        if _is_gmail_delivery_bounce(
+        if _dsn_skip_inbound(
+            db,
+            campaign=campaign,
+            prospect=prospect,
+            gmail_message_id=str(mid),
             subject=subj,
             body=plain,
             from_header=headers.get("from", ""),
+            trace=trace,
         ):
-            trace.append(f"bounce_skipped prospect={prospect.id} mid={mid}")
             continue
         imp, auto_out = _handle_inbound_message(
             db,
@@ -710,6 +963,7 @@ def sync_campaign_gmail_inbound(
     campaign_id: int,
     allow_manual: bool = False,
     allow_company_gmail_operator: bool = False,
+    quota_ctx: GmailQuotaContext | None = None,
 ) -> dict[str, Any]:
     """
     Lee hilos Gmail del buzón del vendedor (o del operador Gmail de la empresa) y
@@ -759,7 +1013,26 @@ def sync_campaign_gmail_inbound(
             reconciled,
         )
 
-    access, row = get_valid_gmail_connection(db, company_id=company_id, user_id=user_id)
+    try:
+        access, row = get_valid_gmail_connection(db, company_id=company_id, user_id=user_id)
+    except RuntimeError as exc:
+        if is_google_invalid_grant(exc):
+            return {
+                "imported": 0,
+                "skipped_no_thread": 0,
+                "threads_examined": 0,
+                "messages_fetched": 0,
+                "replies_detected": 0,
+                "prospects_matched": 0,
+                "auto_drafts": 0,
+                "auto_sent": 0,
+                "gmail_draft_sents_detected": 0,
+                "prospects_scanned": 0,
+                "errors": ["gmail_oauth_invalid_grant: reconectá Google en Integraciones."],
+                "oauth_invalid_grant": True,
+                "trace": ["oauth_invalid_grant"],
+            }
+        raise
     user_email = _norm_email(row.external_email)
     if not user_email:
         raise ValueError("No hay email de la cuenta Gmail conectada; reconectá Google.")
@@ -787,6 +1060,37 @@ def sync_campaign_gmail_inbound(
     gmail_draft_sents = 0
     trace: list[str] = []
 
+    from app.services.meeting_scheduling_extras import should_ignore_inbound_after_meeting
+
+    prospects_with_email = []
+    for p in prospects:
+        if not _norm_email(p.email):
+            continue
+        if should_ignore_inbound_after_meeting(p):
+            skipped += 1
+            trace.append(f"scan_skip_meeting_booked prospect={p.id}")
+            continue
+        gate = gmail_inbound_scan_skip_reason(db, p)
+        if gate:
+            skipped += 1
+            if (p.gmail_thread_id or "").strip() and gate == "sin_outbound_email_nexus":
+                p.gmail_thread_id = None
+                trace.append(f"scan_skip_clear_thread prospect={p.id}: {gate}")
+            else:
+                trace.append(f"scan_skip prospect={p.id}: {gate}")
+            continue
+        prospects_with_email.append(p)
+    prospects_with_email.sort(key=_inbound_prospect_sort_key)
+    per_camp_limit = inbound_prospects_per_campaign()
+    to_scan = prospects_with_email[:per_camp_limit]
+    over_limit = prospects_with_email[per_camp_limit:]
+    if quota_ctx is not None:
+        for p in over_limit:
+            if p.id not in quota_ctx.deferred_prospect_ids:
+                quota_ctx.deferred_prospect_ids.append(p.id)
+    if over_limit:
+        trace.append(f"prospects_deferred_limit count={len(over_limit)}")
+
     def _tally_auto(outcome: str) -> bool:
         nonlocal auto_drafts, auto_sent
         if outcome == "draft":
@@ -797,56 +1101,22 @@ def sync_campaign_gmail_inbound(
             return True
         return False
 
+    draft_deferred = False
     with httpx.Client(timeout=60.0) as client:
-        for prospect in prospects:
+        for idx, prospect in enumerate(to_scan):
+            if quota_ctx is not None and quota_ctx.should_stop_prospect_loop():
+                for p in to_scan[idx:]:
+                    if p.id not in quota_ctx.deferred_prospect_ids:
+                        quota_ctx.deferred_prospect_ids.append(p.id)
+                trace.append("quota_deferred remaining_prospects")
+                break
+
             pe = _norm_email(prospect.email)
             if not pe:
                 continue
 
-            t_imp, t_threads, t_msgs, t_replies, t_auto = _sync_prospect_via_thread(
-                db,
-                client,
-                access,
-                prospect=prospect,
-                campaign=campaign,
-                user_email=user_email,
-                trace=trace,
-            )
-            imported += t_imp
-            examined_threads += t_threads
-            messages_fetched += t_msgs
-            replies_detected += t_replies
-            had_auto = _tally_auto(t_auto)
-
-            prospect_touched = t_imp > 0 or had_auto
-
-            if not prospect_touched and t_replies == 0:
-                alt_tid = resolve_thread_id_for_prospect(
-                    client, access, user_email=user_email, prospect_email=pe
-                )
-                stored = (prospect.gmail_thread_id or "").strip()
-                if alt_tid and alt_tid != stored:
-                    prospect.gmail_thread_id = alt_tid
-                    db.flush()
-                    trace.append(f"thread_retry prospect={prospect.id} new_tid={alt_tid[:12]}…")
-                    t_imp2, t_threads2, t_msgs2, t_replies2, t_auto2 = _sync_prospect_via_thread(
-                        db,
-                        client,
-                        access,
-                        prospect=prospect,
-                        campaign=campaign,
-                        user_email=user_email,
-                        trace=trace,
-                    )
-                    imported += t_imp2
-                    examined_threads += t_threads2
-                    messages_fetched += t_msgs2
-                    replies_detected += t_replies2
-                    had_auto2 = _tally_auto(t_auto2)
-                    prospect_touched = prospect_touched or t_imp2 > 0 or had_auto2
-
-            if not prospect_touched:
-                s_imp, s_fetched, s_replies, s_auto = _sync_prospect_via_gmail_search(
+            try:
+                t_imp, t_threads, t_msgs, t_replies, t_auto = _sync_prospect_via_thread(
                     db,
                     client,
                     access,
@@ -854,28 +1124,109 @@ def sync_campaign_gmail_inbound(
                     campaign=campaign,
                     user_email=user_email,
                     trace=trace,
+                    quota_ctx=quota_ctx,
                 )
-                imported += s_imp
-                messages_fetched += s_fetched
-                replies_detected += s_replies
-                had_auto_s = _tally_auto(s_auto)
-                prospect_touched = prospect_touched or s_imp > 0 or had_auto_s
-                if not prospect_touched and t_replies == 0 and s_replies == 0:
-                    if not (prospect.gmail_thread_id or "").strip():
-                        skipped += 1
+            except GmailRateLimitError:
+                if quota_ctx is not None:
+                    quota_ctx.mark_rate_limited()
+                for p in to_scan[idx:]:
+                    if quota_ctx is not None and p.id not in quota_ctx.deferred_prospect_ids:
+                        quota_ctx.deferred_prospect_ids.append(p.id)
+                trace.append(f"rate_or_quota_stop prospect={prospect.id}")
+                break
+            except GmailQuotaExhausted:
+                if quota_ctx is not None:
+                    quota_ctx.mark_quota_exhausted()
+                for p in to_scan[idx:]:
+                    if quota_ctx is not None and p.id not in quota_ctx.deferred_prospect_ids:
+                        quota_ctx.deferred_prospect_ids.append(p.id)
+                trace.append(f"rate_or_quota_stop prospect={prospect.id}")
+                break
+
+            imported += t_imp
+            examined_threads += t_threads
+            messages_fetched += t_msgs
+            replies_detected += t_replies
+            had_auto = _tally_auto(t_auto)
+
+            prospect_touched = t_imp > 0 or had_auto
+            thread_missing = not (prospect.gmail_thread_id or "").strip()
+
+            if (
+                not prospect_touched
+                and not (quota_ctx and quota_ctx.should_stop_prospect_loop())
+            ):
+                if quota_ctx and quota_ctx.budget.remaining < _SEARCH_MIN_QUOTA_UNITS:
+                    trace.append(f"search_skipped_quota prospect={prospect.id}")
+                elif thread_missing or t_threads == 0:
+                    try:
+                        s_imp, s_fetched, s_replies, s_auto = _sync_prospect_via_gmail_search(
+                            db,
+                            client,
+                            access,
+                            prospect=prospect,
+                            campaign=campaign,
+                            user_email=user_email,
+                            trace=trace,
+                            quota_ctx=quota_ctx,
+                        )
+                    except GmailRateLimitError:
+                        if quota_ctx is not None:
+                            quota_ctx.mark_rate_limited()
+                        for p in to_scan[idx:]:
+                            if (
+                                quota_ctx is not None
+                                and p.id not in quota_ctx.deferred_prospect_ids
+                            ):
+                                quota_ctx.deferred_prospect_ids.append(p.id)
+                        trace.append(f"rate_or_quota_stop search prospect={prospect.id}")
+                        break
+                    except GmailQuotaExhausted:
+                        if quota_ctx is not None:
+                            quota_ctx.mark_quota_exhausted()
+                        for p in to_scan[idx:]:
+                            if (
+                                quota_ctx is not None
+                                and p.id not in quota_ctx.deferred_prospect_ids
+                            ):
+                                quota_ctx.deferred_prospect_ids.append(p.id)
+                        trace.append(f"rate_or_quota_stop search prospect={prospect.id}")
+                        break
+                    imported += s_imp
+                    messages_fetched += s_fetched
+                    replies_detected += s_replies
+                    had_auto_s = _tally_auto(s_auto)
+                    prospect_touched = prospect_touched or s_imp > 0 or had_auto_s
+                    if not prospect_touched and t_replies == 0 and s_replies == 0:
+                        if not (prospect.gmail_thread_id or "").strip():
+                            skipped += 1
 
             if prospect_touched or t_replies > 0:
                 prospects_matched += 1
 
-        draft_stats = reconcile_campaign_gmail_draft_sents(
-            db,
-            user=seller,
-            campaign=campaign,
-            prospects=prospects,
-            user_email=user_email,
-            client=client,
-            access=access,
-        )
+        draft_deferred = False
+        min_draft = draft_reconcile_min_units()
+        if quota_ctx is None or quota_ctx.budget.remaining >= min_draft:
+            draft_stats = reconcile_campaign_gmail_draft_sents(
+                db,
+                user=seller,
+                campaign=campaign,
+                prospects=prospects,
+                user_email=user_email,
+                client=client,
+                access=access,
+                quota_ctx=quota_ctx,
+            )
+            if draft_stats.get("quota_stopped"):
+                draft_deferred = True
+                if quota_ctx:
+                    quota_ctx.draft_reconcile_deferred = True
+        else:
+            draft_deferred = True
+            if quota_ctx:
+                quota_ctx.draft_reconcile_deferred = True
+            draft_stats = {"gmail_draft_sents_detected": 0, "by_prospect": {}}
+            trace.append("draft_reconcile_deferred quota")
         gmail_draft_sents = int(draft_stats.get("gmail_draft_sents_detected") or 0)
         if gmail_draft_sents:
             trace.append(f"gmail_draft_sents={gmail_draft_sents}")
@@ -903,11 +1254,15 @@ def sync_campaign_gmail_inbound(
         "auto_drafts": auto_drafts,
         "auto_sent": auto_sent,
         "gmail_draft_sents_detected": gmail_draft_sents,
-        "prospects_scanned": len([p for p in prospects if _norm_email(p.email)]),
+        "prospects_scanned": len(to_scan),
+        "draft_reconcile_deferred": draft_deferred,
         "errors": errors[:12],
         "trace": trace[:40],
         "inbound_auto_reply_worker": worker_meta,
     }
+    if quota_ctx is not None:
+        result.update(quota_ctx.public_stats())
+        result["prospects_deferred"] = list(dict.fromkeys(quota_ctx.deferred_prospect_ids))
     logger.info(
         "gmail inbound sync finished campaign_id=%s imported=%s replies_detected=%s "
         "threads=%s prospects_matched=%s auto_drafts=%s auto_sent=%s skipped=%s",
@@ -975,6 +1330,19 @@ def sync_prospect_gmail_inbound(
         raise ValueError("Prospecto no encontrado")
     if int(prospect.campaign_id) != int(campaign_id):
         raise ValueError("El prospecto no pertenece a esta campaña")
+
+    from app.services.meeting_scheduling_extras import should_ignore_inbound_after_meeting
+
+    if should_ignore_inbound_after_meeting(prospect):
+        return {
+            "skipped": True,
+            "reason": "meeting_booked",
+            "imported": 0,
+            "messages_fetched": 0,
+            "replies_detected": 0,
+            "auto_reply_outcome": "skipped_closed",
+            "trace": [f"scan_skip_meeting_booked prospect={prospect.id}"],
+        }
 
     access, row = get_valid_gmail_connection(db, company_id=company_id, user_id=user_id)
     user_email = _norm_email(row.external_email)
